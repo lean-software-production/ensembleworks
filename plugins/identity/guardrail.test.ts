@@ -223,7 +223,7 @@ const classify = async (host: { id: string; name: string }): Promise<HostClassif
         ? { ...davidsMachine, hostId: host.id, hostName: host.name }
         : { kind: "unclaimed", hostId: host.id, hostName: host.name, conflict: null };
 
-function hookDeps(options: { enabled: boolean; identity: () => { email: string | null; person: StarterSummary | null }; ledger?: AttributionLedger }) {
+function hookDeps(options: { enabled: boolean; identity: () => { email: string | null; person: StarterSummary | null; viaFallback?: boolean }; ledger?: AttributionLedger }) {
   const ledger = options.ledger ?? new AttributionLedger(kv());
   return {
     ledger,
@@ -261,6 +261,36 @@ describe("attributeDispatch with the guardrail wired in", () => {
     const deps = hookDeps({ enabled: true, identity: () => ({ email: "david@example.com", person: david }), ledger });
     expect((await attributeDispatch(dispatch({ origin: "app" }), deps)).action).toBe("reject");
     expect((await attributeDispatch(dispatch({ origin: null }), deps)).action).toBe("reject");
+  });
+
+  it("does not act on a fallbackEmail identity: it is a default, not a positive identification", async () => {
+    // `fallbackEmail` stands in for the Access header on a bb that has none (a laptop).
+    // Every header-less caller then resolves to that person — including all four of S9's
+    // agent paths. Acting on it would refuse exactly the dispatches restrictStarts
+    // promises never to touch, so the guardrail treats a fallback identity as anonymous.
+    // Attribution still records the person; only the refusal ignores it.
+    const ledger = new AttributionLedger(kv());
+    const deps = hookDeps({
+      enabled: true,
+      identity: () => ({ email: "david@example.com", person: david, viaFallback: true }),
+      ledger,
+    });
+    // Rule A: David's "start" on Matt's machine.
+    expect(await attributeDispatch(dispatch({ origin: "app" }), deps)).toEqual({ action: "proceed" });
+    // Rule B: a fallback-identified send into a thread Matt started.
+    const mattsThread = new AttributionLedger(kv());
+    await mattsThread.record({
+      threadId: "thr_matt", email: "matt@example.com", starter: matt, via: "browser",
+      origin: "app", originPluginId: null, inheritedFrom: null, host: null, recordedAt: 1,
+    });
+    expect(await attributeDispatch(
+      dispatch({ thread: { id: "thr_matt", parentThreadId: null, sourceThreadId: null } }),
+      hookDeps({
+        enabled: true,
+        identity: () => ({ email: "david@example.com", person: david, viaFallback: true }),
+        ledger: mattsThread,
+      }),
+    )).toEqual({ action: "proceed" });
   });
 
   it("proceeds and records when the setting is off", async () => {

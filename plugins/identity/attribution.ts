@@ -96,6 +96,12 @@ export type AttributionFacts = {
   email: string | null;
   /** The person that email resolved to in the directory, or null. */
   person: StarterSummary | null;
+  /**
+   * True when `person` came from the `fallbackEmail` setting rather than from this
+   * request. Attribution still records them; the guardrail treats it as anonymous,
+   * because on a fallback-configured server every agent path resolves to that person.
+   */
+  viaFallback: boolean;
   origin: DispatchOrigin;
   originPluginId: string | null;
   lineage: readonly string[];
@@ -167,13 +173,14 @@ export type DispatchContextLike = {
 /** Turn one dispatch plus the requester's identity into the facts of an attribution. */
 export function factsFromDispatch(
   context: DispatchContextLike,
-  identity: { email: string | null; person: StarterSummary | null },
+  identity: { email: string | null; person: StarterSummary | null; viaFallback?: boolean },
   now: number,
 ): AttributionFacts {
   return {
     threadId: context.thread.id,
     email: identity.email,
     person: identity.person,
+    viaFallback: identity.viaFallback ?? false,
     origin: context.origin,
     originPluginId: context.originPluginId,
     lineage: lineageOf({
@@ -381,7 +388,7 @@ export type DispatchDeps = {
   /** Overrides the hook's overall deadline. Tests only. */
   budgetMs?: number;
   /** The requester's identity, read from the async request context. May throw. */
-  identity: () => { email: string | null; person: StarterSummary | null };
+  identity: () => { email: string | null; person: StarterSummary | null; viaFallback?: boolean };
   now: () => number;
   log: { info: (message: string) => void; warn: (message: string) => void };
   /**

@@ -432,7 +432,8 @@ export default async function plugin(bb: BbPluginApi) {
       description:
         "Refuse a known person's start on another person's machine, a known person's message into "
         + "someone else's thread, and an automation off a team machine. A dispatch Identity cannot tie "
-        + "to a person is ALWAYS allowed — that is the normal shape of every agent path. Default off: "
+        + "to a person is ALWAYS allowed — that is the normal shape of every agent path, and an identity "
+        + "supplied by Fallback email counts as untied here, so it is never refused either. Default off: "
         + "turn it on once the ownership labels look right.",
       default: false,
     },
@@ -442,7 +443,8 @@ export default async function plugin(bb: BbPluginApi) {
       description:
         "Used as the requester's email when a request carries no Cloudflare Access header, for a BB "
         + "server not behind Access (e.g. a laptop). Every header-less caller, agents and CLI included, "
-        + "is then attributed to this email. Leave empty on a shared server.",
+        + "is then attributed to this email — so the guardrail ignores a fallback identity and never "
+        + "refuses on it. Leave empty on a shared server.",
       default: "",
     },
   });
@@ -495,7 +497,7 @@ export default async function plugin(bb: BbPluginApi) {
   /** The current requester as attribution wants them: their email plus resolved person. */
   const whoamiPerson = () => {
     const identity = currentIdentity();
-    return { email: identity.email, person: summarize(identity.person) };
+    return { email: identity.email, person: summarize(identity.person), viaFallback: identity.viaFallback };
   };
   const whoamiFor = (email: string | null): WhoAmI => {
     const identity = currentIdentity(email);

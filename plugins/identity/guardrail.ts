@@ -153,12 +153,16 @@ export function makeGuardrail(deps: {
   return async ({ facts, existing }) => {
     if (!deps.enabled()) return { action: "proceed" };
     const host = facts.host === null ? null : await deps.classify(facts.host);
+    // A `fallbackEmail` identity is a display default, not a person asking: on a server
+    // configured with one, every header-less caller — all four of S9's agent paths —
+    // would otherwise arrive here positively identified and become refusable.
+    const requester = facts.viaFallback ? null : facts.person;
     return decideGuardrail(true, {
-      requester: facts.person,
+      requester,
       recorded: existing === null ? null : { starter: existing.starter },
       host,
       origin: facts.origin,
       originPluginId: facts.originPluginId,
-    }, deps.machines(facts.person));
+    }, deps.machines(requester));
   };
 }

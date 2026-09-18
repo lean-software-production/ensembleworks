@@ -1005,6 +1005,22 @@ guardrail that makes it true), and any avatar in the sidebar (no surface for it)
 
 ### Step 5 built (2026-09-18): the guardrail, `restrictStarts` only
 
+#### `fallbackEmail` × `restrictStarts` (found in review, 2026-09-18)
+
+`identityFor` resolves a request with no Access header to the `fallbackEmail` setting, so on
+a server configured with one — a laptop bb, which is exactly what the setting is for — every
+header-less caller arrives positively identified. All four of S9's agent paths would then
+have become eligible for rules A and B, refusing precisely the dispatches `restrictStarts`
+promises never to touch. Reproduced at the hook: with `fallbackEmail` set, S9's `bb thread
+tell` shape into a thread Matt started came back `reject`.
+
+Fixed by making the fallback visible rather than by forbidding the combination:
+`identityFor` now returns `viaFallback`, attribution still records the person (that is the
+setting's documented purpose), and `makeGuardrail` treats a fallback identity as anonymous.
+A test at the `attributeDispatch` level pins both rules; mutating the guard back to
+`facts.person` fails it. Both settings' descriptions used to state the opposite and are
+corrected.
+
 Landed on `feature/identity-attribution` (`plugins/identity/guardrail.ts`, plus the
 setting, the hook wiring and the read-only banner in `server.ts`, `app.tsx` and
 `ownership-labels.ts`). This is the first change in the whole plan that can **refuse** a
