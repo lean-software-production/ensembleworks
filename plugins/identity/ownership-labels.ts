@@ -1,4 +1,5 @@
 import { initials } from "./presence-labels.js";
+import { decideGuardrail } from "./guardrail.js";
 import type { HostClassification } from "./hosts.js";
 import type { StarterSummary, Via } from "./attribution.js";
 import type { EnforcementMode } from "./audit.js";
@@ -78,23 +79,49 @@ export type OwnershipChip = { text: string; tone: "default" | "muted" };
  * fire. It is null in every other mode and whenever nothing would have been refused —
  * the honest answer to "what would have happened?" is usually "nothing".
  *
- * It mirrors the guardrail's two person-facing rules (`guardrail.ts`), from the same
- * facts the chip already has: rule B (someone else's thread) first, then rule A (a start
- * on another person's machine), which is the order the guardrail itself decides in.
+ * It ASKS THE GUARDRAIL — `decideGuardrail`, the same function the dispatch hook and the
+ * audit log run — rather than re-deciding rules A and B from the chip's own facts. A dry
+ * run whose UI disagrees with its own enforcement is worse than no dry run, and a second
+ * copy of the rules is how that happens: the first version of this function did exactly
+ * that and diverged on a `fallbackEmail` viewer, whom the guardrail ignores.
+ *
+ * Only the wording is the chip's own. The decision, and which rule made it, are the
+ * guardrail's.
  */
 export function wouldBeRefused(input: {
   enforcement: EnforcementMode;
   me: StarterSummary | null;
+  /** True when `me` came from the fallbackEmail setting; the guardrail ignores such an identity. */
+  meViaFallback?: boolean;
   starter: StarterSummary | null;
   host: HostClassification | null;
 }): string | null {
-  if (input.enforcement !== "audit" || input.me === null) return null;
-  const { me, starter, host } = input;
-  if (starter !== null && starter.person !== me.person) {
-    return `would be refused — ${starter.displayName}'s thread (audit mode, so it went through)`;
+  if (input.enforcement !== "audit") return null;
+  // Mirror guardrail.ts: a fallback-derived identity is a display default, not a person
+  // asking, so it can never be the subject of a refusal.
+  const me = input.meViaFallback === true ? null : input.me;
+  if (me === null) return null;
+  // The chip speaks for a person reading bb, which is what an `app` dispatch is.
+  const ask = (recorded: { starter: StarterSummary | null } | null) => decideGuardrail(true, {
+    requester: me,
+    recorded,
+    host: input.host,
+    origin: "app",
+    originPluginId: null,
+  }, { yourMachines: [], teamMachines: [] });
+
+  // Question 1: would MY next message into this thread be refused? (rule B)
+  const sending = ask(input.starter === null ? null : { starter: input.starter });
+  if (sending.action === "reject" && sending.rule === "follow-up-by-non-starter" && input.starter !== null) {
+    return `would be refused — ${input.starter.displayName}'s thread (audit mode, so it went through)`;
   }
-  if (starter !== null && host !== null && host.kind === "person" && host.person.person !== starter.person) {
-    return `this start would be refused — ${machineDescription(host)} (audit mode, so it went through)`;
+  // Question 2: would a start on this machine be refused? (rule A, which only ever applies
+  // to a thread with no record — hence the explicit `null`. Asking it of the recorded
+  // thread would always answer "proceed", which is why the first version of this function
+  // claimed a refusal the guardrail would never have made.)
+  const starting = ask(null);
+  if (starting.action === "reject" && starting.rule === "start-on-another-persons-machine" && input.host !== null) {
+    return `this start would be refused — ${machineDescription(input.host)} (audit mode, so it went through)`;
   }
   return null;
 }
@@ -111,6 +138,8 @@ export function headerChip(
     enforcement?: EnforcementMode;
     /** Who is reading the chip, so rule B's "someone else's thread" can be answered. */
     me?: StarterSummary | null;
+    /** True when `me` came from fallbackEmail; the guardrail ignores such an identity. */
+    meViaFallback?: boolean;
   },
 ): OwnershipChip {
   const known = view.starter !== null || view.via === "plugin";
@@ -118,6 +147,7 @@ export function headerChip(
   const would = wouldBeRefused({
     enforcement: options.enforcement ?? "off",
     me: options.me ?? null,
+    meViaFallback: options.meViaFallback === true,
     starter: view.starter,
     host: view.host,
   });
@@ -228,10 +258,15 @@ export function composerBanner(input: {
  */
 export function readOnlyBanner(input: {
   me: StarterSummary | null;
+  /** True when `me` came from fallbackEmail; the guardrail ignores such an identity. */
+  meViaFallback?: boolean;
   starter: StarterSummary | null;
   enforcement: EnforcementMode;
 }): OwnershipBanner | null {
-  const { me, starter } = input;
+  const { starter } = input;
+  // Mirror guardrail.ts: a fallback-derived identity is never the subject of a refusal, so
+  // neither the audit wording nor the enforce wording can honestly be shown to one.
+  const me = input.meViaFallback === true ? null : input.me;
   if (me === null || starter === null || me.person === starter.person) return null;
   const name = starter.displayName;
   if (input.enforcement === "off") {

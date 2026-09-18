@@ -72,6 +72,16 @@ describe("requestStreamChoice — the volume policy", () => {
     }
   });
 
+  it("rolls up Identity's own read RPCs, which the client polls over POST", () => {
+    // The shipped BB client sends EVERY plugin RPC over POST, and app.tsx polls
+    // identity_whoami every REFRESH_MS (5s) per open tab. "POST = mutation" therefore
+    // turned our own read poll into ~12 individual lines a minute per tab and labelled it
+    // a human action. A read is a read whatever verb carries it.
+    for (const rpc of ["identity_whoami", "identity_thread_starter", "identity_thread_ownership", "identity_machines"]) {
+      expect(requestStreamChoice("POST", `/api/v1/plugins/identity/rpc/${rpc}`)).toBe("rollup");
+    }
+  });
+
   it("rolls up the known high-frequency core polls too", () => {
     expect(requestStreamChoice("POST", "/api/v1/events")).toBe("rollup");
     expect(requestStreamChoice("POST", "/api/v1/plugins/canvas/rpc/canvas_presence")).toBe("rollup");

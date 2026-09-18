@@ -153,11 +153,19 @@ every HTTP request, and each carrying `v` (schema version) and `kind`:
   `{method, path, access, person, req}`. `access` is whether the Access header was present;
   `person` is who it resolved to, `null` when nobody.
 - **`request.rollup`** — every read, plus the known high-frequency chatter (Identity's own
-  presence RPCs, `presence`-named plugin RPCs, the event stream), counted rather than
-  itemised: one line per minute with `{method, path, access, person, count}` buckets. This
-  is the volume policy: presence heartbeats fire every 10s per open tab and a per-request
-  line would drown the log. Paths are normalised (`/threads/:id/send`) and the bucket list
-  is capped, with the overflow counted in `dropped`.
+  presence RPCs AND its own read RPCs, `presence`-named plugin RPCs, the event stream),
+  counted rather than itemised: one line per minute with `{method, path, access, person,
+  count}` buckets. This is the volume policy: presence heartbeats fire every 10s per open
+  tab and a per-request line would drown the log. Paths are normalised
+  (`/threads/:id/send`) and the bucket list is capped, with the overflow counted in
+  `dropped`.
+
+  Note the reason the read RPCs are named explicitly: the BB client sends **every** plugin
+  RPC over POST, so a "POST means a mutation" rule files a read poll as a human action.
+  Identity's own `identity_whoami` poll (every 5s per open tab) produced 52 of 53 audit
+  lines in a review re-measurement before this was fixed. Another plugin's RPCs still get
+  a line each — their method names are not ours to interpret — so **re-measure the volume
+  on any busy server** (Canvas especially) before leaving `audit` on for long.
 - **`dispatch`** — every `message.dispatch`: the full attribution facts (origin,
   originPluginId, lineage, ALS email, resolved starter, `via`, the host and its
   classification), the guardrail `verdict` plus the `rule` and `refusal` text it would have

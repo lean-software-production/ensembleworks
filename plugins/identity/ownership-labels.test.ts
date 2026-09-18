@@ -1,3 +1,4 @@
+import { decideGuardrail } from "./guardrail.js";
 import { describe, expect, it } from "vitest";
 import {
   composerBanner,
@@ -260,6 +261,55 @@ describe("the header chip in audit mode", () => {
       const chip = headerChip(view({ starter: matt, host: mattsMachine }), { ...options, enforcement, me: david });
       expect(chip.text).not.toMatch(/would be refused/i);
     }
+  });
+
+  it("agrees with the guardrail itself, rather than re-deciding the rules", () => {
+    // The chip's counterfactual must come from decideGuardrail, not from a second copy of
+    // rules A and B: a dry run whose UI disagrees with its own enforcement is worse than
+    // no dry run. Same facts through both; they must agree on every shape.
+    const shapes = [
+      { starter: matt, host: mattsMachine },
+      { starter: david, host: mattsMachine },
+      { starter: david, host: davidsMachine },
+      { starter: david, host: teamMachine },
+      { starter: matt, host: teamMachine },
+      { starter: null, host: mattsMachine },
+    ];
+    // The chip asks the guardrail TWO questions, because they are the two a reader has:
+    // "would my next message here be refused?" (the thread as recorded) and "would a start
+    // on this machine be refused?" (rule A only ever applies to an unrecorded thread).
+    const ask = (recorded: { starter: StarterSummary | null } | null, host: HostClassification | null) =>
+      decideGuardrail(true, { requester: david, recorded, host, origin: "app", originPluginId: null },
+        { yourMachines: [], teamMachines: [] });
+    for (const shape of shapes) {
+      const sending = ask(shape.starter === null ? null : { starter: shape.starter }, shape.host);
+      const starting = ask(null, shape.host);
+      const guardrailWouldRefuse = sending.action === "reject" || starting.action === "reject";
+      const chip = headerChip(view(shape), { ...options, enforcement: "audit", me: david });
+      expect(/would be refused/i.test(chip.text)).toBe(guardrailWouldRefuse);
+    }
+  });
+
+  it("keeps the read-only banner honest for a fallbackEmail viewer too", () => {
+    // Same reason as the chip: the guardrail never refuses a fallback-derived identity, so
+    // a banner saying the message would be logged as a would-refuse describes a log line
+    // that will not exist.
+    for (const enforcement of ["audit", "enforce"] as const) {
+      expect(readOnlyBanner({ me: david, starter: matt, enforcement, meViaFallback: true })).toBeNull();
+    }
+  });
+
+  it("stays silent for a fallbackEmail viewer, because the guardrail ignores one", () => {
+    // guardrail.ts nulls a fallback-derived requester, so the server's audited verdict is
+    // `proceed`. A chip still saying "would be refused" would contradict the log it is
+    // meant to illustrate.
+    const chip = headerChip(view({ starter: matt, host: mattsMachine }), {
+      ...options,
+      enforcement: "audit",
+      me: david,
+      meViaFallback: true,
+    });
+    expect(chip.text).not.toMatch(/would be refused/i);
   });
 
   it("says nothing extra when it cannot name the viewer", () => {

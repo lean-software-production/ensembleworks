@@ -91,11 +91,29 @@ export function normalizeAuditPath(url: string | undefined | null): string {
 const PRESENCE_RPCS = ["presence_heartbeat", "presence_typing", "presence_snapshot", "presence_thread", "presence_typing_list"];
 
 /**
+ * Identity's own READ RPCs. The shipped BB client sends every plugin RPC over POST, and
+ * `app.tsx` polls `identity_whoami` every REFRESH_MS (5s) per open tab, so a "POST is a
+ * mutation" rule made our own polling the single loudest thing in the log — about twelve
+ * lines a minute per tab — and filed it as a human action. Reads are counted, not logged.
+ *
+ * Only Identity's own RPCs are listed: another plugin's RPC names are not ours to
+ * interpret, so they still get a line each and will show up if they are chatty. That is
+ * the deliberate trade of keeping the policy in code rather than adding a second setting.
+ */
+const IDENTITY_READ_RPCS = [
+  "identity_whoami",
+  "identity_thread_starter",
+  "identity_thread_ownership",
+  "identity_machines",
+];
+
+/**
  * Other known high-frequency shapes: the event stream, and any plugin RPC whose name says
  * presence. Canvas is a busy plugin and its presence chatter is the same kind of noise.
  */
 function isHighFrequency(path: string): boolean {
   if (PRESENCE_RPCS.some((rpc) => path.endsWith(`/rpc/${rpc}`))) return true;
+  if (IDENTITY_READ_RPCS.some((rpc) => path.endsWith(`/rpc/${rpc}`))) return true;
   if (/\/rpc\/[a-z0-9_]*presence[a-z0-9_]*$/i.test(path)) return true;
   // Measured on a throwaway bb with nothing open at all: the host daemon posts
   // `/internal/session/events` every few seconds, which would otherwise be four

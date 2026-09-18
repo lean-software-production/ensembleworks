@@ -1179,9 +1179,23 @@ guessed:
   `/internal/skills/tree/:id` 15, `presence_heartbeat` 12, `/internal/session/events` 3.
   Over the whole run, individual `request` lines totalled **three** (two thread creates
   and one settings write).
+- *Corrected by review, 2026-09-18 — the number above did not hold.* An independent
+  re-measurement saw **468 requests in 64s produce 53 audit lines**, 52 of them individual
+  `request` lines for `POST …/rpc/identity_whoami`, one per call. The simulated load
+  replayed presence RPCs and GETs but not Identity's OWN `identity_whoami` poll
+  (`app.tsx`, every `REFRESH_MS` = 5s per open tab), and the shipped BB client sends every
+  plugin RPC over **POST** — so "POST means mutation" filed our own read poll as a human
+  action, about twelve lines a minute per open tab. Identity's four read RPCs
+  (`identity_whoami`, `identity_thread_starter`, `identity_thread_ownership`,
+  `identity_machines`) are now in the rollup set, with a test. Another plugin's RPCs still
+  get a line each: their names are not ours to interpret, and that is the deliberate cost
+  of keeping the policy in code rather than adding a second setting. **Re-measure on
+  ew-lsp-001 before trusting any figure here** — Canvas is the busy plugin and none of
+  this was measured against it.
 
 So the policy chosen: **a mutation gets its own line; everything else is counted.**
-"Everything else" is every read (GET/HEAD/OPTIONS), Identity's own presence RPCs, any
+"Everything else" is every read (GET/HEAD/OPTIONS), Identity's own presence RPCs, Identity's
+own read RPCs (see the correction above), any
 plugin RPC whose method name contains `presence` (Canvas is busy and its chatter is the
 same kind of noise), `/api/v1/events`, `*/events/stream`, and `/internal/session/*`.
 Rollup paths are normalised (`/threads/:id/send`, `/hosts/:id`) so a bucket is a shape,

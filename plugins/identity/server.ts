@@ -191,6 +191,12 @@ export function parseHostList(payload: unknown): HostRef[] {
 
 const machineList = z.object({
   me: personSummary.nullable(),
+  /**
+   * True when `me` came from the `fallbackEmail` setting rather than from the request.
+   * The guardrail ignores such an identity (see `makeGuardrail`), so the UI must too, or
+   * a chip would contradict the audit log it exists to illustrate.
+   */
+  meViaFallback: z.boolean(),
   machines: z.array(hostClassification),
   /** The account team and unclaimed machines run as, for the header chip's wording. */
   sharedMachineUser: z.string(),
@@ -788,6 +794,7 @@ export default async function plugin(bb: BbPluginApi) {
       const listed = await machines();
       return publicMachineList({
         me: whoamiFor(requestContext.current()?.email ?? null).person,
+        meViaFallback: currentIdentity().viaFallback,
         sharedMachineUser,
         enforcement,
         machines: listed.machines,

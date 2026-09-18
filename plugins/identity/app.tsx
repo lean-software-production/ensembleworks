@@ -200,6 +200,7 @@ function ThreadOwnershipChip({ threadId }: { threadId: string }) {
     sharedUser: list?.sharedMachineUser ?? "ensembleworks-agent",
     enforcement: list?.enforcement ?? "off",
     me: list?.me ?? null,
+    meViaFallback: list?.meViaFallback === true,
   });
   return (
     <span
@@ -287,6 +288,7 @@ function ReadOnlyThreadBanner() {
   if (list === null || ownership === null) return null;
   const banner = readOnlyBanner({
     me: list.me,
+    meViaFallback: list.meViaFallback,
     starter: ownership.starter,
     enforcement: list.enforcement,
   });
