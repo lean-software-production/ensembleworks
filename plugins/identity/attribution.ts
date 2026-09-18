@@ -210,6 +210,12 @@ export const MAX_STARTER_RECORDS = 2_000;
  */
 export const MAX_CACHED_STARTERS = 256;
 
+/** How many evictions one index append may perform, so a backlog cannot eat the budget. */
+export const EVICTIONS_PER_APPEND = 2;
+
+/** How many not-yet-indexed thread ids are carried forward past a wedged kv. */
+export const MAX_PENDING_INDEX_APPENDS = 64;
+
 export class AttributionLedger {
   readonly #kv: KvLike;
   readonly #max: number;
@@ -218,6 +224,8 @@ export class AttributionLedger {
   /** Bounded read-through cache; `null` means "storage says there is no record". */
   readonly #cache = new Map<string, StarterRecord | null>();
   #index: string[] | null = null;
+  /** Thread ids recorded but not yet in the index, carried forward past a wedged kv. */
+  #pending: string[] = [];
 
   constructor(kv: KvLike, options: { max?: number; cacheMax?: number; timeoutMs?: number } = {}) {
     this.#kv = kv;
@@ -278,7 +286,7 @@ export class AttributionLedger {
         return { recorded: false, record: null };
       }
       this.#remember(record.threadId, record);
-      await withTimeout(this.#appendToIndex(record.threadId), this.#timeoutMs);
+      await this.#appendToIndex(record.threadId);
       return { recorded: true, record };
     } catch {
       this.#cache.delete(record.threadId);
@@ -286,19 +294,47 @@ export class AttributionLedger {
     }
   }
 
+  /**
+   * Add a thread to the eviction index, and evict what the cap pushed out.
+   *
+   * EVERY kv call here is timed out INDIVIDUALLY. Wrapping the whole method in one
+   * timeout (which is what this used to do) bounded the caller's wait but left the inner
+   * call unsettled — one leaked promise per dispatch against a wedged kv — and could
+   * leave a record written whose id never reached the index, so it would never be
+   * evicted.
+   *
+   * An id whose index write did not land stays in `#pending` and is retried on the next
+   * append, so nothing is lost short of a restart; `#pending` is itself capped, because
+   * an unbounded retry list is just another leak. At most `EVICTIONS_PER_APPEND` records
+   * are deleted per call, so a long pending list cannot blow the hook's time budget —
+   * the rest stay in the index and are evicted on the following appends, which means the
+   * index may briefly sit a little above `max`. That is deliberate: the cap is a storage
+   * bound, not a promise about an exact count.
+   */
   async #appendToIndex(threadId: string): Promise<void> {
+    if (!this.#pending.includes(threadId)) this.#pending.push(threadId);
+    while (this.#pending.length > MAX_PENDING_INDEX_APPENDS) this.#pending.shift();
     if (this.#index === null) {
-      const stored = await this.#kv.get<unknown>(INDEX_KEY);
+      const stored = await withTimeout(this.#kv.get<unknown>(INDEX_KEY), this.#timeoutMs);
+      // A hung index read: keep the ids pending and try again on the next record.
+      if (stored === TIMED_OUT) return;
       this.#index = Array.isArray(stored) ? stored.filter((id): id is string => typeof id === "string") : [];
     }
-    const index = this.#index.filter((id) => id !== threadId);
-    index.push(threadId);
-    const evicted = index.splice(0, Math.max(0, index.length - this.#max));
+    const appending = [...this.#pending];
+    const index = this.#index.filter((id) => !appending.includes(id)).concat(appending);
+    const overflow = Math.max(0, index.length - this.#max);
+    const evicted = index.splice(0, Math.min(overflow, EVICTIONS_PER_APPEND));
+    const written = await withTimeout(this.#kv.set(INDEX_KEY, index), this.#timeoutMs);
+    if (written === TIMED_OUT) {
+      // The write may still land later, so the in-memory index is no longer trustworthy.
+      this.#index = null;
+      return;
+    }
     this.#index = index;
-    await this.#kv.set(INDEX_KEY, index);
+    this.#pending = [];
     for (const id of evicted) {
       this.#cache.delete(id);
-      await this.#kv.delete(KEY_PREFIX + id);
+      await withTimeout(this.#kv.delete(KEY_PREFIX + id), this.#timeoutMs);
     }
   }
 }
@@ -309,8 +345,41 @@ export type LedgerLike = {
   record(record: StarterRecord): Promise<{ recorded: boolean; record: StarterRecord | null }>;
 };
 
+/** What the `message.dispatch` hook may answer. `wait` is deliberately never used. */
+export type DispatchDecision = { action: "proceed" } | { action: "reject"; message: string };
+
+/**
+ * The guardrail's decision function (step 5, `guardrail.ts`), injected rather than
+ * imported so this module stays the OBSERVE half: with no `guard`, attribution can only
+ * ever proceed, which is exactly what its tests still hold it to.
+ */
+export type Guard = (input: {
+  facts: AttributionFacts;
+  /** The thread's already-recorded attribution: null means this dispatch is its first. */
+  existing: StarterRecord | null;
+}) => DispatchDecision | Promise<DispatchDecision>;
+
+/**
+ * The whole hook's time budget, well inside the SDK's 10s fail-closed ceiling.
+ *
+ * The individual kv calls are each bounded by `KV_TIMEOUT_MS`, but they compose: a
+ * worst case of one wedged read after another adds up (the storage arithmetic here is
+ * ~8s — see the design note), so the arithmetic alone is not a safe guarantee. This is a
+ * single deadline over the whole body instead, and it fails OPEN: a dispatch Identity
+ * could not decide about in time proceeds, unrecorded and unrefused. That is the right
+ * direction for a guardrail — Identity is not an access control.
+ */
+export const HOOK_BUDGET_MS = 5_000;
+
+/** The SDK's own limit: a `message.dispatch` handler past this FAILS the attempt. */
+export const SDK_HOOK_DECISION_CEILING_MS = 10_000;
+
 export type DispatchDeps = {
   ledger: LedgerLike;
+  /** The guardrail. Absent (the default) means nothing can be refused. */
+  guard?: Guard;
+  /** Overrides the hook's overall deadline. Tests only. */
+  budgetMs?: number;
   /** The requester's identity, read from the async request context. May throw. */
   identity: () => { email: string | null; person: StarterSummary | null };
   now: () => number;
@@ -326,21 +395,56 @@ export type DispatchDeps = {
 /**
  * The whole body of the `message.dispatch` hook, as a testable function.
  *
- * Its contract, which its tests hold it to: it ALWAYS returns `{ action: "proceed" }`,
- * it never throws, and it never rejects or delays a dispatch. Every failure — a wedged
- * kv, a throwing identity lookup, a corrupt row — degrades to a warning and a proceed.
- * Step 5's guardrails are a later, separate change; nothing here may refuse anything.
+ * Its contract, which its tests hold it to: it never throws, it always answers within
+ * `HOOK_BUDGET_MS`, and the ONLY way it can answer anything but `proceed` is a `guard`
+ * that refused. Every failure — a wedged kv, a throwing identity lookup, a corrupt row,
+ * a throwing guard — degrades to a warning and a proceed.
+ *
+ * A refused dispatch is deliberately NOT recorded: the message never runs, so recording
+ * a starter for it would attribute a thread to a start that did not happen, and would
+ * then let the same person's next, legitimate attempt inherit the wrong answer.
  */
 export async function attributeDispatch(
   context: DispatchContextLike,
   deps: DispatchDeps,
-): Promise<{ action: "proceed" }> {
+): Promise<DispatchDecision> {
+  const budget = Math.max(1, deps.budgetMs ?? HOOK_BUDGET_MS);
+  const decided = await withTimeout(decideDispatch(context, deps), budget);
+  if (decided !== TIMED_OUT) return decided;
+  deps.log.warn(
+    `identity: gave up on a dispatch after ${budget}ms (storage is not answering); proceeding unrecorded`,
+  );
+  return { action: "proceed" };
+}
+
+async function decideDispatch(context: DispatchContextLike, deps: DispatchDeps): Promise<DispatchDecision> {
   try {
     const facts = factsFromDispatch(context, deps.identity(), deps.now());
-    const inheritable = new Map(await Promise.all(
-      facts.lineage.map(async (id) => [id, await deps.ledger.get(id)] as const),
-    ));
-    if (facts.host !== null && deps.observeHost !== undefined) await deps.observeHost(facts.host);
+    // One parallel storage phase, so the slowest single call — not their sum — is what
+    // the dispatch waits for: this thread's own record (which is what tells a start from
+    // a follow-up), its lineage's records, and the host pins' first sight of the machine.
+    const [existing, inheritable] = await Promise.all([
+      deps.ledger.get(facts.threadId),
+      Promise.all(facts.lineage.map(async (id) => [id, await deps.ledger.get(id)] as const))
+        .then((entries) => new Map(entries)),
+      facts.host !== null && deps.observeHost !== undefined
+        ? deps.observeHost(facts.host).catch((error: unknown) => {
+          deps.log.warn(`identity: could not observe the machine: ${(error as Error).message}`);
+        })
+        : undefined,
+    ]);
+
+    const decision = deps.guard === undefined
+      ? { action: "proceed" as const }
+      : await deps.guard({ facts, existing });
+    if (decision.action === "reject") {
+      deps.log.info(`identity: refused a dispatch on thread ${facts.threadId} — ${decision.message}`);
+      // Only the two fields bb's `MessageDispatchHookDecision` declares: the guardrail's
+      // own `rule` is for Identity's logs and tests, and an extra key handed to core is
+      // exactly the shape that failed strict output validation on the machine-list RPC.
+      return { action: "reject", message: decision.message };
+    }
+
     const decided = decideAttribution(facts, (id) => inheritable.get(id) ?? null);
     const outcome = await deps.ledger.record(decided);
     if (outcome.recorded) {
@@ -352,5 +456,5 @@ export async function attributeDispatch(
   } catch (error) {
     deps.log.warn(`identity: could not record attribution: ${(error as Error).message}`);
   }
-  return { action: "proceed" } as const;
+  return { action: "proceed" };
 }

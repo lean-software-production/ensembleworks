@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, it } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import {
   AttributionLedger,
   decideAttribution,
@@ -10,6 +10,8 @@ import {
   type StarterRecord,
   type StarterSummary,
   attributeDispatch,
+  HOOK_BUDGET_MS,
+  SDK_HOOK_DECISION_CEILING_MS,
 } from "./attribution.js";
 
 const matt: StarterSummary = { person: "mattwynne", displayName: "Matt", github: "mattwynne" };
@@ -439,5 +441,116 @@ describe("attributeDispatch and the machine", () => {
     const ledger = new AttributionLedger(new FakeKv());
     await attributeDispatch({ ...onTeamMachine, host: null }, deps({ ledger }));
     expect((await ledger.get("thr_new"))?.host).toBeNull();
+  });
+});
+
+describe("the dispatch hook's time budget", () => {
+  // The design note used to say the hook cost "~2 timeouts". It has not been true since
+  // step 4 added the host observation, and step 5's guard adds another storage-backed
+  // step. This is the pin: one deadline over the whole body, asserted end to end, so the
+  // number cannot drift silently as more work is added to the hook.
+  const hangingKv: KvLike = {
+    get: () => new Promise<never>(() => {}),
+    set: () => new Promise<never>(() => {}),
+    delete: () => new Promise<never>(() => {}),
+    list: () => new Promise<never>(() => {}),
+  };
+  const context = {
+    thread: { id: "thr_new", parentThreadId: "thr_parent", sourceThreadId: "thr_source" },
+    origin: "app" as const,
+    originPluginId: null,
+    startedOnBehalfOf: { senderThreadId: "thr_sender" },
+    parentThreadId: "thr_hook_parent",
+    queuedMessage: { senderThreadId: "thr_queued" },
+    host: { id: "h1", name: "ew-lsp-001-mrdavidlaing" },
+  };
+
+  it("stays inside the SDK's fail-closed ceiling", () => {
+    expect(HOOK_BUDGET_MS).toBeLessThan(SDK_HOOK_DECISION_CEILING_MS);
+  });
+
+  it("answers within the budget even when nothing it depends on ever settles", async () => {
+    vi.useFakeTimers();
+    try {
+      const warnings: string[] = [];
+      const decision = attributeDispatch(context, {
+        ledger: new AttributionLedger(hangingKv),
+        identity: () => ({ email: "david@example.com", person: david }),
+        now: () => 4_000,
+        log: { info: () => undefined, warn: (m) => warnings.push(m) },
+        // Neither of these is bounded by the kv timeout: only the overall deadline saves
+        // the dispatch from them.
+        observeHost: () => new Promise<never>(() => {}),
+        guard: () => new Promise<never>(() => {}),
+      });
+      let settled = false;
+      void decision.then(() => {
+        settled = true;
+      });
+      await vi.advanceTimersByTimeAsync(HOOK_BUDGET_MS - 1);
+      expect(settled).toBe(false);
+      await vi.advanceTimersByTimeAsync(2);
+      expect(await decision).toEqual({ action: "proceed" });
+      expect(warnings.join("\n")).toContain("gave up");
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("gives up on a wedged kv well inside the budget, without the deadline's help", async () => {
+    vi.useFakeTimers();
+    try {
+      const decision = attributeDispatch(context, {
+        ledger: new AttributionLedger(hangingKv),
+        identity: () => ({ email: "david@example.com", person: david }),
+        now: () => 4_000,
+        log: { info: () => undefined, warn: () => undefined },
+      });
+      let settled = false;
+      void decision.then(() => {
+        settled = true;
+      });
+      // Every kv call is individually bounded, and the hook's storage phases are
+      // parallel-then-sequential: the reads together, then the record's get, set and
+      // index append. That arithmetic must finish with a second of the budget to spare,
+      // so the deadline stays a backstop rather than the thing normally doing the work.
+      await vi.advanceTimersByTimeAsync(HOOK_BUDGET_MS - 1_000);
+      expect(settled).toBe(true);
+      expect(await decision).toEqual({ action: "proceed" });
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+});
+
+describe("the eviction index, against a kv that hangs", () => {
+  it("leaves no unsettled kv call behind, and retries the id it could not index", async () => {
+    let indexReads = 0;
+    const data = new Map<string, unknown>();
+    const flaky: KvLike = {
+      async get<T>(key: string) {
+        if (key.endsWith("/index")) {
+          indexReads += 1;
+          if (indexReads === 1) return await new Promise<never>(() => {});
+        }
+        return data.get(key) as T | undefined;
+      },
+      async set(key: string, value: unknown) {
+        data.set(key, value);
+      },
+      async delete(key: string) {
+        data.delete(key);
+      },
+      async list(prefix = "") {
+        return [...data.keys()].filter((key) => key.startsWith(prefix));
+      },
+    };
+    const ledger = new AttributionLedger(flaky, { timeoutMs: 10 });
+    // The first record's index append hangs: the record is written, the id is not indexed.
+    expect(await ledger.record(record({ threadId: "thr_1" }))).toMatchObject({ recorded: true });
+    expect(data.get("identity/starter/v1/index")).toBeUndefined();
+    // The next append retries it, so the un-indexed id is not lost.
+    await ledger.record(record({ threadId: "thr_2" }));
+    expect(data.get("identity/starter/v1/index")).toEqual(["thr_1", "thr_2"]);
   });
 });

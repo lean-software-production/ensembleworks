@@ -40,8 +40,12 @@ export function runsAs(host: HostClassification, sharedUser: string): string {
   return host.kind === "person" ? host.person.person : sharedUser;
 }
 
-/** "team machine", "unclaimed machine", "Matt's machine" — how a machine is described. */
-function machineDescription(host: HostClassification): string {
+/**
+ * "team machine", "unclaimed machine", "Matt's machine" — how a machine is described.
+ * Exported so the guardrail's refusal text and the UI cannot drift apart: a refusal that
+ * named a machine differently from the chip beside it would be worse than no refusal.
+ */
+export function machineDescription(host: HostClassification): string {
   switch (host.kind) {
     case "team":
       return "team machine";
