@@ -18,6 +18,31 @@ export type ThreadStatusSetter = (threadId: string, status: NativeThreadStatus |
 
 const BADGE_ATTRIBUTE = "data-bb-presence-badge";
 const TINT_ATTRIBUTE = "data-bb-ownership-tint";
+const RESERVED_ATTRIBUTE = "data-bb-badge-reserved";
+
+/** Badge geometry, in one place: the two numbers the row's padding has to agree with. */
+const BADGE_LEFT_PX = 2;
+const BADGE_MIN_WIDTH_PX = 14;
+
+/**
+ * Reserve room for the badge on the row.
+ *
+ * The badge is absolutely positioned, so it occupies no space of its own — and once it
+ * moved INSIDE the row (it used to hang off at left:-7px) it landed on top of the thread
+ * title: a row titled "probe" read "robe". The row is not ours, so we add the smallest
+ * thing that fixes it, remember we did, and take it back off with the badge.
+ */
+function reserveBadgeRoom(anchor: HTMLElement): void {
+  if (anchor.hasAttribute(RESERVED_ATTRIBUTE)) return;
+  anchor.setAttribute(RESERVED_ATTRIBUTE, anchor.style.paddingLeft);
+  anchor.style.paddingLeft = `${BADGE_LEFT_PX + BADGE_MIN_WIDTH_PX + 4}px`;
+}
+
+function releaseBadgeRoom(anchor: HTMLElement): void {
+  if (!anchor.hasAttribute(RESERVED_ATTRIBUTE)) return;
+  anchor.style.paddingLeft = anchor.getAttribute(RESERVED_ATTRIBUTE) ?? "";
+  anchor.removeAttribute(RESERVED_ATTRIBUTE);
+}
 
 /**
  * The row tint: a colour bar down the row's leading edge in the badge's colour.
@@ -104,6 +129,7 @@ function reconcileFallbackDots(): void {
 
     if (!status) {
       existing?.remove();
+      releaseBadgeRoom(anchor);
       continue;
     }
 
@@ -113,7 +139,10 @@ function reconcileFallbackDots(): void {
     tinted.add(row);
 
     if (nativeRendered) {
+      // bb positioned its own glyph; reserving room for a badge we are not drawing would
+      // indent the row for nothing.
       existing?.remove();
+      releaseBadgeRoom(anchor);
       continue;
     }
 
@@ -123,6 +152,7 @@ function reconcileFallbackDots(): void {
     badge.setAttribute("title", status.label);
     badge.style.background = status.badgeColor;
     if (!existing) anchor.append(badge);
+    reserveBadgeRoom(anchor);
     liveBadges.add(badge);
   }
 
@@ -148,9 +178,9 @@ function createBadge(document: Document): HTMLSpanElement {
     position: "absolute",
     // INSIDE the row, not hanging off it. The original -7px suited presence's 6px dot;
     // an ownership badge carries initials, and half of it was clipped by the window edge.
-    left: "2px",
+    left: `${BADGE_LEFT_PX}px`,
     top: "50%",
-    minWidth: "14px",
+    minWidth: `${BADGE_MIN_WIDTH_PX}px`,
     height: "14px",
     padding: "0 3px",
     borderRadius: "9999px",
@@ -172,6 +202,7 @@ function nativeStatus(status: ThreadStatus): NativeThreadStatus {
 }
 
 function removeAllBadges(document: Document): void {
+  for (const anchor of document.querySelectorAll<HTMLElement>("[" + RESERVED_ATTRIBUTE + "]")) releaseBadgeRoom(anchor);
   for (const row of document.querySelectorAll<HTMLElement>("[" + TINT_ATTRIBUTE + "]")) untintRow(row);
   for (const badge of document.querySelectorAll("[" + BADGE_ATTRIBUTE + "]")) badge.remove();
 }

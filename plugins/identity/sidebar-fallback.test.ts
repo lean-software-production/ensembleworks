@@ -153,3 +153,42 @@ describe("where the badge sits, and the row tint", () => {
     expect(anchor.querySelector("[data-bb-presence-badge]")).toBeNull();
   });
 });
+
+describe("the badge must not sit on the title", () => {
+  it("reserves room for itself on the row, and gives it back when the status goes", async () => {
+    // Moving the badge inside the row (it used to hang at left:-7px) put it ON TOP of the
+    // thread title: a row titled "probe" read "robe". The badge is absolutely positioned,
+    // so it takes no space of its own — the row has to be told to leave some.
+    const { anchor, row } = renderReplacementRow();
+    dispose = mountThreadStatusFallback({ document });
+    replaceThreadStatuses(new Map([["thread-1", status]]));
+    await settleObserver();
+
+    const reserved = Number.parseFloat(anchor.style.paddingLeft || "0");
+    const badge = anchor.querySelector<HTMLElement>("[data-bb-presence-badge]");
+    const badgeLeft = Number.parseFloat(badge?.style.left ?? "0");
+    const badgeWidth = Number.parseFloat(badge?.style.minWidth ?? "0");
+    expect(reserved).toBeGreaterThanOrEqual(badgeLeft + badgeWidth);
+
+    replaceThreadStatuses(new Map());
+    await settleObserver();
+    // Not left behind on a row we do not own.
+    expect(anchor.style.paddingLeft).toBe("");
+    expect(row.style.boxShadow).toBe("");
+  });
+
+  it("leaves a row the native glyph already handles alone", async () => {
+    // Native rendering means bb positioned its own glyph properly; adding padding for a
+    // badge we are not drawing would indent the row for nothing.
+    const { anchor } = renderReplacementRow();
+    const native = document.createElement("span");
+    native.setAttribute("aria-label", status.label);
+    anchor.append(native);
+    dispose = mountThreadStatusFallback({ document });
+    replaceThreadStatuses(new Map([["thread-1", status]]));
+    await settleObserver();
+
+    expect(anchor.querySelector("[data-bb-presence-badge]")).toBeNull();
+    expect(anchor.style.paddingLeft).toBe("");
+  });
+});
