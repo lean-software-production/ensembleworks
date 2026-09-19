@@ -1,7 +1,12 @@
 import http from "node:http";
 import type { AddressInfo } from "node:net";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
-import { installRequestContext, selfTestRequestContext, type SelfTestResult } from "./request-context.js";
+import {
+  installRequestContext,
+  REQUEST_CONTEXT_VERSION,
+  selfTestRequestContext,
+  type SelfTestResult,
+} from "./request-context.js";
 
 const context = installRequestContext();
 let server: http.Server;
@@ -31,6 +36,32 @@ function get(path: string, headers: Record<string, string> = {}): Promise<unknow
 }
 
 describe("installRequestContext", () => {
+  it("migrates any singleton older than the current shape, not just the observer-less one", () => {
+    // The process-global survives reloads by design (S7 lesson 1), which makes its SHAPE a
+    // contract between plugin versions. #109 fixed one crossing — pre-audit `current()`-only
+    // to the audit shape — by asking whether `observe` existed. A version number generalises
+    // that: the NEXT method added does not need its own bespoke sniff, and a generation that
+    // finds a newer context than its own leaves it alone rather than downgrading it.
+    const key = Symbol.for("ew.identity.requestContext.v1");
+    const globals = globalThis as typeof globalThis & { [key]?: unknown };
+    const savedContext = globals[key];
+    const savedEmit = http.Server.prototype.emit;
+    try {
+      // A hypothetical future shape: has observe(), but is a version behind.
+      const stale = { version: REQUEST_CONTEXT_VERSION - 1, current: () => undefined, observe: () => () => undefined };
+      globals[key] = stale;
+      const migrated = installRequestContext();
+      expect(migrated).not.toBe(stale);
+      expect((globals[key] as { version: number }).version).toBe(REQUEST_CONTEXT_VERSION);
+
+      // And the complete, current context is reused rather than re-patched.
+      expect(installRequestContext()).toBe(migrated);
+    } finally {
+      globals[key] = savedContext;
+      http.Server.prototype.emit = savedEmit;
+    }
+  });
+
   it("upgrades the observer-less singleton left by the pre-audit generation", async () => {
     const key = Symbol.for("ew.identity.requestContext.v1");
     const globals = globalThis as typeof globalThis & { [key]?: unknown };

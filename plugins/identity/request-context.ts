@@ -26,7 +26,21 @@ export type RequestFacts = {
 /** Called with the facts of every http request bb handles. Must not throw; wrapped anyway. */
 export type RequestObserver = (facts: RequestFacts) => void;
 
+/**
+ * The shape version of the process-global context.
+ *
+ * The global survives plugin reloads by design (see `installRequestContext`), so its shape
+ * is a CONTRACT BETWEEN VERSIONS of this plugin, not an implementation detail. Version 1
+ * was the pre-audit context with `current()` only; the deployed generation of it is what
+ * broke the first #106 install with `requestContext.observe is not a function`. Bump this
+ * whenever `RequestContext` gains or changes a member, and a running server will migrate
+ * on reload instead of handing a new generation an object it cannot use.
+ */
+export const REQUEST_CONTEXT_VERSION = 2;
+
 export type RequestContext = {
+  /** The shape version this context was built at. Absent on a version-1 context. */
+  version?: number;
   /** The facts of the request being handled, or undefined outside any request. */
   current(): RequestFacts | undefined;
   /**
@@ -71,13 +85,23 @@ export function installRequestContext(): RequestContext {
   type LegacyRequestContext = Pick<RequestContext, "current">;
   const globals = globalThis as typeof globalThis & { [GLOBAL_KEY]?: RequestContext | LegacyRequestContext };
   const existing = globals[GLOBAL_KEY];
-  if (existing && "observe" in existing && typeof existing.observe === "function") return existing;
+  // Reuse a context at THIS shape or newer; migrate anything older. A version-1 context
+  // (the pre-audit shape, no `version`) reads as 1. Comparing versions rather than
+  // sniffing for a method means the next member added migrates without a bespoke check,
+  // and a generation that finds a NEWER context leaves it alone instead of downgrading
+  // the object a still-live older generation is holding.
+  const existingVersion = existing === undefined ? 0 : (existing as RequestContext).version ?? 1;
+  if (existing !== undefined && existingVersion >= REQUEST_CONTEXT_VERSION) return existing as RequestContext;
 
-  // The generation deployed before request auditing stored a singleton with current()
-  // only. It deliberately left both that global and its emit patch installed across a
-  // reload. Layer a fresh context over the legacy patch: the old generation keeps its
-  // reference until BB disposes it, while the new generation gets ids and observers.
-  // Replacing the global also makes later reloads reuse this complete context normally.
+  // Below this line we are MIGRATING. The older generation deliberately left both its
+  // global and its emit patch installed across the reload, so a fresh context is layered
+  // over the legacy patch: the old generation keeps its own reference until BB disposes
+  // it, while the new generation gets ids and observers. Replacing the global also makes
+  // later reloads reuse this complete context normally.
+  //
+  // The cost of a migration is one extra `emit` layer for the life of the process. That
+  // is bounded by how many shape versions a single process crosses, which is one per
+  // upgrade-with-reload — not per reload.
 
   const als = new AsyncLocalStorage<RequestFacts>();
   const observers = new Set<RequestObserver>();
@@ -109,6 +133,7 @@ export function installRequestContext(): RequestContext {
   Object.defineProperty(http.Server.prototype.emit, PATCH_MARKER, { value: true });
 
   const context: RequestContext = {
+    version: REQUEST_CONTEXT_VERSION,
     current: () => als.getStore(),
     observe: (observer) => {
       observers.add(observer);
