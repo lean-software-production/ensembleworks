@@ -31,6 +31,49 @@ function get(path: string, headers: Record<string, string> = {}): Promise<unknow
 }
 
 describe("installRequestContext", () => {
+  it("upgrades the observer-less singleton left by the pre-audit generation", async () => {
+    const key = Symbol.for("ew.identity.requestContext.v1");
+    const globals = globalThis as typeof globalThis & { [key]?: unknown };
+    const savedContext = globals[key];
+    const savedEmit = http.Server.prototype.emit;
+    const legacyContext = { current: () => undefined };
+    // The deployed pre-audit generation left both an observer-less global and an
+    // unmarked emit wrapper behind. A hot reload has to layer the new context over it.
+    globals[key] = legacyContext;
+    http.Server.prototype.emit = function legacyEmit(this: http.Server, ...args: unknown[]) {
+      return (savedEmit as (...values: unknown[]) => boolean).apply(this, args);
+    } as typeof http.Server.prototype.emit;
+
+    let migratedServer: http.Server | undefined;
+    try {
+      const migrated = installRequestContext();
+      expect(migrated).not.toBe(legacyContext);
+      expect(migrated.observe).toBeTypeOf("function");
+
+      const observed: string[] = [];
+      const stop = migrated.observe((facts) => observed.push(facts.email ?? "anonymous"));
+      migratedServer = http.createServer((_req, res) => {
+        res.setHeader("content-type", "application/json");
+        res.end(JSON.stringify(migrated.current() ?? null));
+      });
+      await new Promise<void>((resolve) => migratedServer?.listen(0, "127.0.0.1", resolve));
+      const port = (migratedServer.address() as AddressInfo).port;
+      const handled = await fetch(`http://127.0.0.1:${port}/migrated`, {
+        headers: { "cf-access-authenticated-user-email": "reload@example.com" },
+      }).then((response) => response.json()) as { email: string };
+      stop();
+
+      expect(handled.email).toBe("reload@example.com");
+      expect(observed).toEqual(["reload@example.com"]);
+    } finally {
+      if (migratedServer?.listening) {
+        await new Promise<void>((resolve) => migratedServer?.close(() => resolve()));
+      }
+      globals[key] = savedContext;
+      http.Server.prototype.emit = savedEmit;
+    }
+  });
+
   it("gives concurrent requests their own email across a shared await", async () => {
     gate = new Promise<void>((resolve) => { releaseGate = resolve; });
     const emails = ["Matt@Example.com", "david@example.com", " trevoke@example.com "];

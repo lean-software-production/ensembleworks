@@ -68,9 +68,16 @@ export function normalizeEmail(value: string | string[] | null | undefined): str
  * unknown (anonymous) requester, which is the high-trust design's fallback anyway.
  */
 export function installRequestContext(): RequestContext {
-  const globals = globalThis as typeof globalThis & { [GLOBAL_KEY]?: RequestContext };
+  type LegacyRequestContext = Pick<RequestContext, "current">;
+  const globals = globalThis as typeof globalThis & { [GLOBAL_KEY]?: RequestContext | LegacyRequestContext };
   const existing = globals[GLOBAL_KEY];
-  if (existing) return existing;
+  if (existing && "observe" in existing && typeof existing.observe === "function") return existing;
+
+  // The generation deployed before request auditing stored a singleton with current()
+  // only. It deliberately left both that global and its emit patch installed across a
+  // reload. Layer a fresh context over the legacy patch: the old generation keeps its
+  // reference until BB disposes it, while the new generation gets ids and observers.
+  // Replacing the global also makes later reloads reuse this complete context normally.
 
   const als = new AsyncLocalStorage<RequestFacts>();
   const observers = new Set<RequestObserver>();
