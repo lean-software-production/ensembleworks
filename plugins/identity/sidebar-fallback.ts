@@ -29,8 +29,8 @@ const BADGE_ATTRIBUTE = "data-bb-presence-badge";
 const RESERVED_ATTRIBUTE = "data-bb-badge-reserved";
 
 /** Keep clear of BB's working glyph while retaining room between the title and controls. */
-const BADGE_RIGHT_PX = -18;
-const BADGE_RESERVED_RIGHT_PX = 20;
+const BADGE_RIGHT_PX = 24;
+const BADGE_RESERVED_RIGHT_PX = 48;
 
 /**
  * Reserve trailing room for the badge on the row.
@@ -160,7 +160,7 @@ function createBadge(document: Document): HTMLSpanElement {
   badge.setAttribute("role", "status");
   Object.assign(badge.style, {
     position: "absolute",
-    // Sit beyond BB's trailing working glyph instead of painting over it.
+    // Stay on-screen immediately before BB's trailing working glyph.
     right: `${BADGE_RIGHT_PX}px`,
     top: "50%",
     minWidth: "14px",
