@@ -193,7 +193,12 @@ export const NO_PERSON_COLOR = "var(--muted-foreground, #6b7280)";
  * Someone the roster does not name (a starter since removed from the directory) falls
  * back to an FNV-1a hash of the id: stable across processes, just not separated.
  *
- * Saturation and lightness are fixed so white text stays legible on every hue.
+ * Saturation and lightness are fixed at `55% 38%`, which keeps every hue dark enough to
+ * read a label against — but NOT, as this comment used to claim, dark enough for white
+ * text on every hue: white on the yellow seat `hsl(60 55% 38%)` is 3.14:1, under WCAG AA
+ * for the 9px badge (measured, 2026-09-19). The ink that goes ON a person's colour is
+ * therefore chosen from the colour, by `readableInk` in person-colors.ts, for dealt and
+ * chosen colours alike.
  */
 export function personColor(person: string | null, roster: readonly string[] = []): string {
   if (person === null) return NO_PERSON_COLOR;
