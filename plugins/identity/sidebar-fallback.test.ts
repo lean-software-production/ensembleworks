@@ -124,7 +124,7 @@ describe("ownership badges", () => {
   });
 });
 
-describe("where the badge sits, and the row tint", () => {
+describe("where the badge sits", () => {
   it("keeps the badge inside the trailing edge of the row", async () => {
     const { anchor } = renderReplacementRow();
     dispose = mountThreadStatusFallback({ document });
@@ -138,19 +138,15 @@ describe("where the badge sits, and the row tint", () => {
     expect(badge?.style.left).toBe("");
   });
 
-  it("tints the row with the badge's colour, and takes the tint away with the status", async () => {
-    // Option 4: the colour is the at-a-glance signal — whose thread this is, without
-    // reading anything. The badge still says who exactly.
+  it("keeps the ownership colour in the badge without drawing a leading row bracket", async () => {
     const { anchor, row } = renderReplacementRow();
     dispose = mountThreadStatusFallback({ document });
     replaceThreadStatuses(new Map([["thread-1", { ...status, badgeColor: "hsl(210 55% 38%)" }]]));
     await settleObserver();
-    expect(row.style.boxShadow).toContain("hsl(210 55% 38%)");
-
-    replaceThreadStatuses(new Map());
-    await settleObserver();
+    expect(anchor.querySelector<HTMLElement>("[data-bb-presence-badge]")?.style.background)
+      .toBe("rgb(44, 97, 150)");
     expect(row.style.boxShadow).toBe("");
-    expect(anchor.querySelector("[data-bb-presence-badge]")).toBeNull();
+    expect(row.hasAttribute("data-bb-ownership-tint")).toBe(false);
   });
 });
 
