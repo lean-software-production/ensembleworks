@@ -192,3 +192,46 @@ describe("the badge must not sit on the title", () => {
     expect(anchor.style.paddingLeft).toBe("");
   });
 });
+
+describe("badge ink follows the badge colour", () => {
+  async function renderWith(badgeColor: string, badgeInk?: string) {
+    const { anchor } = renderReplacementRow();
+    dispose = mountThreadStatusFallback({ document });
+    replaceThreadStatuses(new Map([["thread-1", {
+      icon: "User", label: "Started by David", tone: "default" as const,
+      badge: "D", badgeColor, ...(badgeInk === undefined ? {} : { badgeInk }),
+    }]]));
+    await settleObserver();
+    return anchor.querySelector<HTMLElement>("[data-bb-presence-badge]");
+  }
+
+  it("uses the ink it was given, so a light chosen colour is still readable", async () => {
+    // The real failure this prevents: initials in hardcoded white on a pale colour
+    // somebody chose are invisible. The ink is decided from the fill (person-colors.ts)
+    // and carried here rather than re-derived.
+    const badge = await renderWith("#ffff99", "#111827");
+    expect(badge?.style.color).toBe("rgb(17, 24, 39)");
+  });
+
+  it("uses white on a dark chosen colour", async () => {
+    const badge = await renderWith("#111111", "#ffffff");
+    expect(badge?.style.color).toBe("rgb(255, 255, 255)");
+  });
+
+  it("falls back to white when no ink was supplied, as presence badges always were", async () => {
+    const badge = await renderWith("var(--success, #22c55e)");
+    expect(badge?.style.color).toBe("white");
+  });
+
+  it("repaints the ink when the status changes colour, rather than keeping the old one", async () => {
+    const { anchor } = renderReplacementRow();
+    dispose = mountThreadStatusFallback({ document });
+    const base = { icon: "User", label: "Started by David", tone: "default" as const, badge: "D" };
+    replaceThreadStatuses(new Map([["thread-1", { ...base, badgeColor: "#111111", badgeInk: "#ffffff" }]]));
+    await settleObserver();
+    replaceThreadStatuses(new Map([["thread-1", { ...base, badgeColor: "#ffff99", badgeInk: "#111827" }]]));
+    await settleObserver();
+    expect(anchor.querySelector<HTMLElement>("[data-bb-presence-badge]")?.style.color)
+      .toBe("rgb(17, 24, 39)");
+  });
+});

@@ -9,15 +9,25 @@ import {
   useRealtimeConnectionState,
   useRpc,
 } from "@get-bb/plugin-sdk/app";
-import type { MachineList, PresenceLocation, PresentPerson, rpcContract, ThreadOwnership, WhoAmI } from "./server.js";
+import type {
+  ColorWriteAnswer,
+  MachineList,
+  PresenceLocation,
+  PresentPerson,
+  RosterAnswer,
+  rpcContract,
+  ThreadOwnership,
+  WhoAmI,
+} from "./server.js";
 import { initials, presenceLabel } from "./presence-labels.js";
+import { seenPhrase, SEEN_UNKNOWN_CAVEAT } from "./roster.js";
 import {
   composerBanner,
   headerChip,
   ownershipRowStatus,
-  personColor,
   readOnlyBanner,
 } from "./ownership-labels.js";
+import { readableInk, resolvePersonColor } from "./person-colors.js";
 import {
   mountThreadStatusFallback,
   replaceThreadStatuses,
@@ -80,6 +90,8 @@ function PresenceCoordinator() {
   // The directory, for dealing per-person colours. A ref, not state: it only ever feeds
   // the next paint, and a change of roster must not re-run the ownership fetch.
   const rosterRef = useRef<readonly string[]>([]);
+  /** The colours people chose, so the badge and tint paint the override, not the deal. */
+  const colorsRef = useRef<Readonly<Record<string, string>>>({});
   const presenceRef = useRef(new Map<string, ThreadStatus>());
   const paint = useCallback(() => {
     const merged = new Map(ownershipRef.current);
@@ -152,12 +164,20 @@ function PresenceCoordinator() {
     void rpc.call("identity_thread_ownership", { threadIds: ids }).then(({ threads }) => {
       ownershipRef.current = new Map(threads.map((entry) => {
         const status = ownershipRowStatus(entry);
+        // The CHOSEN colour wins over the dealt one here, exactly as it does on the
+        // people page — the badge fill and the row tint are the two surfaces the
+        // override exists for — and the ink follows whatever colour that turns out to
+        // be, so a pale choice does not render as invisible initials.
+        const resolved = resolvePersonColor(
+          entry.starter?.person ?? null, rosterRef.current, colorsRef.current,
+        );
         return [entry.threadId, {
           icon: status.icon,
           label: status.label,
           tone: status.tone,
           badge: status.badge,
-          badgeColor: personColor(entry.starter?.person ?? null, rosterRef.current),
+          badgeColor: resolved.color,
+          badgeInk: readableInk(resolved.color),
         }] as const;
       }));
       paint();
@@ -179,8 +199,15 @@ function PresenceCoordinator() {
       void rpc.call("identity_machines").then((result: MachineList) => {
         if (!live) return;
         const next = result.roster ?? [];
-        if (next.join(",") === rosterRef.current.join(",")) return;
+        const nextColors = result.colors ?? {};
+        // Repaint when EITHER the roster or the chosen colours moved: a colour change
+        // leaves the roster identical, so comparing only the roster would leave the
+        // sidebar showing the old colour until something else happened to change.
+        const same = next.join(",") === rosterRef.current.join(",")
+          && JSON.stringify(nextColors) === JSON.stringify(colorsRef.current);
+        if (same) return;
         rosterRef.current = next;
+        colorsRef.current = nextColors;
         refreshOwnership();
       }).catch(() => undefined);
     };
@@ -560,6 +587,233 @@ function TypingIcon() {
   );
 }
 
+
+/**
+ * The people page: who is registered on this server, and the colour associated with each
+ * of them.
+ *
+ * Follows this file's existing conventions — inline styles against BB's CSS variables, no
+ * component library, every RPC failure degrading to "show nothing" rather than throwing.
+ *
+ * Anyone may change anyone's colour. That is the owner's decision and it matches the
+ * plugin's trust model (a guardrail against mistakes; the Access email header is never
+ * verified), plus a teammate who never opens this page still needs a colour someone can
+ * fix for them. What makes it safe is visibility, not permission: every change writes an
+ * audit line naming who changed whose, from and to.
+ */
+
+/** A small, fixed set of well-separated colours, so the common case is one click. */
+const SWATCHES = [
+  "#b4322e", "#b9651b", "#9a7b10", "#3f7d33", "#1f7a6b",
+  "#2f6bb8", "#5b4bc4", "#96379a", "#b02e6e", "#5b6570",
+] as const;
+
+function RosterPersonRow({
+  row,
+  busy,
+  onChoose,
+  onReset,
+}: {
+  row: RosterAnswer["people"][number];
+  busy: boolean;
+  onChoose: (color: string) => void;
+  onReset: () => void;
+}) {
+  const inputId = `identity-color-${row.person}`;
+  return (
+    <div
+      style={{
+        alignItems: "flex-start",
+        borderTop: "1px solid var(--border)",
+        display: "flex",
+        gap: 12,
+        opacity: busy ? 0.6 : 1,
+        padding: "12px 0",
+      }}
+    >
+      <span
+        aria-hidden="true"
+        style={{
+          alignItems: "center",
+          background: row.color,
+          borderRadius: 999,
+          // The ink is chosen FROM the fill, so a pale choice is still readable. See
+          // person-colors.ts for why the ink adapts rather than the choice being clamped.
+          color: row.ink,
+          display: "inline-flex",
+          flex: "0 0 auto",
+          fontSize: 12,
+          fontWeight: 700,
+          height: 32,
+          justifyContent: "center",
+          width: 32,
+        }}
+      >
+        {initials(row.displayName)}
+      </span>
+
+      <div style={{ display: "flex", flexDirection: "column", flex: 1, gap: 4, minWidth: 0 }}>
+        <div style={{ alignItems: "baseline", display: "flex", flexWrap: "wrap", gap: 8 }}>
+          <span style={{ fontWeight: 600 }}>{row.displayName}</span>
+          <span style={{ color: "var(--muted-foreground)", fontSize: 12 }}>{row.person}</span>
+          <span style={{ color: "var(--muted-foreground)", fontSize: 12 }}>@{row.github}</span>
+        </div>
+        <span style={{ color: "var(--muted-foreground)", fontSize: 12, wordBreak: "break-all" }}>
+          {row.emails.join(", ")}
+        </span>
+        <span style={{ color: "var(--muted-foreground)", fontSize: 12 }}>
+          {row.machines.length > 0
+            ? `Machines: ${row.machines.join(", ")}`
+            : "No machines of their own are known"}
+        </span>
+        <span style={{ color: "var(--muted-foreground)", fontSize: 12 }} title={SEEN_CAVEAT_TITLE}>
+          {seenPhrase(row.seen)}
+          {row.seen ? "" : ` — ${SEEN_UNKNOWN_CAVEAT}`}
+        </span>
+
+        {row.clashesWith.length > 0 && (
+          <span style={{ color: "var(--warning, #b45309)", fontSize: 12 }}>
+            ⚠ This colour reads the same as {row.clashesWith.join(", ")}
+            {"'"}s. Still applied — pick another if you want them to look different.
+          </span>
+        )}
+
+        <div style={{ alignItems: "center", display: "flex", flexWrap: "wrap", gap: 6, marginTop: 4 }}>
+          {SWATCHES.map((swatch) => (
+            <button
+              key={swatch}
+              type="button"
+              disabled={busy}
+              onClick={() => onChoose(swatch)}
+              aria-label={`Give ${row.displayName} the colour ${swatch}`}
+              aria-pressed={row.color === swatch}
+              title={swatch}
+              style={{
+                background: swatch,
+                border: row.color === swatch ? "2px solid var(--foreground)" : "1px solid var(--border)",
+                borderRadius: 999,
+                cursor: busy ? "default" : "pointer",
+                height: 20,
+                padding: 0,
+                width: 20,
+              }}
+            />
+          ))}
+          <label htmlFor={inputId} style={{ color: "var(--muted-foreground)", fontSize: 12, marginLeft: 4 }}>
+            Custom
+          </label>
+          <input
+            id={inputId}
+            type="color"
+            disabled={busy}
+            // A native colour input cannot show "no value", so it shows the colour in
+            // force — dealt or chosen — which is also what it should edit from.
+            value={row.color.startsWith("#") ? row.color : row.dealt}
+            onChange={(event) => onChoose(event.target.value)}
+            style={{ background: "none", border: "none", height: 24, padding: 0, width: 32 }}
+          />
+          <span style={{ color: "var(--muted-foreground)", fontSize: 12 }}>
+            {row.overridden ? "chosen" : "dealt"}
+          </span>
+          {row.overridden && (
+            <button
+              type="button"
+              disabled={busy}
+              onClick={onReset}
+              style={{
+                background: "none",
+                border: "1px solid var(--border)",
+                borderRadius: 6,
+                color: "var(--foreground)",
+                cursor: busy ? "default" : "pointer",
+                fontSize: 12,
+                padding: "2px 8px",
+              }}
+            >
+              Reset to dealt
+            </button>
+          )}
+        </div>
+      </div>
+    </div>
+  );
+}
+
+const SEEN_CAVEAT_TITLE = SEEN_UNKNOWN_CAVEAT;
+
+function PeopleSettings() {
+  const rpc = useRpc<typeof rpcContract>();
+  const [roster, setRoster] = useState<RosterAnswer | null>(null);
+  const [error, setError] = useState<string | null>(null);
+  const [busy, setBusy] = useState<string | null>(null);
+
+  const load = useCallback(() => {
+    void rpc.call("identity_roster").then((result) => {
+      setRoster(result);
+      setError(null);
+    }).catch((failure: unknown) => setError(`Identity could not read the people list: ${String(failure)}`));
+  }, [rpc]);
+
+  useEffect(load, [load]);
+
+  /**
+   * One handler for both writes. A refusal comes back as an ANSWER (`ok: false`) rather
+   * than a thrown error, so it is shown as a sentence instead of disappearing.
+   */
+  const write = useCallback((person: string, color: string | null) => {
+    setBusy(person);
+    const call = color === null
+      ? rpc.call("identity_clear_person_color", { person })
+      : rpc.call("identity_set_person_color", { person, color });
+    void call.then((written: ColorWriteAnswer) => {
+      setError(written.ok ? null : `Could not change ${person}'s colour: ${written.reason}`);
+      load();
+    }).catch((failure: unknown) => {
+      setError(`Could not change ${person}'s colour: ${String(failure)}`);
+    }).finally(() => setBusy(null));
+  }, [load, rpc]);
+
+  if (error !== null && roster === null) {
+    return <span style={{ color: "var(--muted-foreground)", fontSize: 12 }}>{error}</span>;
+  }
+  if (roster === null) return null;
+
+  return (
+    <div style={{ display: "flex", flexDirection: "column", fontSize: 13, gap: 0 }}>
+      <span style={{ color: "var(--muted-foreground)", fontSize: 12, paddingBottom: 8 }}>
+        Everyone in Identity{"'"}s directory. A colour is dealt by roster position; anyone can choose a
+        different one for anyone, and every change is written to Identity{"'"}s log.
+        {roster.me === null
+          ? " This sign-in is not in the directory, so a change will be logged with no name against it."
+          : ` You are signed in as ${roster.me.displayName}.`}
+      </span>
+      {roster.unavailable !== null && (
+        <span style={{ color: "var(--muted-foreground)", fontSize: 12, paddingBottom: 8 }}>
+          Machines are not listed: {roster.unavailable}.
+        </span>
+      )}
+      {error !== null && (
+        <span style={{ color: "var(--destructive, #b91c1c)", fontSize: 12, paddingBottom: 8 }}>{error}</span>
+      )}
+      {roster.people.length === 0
+        ? (
+          <span style={{ color: "var(--muted-foreground)", fontSize: 12 }}>
+            Nobody is registered yet. Identity reads its people from the {'"'}directory{'"'} setting above.
+          </span>
+        )
+        : roster.people.map((row) => (
+          <RosterPersonRow
+            key={row.person}
+            row={row}
+            busy={busy === row.person}
+            onChoose={(color) => write(row.person, color)}
+            onReset={() => write(row.person, null)}
+          />
+        ))}
+    </div>
+  );
+}
+
 export default definePluginApp((app) => {
   app.contentScripts.register({
     id: "thread-presence-status",
@@ -585,5 +839,11 @@ export default definePluginApp((app) => {
     id: "read-only-banner",
     scopes: ["thread"],
     banners: [{ id: "read-only", chrome: "card", component: ReadOnlyThreadBanner }],
+  });
+  app.slots.settingsSection({
+    id: "people",
+    title: "People",
+    description: "Who is registered on this server, and the colour associated with each of them.",
+    component: PeopleSettings,
   });
 });
