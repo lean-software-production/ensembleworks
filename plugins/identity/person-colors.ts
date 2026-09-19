@@ -206,6 +206,47 @@ export type ResolvedColor = { color: string; overridden: boolean; dealt: string 
  * than rendered — the stored string reaches a `style` attribute, so it must be re-proved
  * on the way out as well as on the way in.
  */
+/** A fill as `#rrggbb`, whatever CSS colour form it arrives in. Null if unparseable. */
+export function toHex(color: string | null | undefined): string | null {
+  const rgb = parseCssColor(color);
+  if (rgb === null) return null;
+  const channel = (value: number) => Math.min(255, Math.max(0, Math.round(value))).toString(16).padStart(2, "0");
+  return `#${channel(rgb.r)}${channel(rgb.g)}${channel(rgb.b)}`;
+}
+
+/**
+ * The value a native `<input type="color">` may be handed for a person.
+ *
+ * ALWAYS `#rrggbb`. The element cannot hold anything else, and handing it an `hsl()`
+ * string — which is what a DEALT colour always is — does not merely look wrong: the
+ * browser coerces the value, React restores the stale prop between the `input` and
+ * `change` events a native picker fires in one tick, and the coerced colour is written
+ * back as though the person had chosen it. That was reproduced live: a turquoise pick
+ * became the hex of the person's dealt hue, recorded as "chosen", with an audit line for
+ * a change nobody made. A browser that coerced to `#000000` instead would turn every such
+ * pick black.
+ *
+ * The fallback is the dealt colour converted, not a neutral stand-in, so the picker still
+ * opens on the colour actually in force — which is what the surrounding copy promises.
+ */
+export function colorInputValue(row: { color: string; dealt: string }): string {
+  return toHex(row.color) ?? toHex(row.dealt) ?? DARK_INK;
+}
+
+/**
+ * Whether a pick is worth sending. A write that changes nothing is not a write.
+ *
+ * The second half of the defence above: `colorInputValue` stops the browser coercing a
+ * value it cannot hold, and this stops a duplicate event storing what is already in force
+ * — including an un-overridden person "picking" their own dealt colour, which is not a
+ * choice and must not flip them to `overridden`.
+ */
+export function shouldCommitColor(row: { color: string; dealt: string }, picked: string): boolean {
+  const next = normalizeColorChoice(picked);
+  if (next === null) return false;
+  return next !== colorInputValue(row);
+}
+
 export function resolvePersonColor(
   person: string | null,
   roster: readonly string[],

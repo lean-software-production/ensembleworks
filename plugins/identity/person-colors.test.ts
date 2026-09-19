@@ -11,6 +11,8 @@ import {
   parseCssColor,
   readableInk,
   resolvePersonColor,
+  colorInputValue,
+  shouldCommitColor,
 } from "./person-colors.js";
 import { personColor } from "./ownership-labels.js";
 
@@ -195,5 +197,47 @@ describe("resolvePersonColor", () => {
     const resolved = resolvePersonColor(null, roster, { bob: "#ff0000" });
     expect(resolved.overridden).toBe(false);
     expect(resolved.color).toBe(personColor(null, roster));
+  });
+});
+
+describe("colorInputValue — what a native <input type=\"color\"> may be handed", () => {
+  // The bug this exists to prevent, found in review and reproduced live 3/3 times:
+  // the input was given `row.dealt`, which is ALWAYS an hsl() string, and an
+  // <input type="color"> cannot hold one. Chrome coerced it to hex; React then restored
+  // the stale prop between the input and change events a native picker fires in the same
+  // tick, and the second event wrote the COERCED DEALT COLOUR back as if the person had
+  // chosen it. They ended up "chosen" on a colour they never picked, with an audit line
+  // recording a change nobody made. A browser coercing to #000000 instead would have
+  // turned every such pick black.
+  it("is always a #rrggbb string, whichever branch it comes from", () => {
+    for (const row of [
+      { color: "#336699", dealt: "hsl(216 55% 38%)" },
+      { color: "hsl(60 55% 38%)", dealt: "hsl(60 55% 38%)" },
+      { color: "hsl(288 55% 38%)", dealt: "hsl(288 55% 38%)" },
+      { color: "var(--muted-foreground, #6b7280)", dealt: "hsl(0 55% 38%)" },
+    ]) {
+      expect(colorInputValue(row)).toMatch(/^#[0-9a-f]{6}$/);
+    }
+  });
+
+  it("shows a chosen colour as itself, and a dealt one as its own hex", () => {
+    expect(colorInputValue({ color: "#336699", dealt: "hsl(216 55% 38%)" })).toBe("#336699");
+    // The dealt hue converted, NOT some neutral stand-in: the input opens on the colour
+    // actually in force, which is what the surrounding copy promises.
+    const dealt = colorInputValue({ color: "hsl(60 55% 38%)", dealt: "hsl(60 55% 38%)" });
+    expect(parseCssColor(dealt)).toEqual(parseCssColor("hsl(60 55% 38%)"));
+  });
+
+  it("never asks the server to store what is already in force", () => {
+    // The second half of the defence: even if a browser fires twice, a write that would
+    // not change anything is not a write. Belt and braces, because the first half depends
+    // on every browser coercing the same way and they do not.
+    expect(shouldCommitColor({ color: "#336699", dealt: "hsl(216 55% 38%)" }, "#336699")).toBe(false);
+    expect(shouldCommitColor({ color: "#336699", dealt: "hsl(216 55% 38%)" }, "#FFFFFF")).toBe(true);
+    // An un-overridden person "picking" their own dealt colour is not a choice either.
+    expect(shouldCommitColor(
+      { color: "hsl(60 55% 38%)", dealt: "hsl(60 55% 38%)" },
+      colorInputValue({ color: "hsl(60 55% 38%)", dealt: "hsl(60 55% 38%)" }),
+    )).toBe(false);
   });
 });

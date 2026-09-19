@@ -27,7 +27,12 @@ import {
   ownershipRowStatus,
   readOnlyBanner,
 } from "./ownership-labels.js";
-import { readableInk, resolvePersonColor } from "./person-colors.js";
+import {
+  colorInputValue,
+  readableInk,
+  resolvePersonColor,
+  shouldCommitColor,
+} from "./person-colors.js";
 import {
   mountThreadStatusFallback,
   replaceThreadStatuses,
@@ -709,10 +714,16 @@ function RosterPersonRow({
             id={inputId}
             type="color"
             disabled={busy}
-            // A native colour input cannot show "no value", so it shows the colour in
-            // force — dealt or chosen — which is also what it should edit from.
-            value={row.color.startsWith("#") ? row.color : row.dealt}
-            onChange={(event) => onChoose(event.target.value)}
+            // ALWAYS #rrggbb — see colorInputValue. A dealt colour is an hsl() string,
+            // which this element cannot hold; handing it one made the browser coerce the
+            // value and write the coerced colour back as a "choice" nobody made.
+            value={colorInputValue(row)}
+            onChange={(event) => {
+              // A native picker fires input and change in one tick; a pick that changes
+              // nothing is not a pick.
+              if (!shouldCommitColor(row, event.target.value)) return;
+              onChoose(event.target.value);
+            }}
             style={{ background: "none", border: "none", height: 24, padding: 0, width: 32 }}
           />
           <span style={{ color: "var(--muted-foreground)", fontSize: 12 }}>
