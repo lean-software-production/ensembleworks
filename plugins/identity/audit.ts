@@ -338,3 +338,52 @@ export function postDispatchAuditLine(input: PostDispatchAuditInput): AuditLine 
     person: input.person?.person ?? null,
   };
 }
+
+export type ColorChangeAuditInput = {
+  at: number;
+  requestId: string | null;
+  requestMethod: string | null;
+  requestPath: string | null;
+  mode: EnforcementMode;
+  /** Who made the change, from the request's own identity. Null when unidentified. */
+  by: StarterSummary | null;
+  byEmail: string | null;
+  /** Whose colour was changed. */
+  subject: string;
+  from: string | null;
+  to: string | null;
+};
+
+/**
+ * The person-colour stream: every change to whose colour is what.
+ *
+ * ANYONE may change ANYONE's colour — the owner's decision, and the right one for a
+ * plugin whose whole trust model is "a guardrail against mistakes, not access control"
+ * (the Access email header is never verified) and whose teammates may never open settings
+ * yet still need a colour someone can fix for them.
+ *
+ * This line is what makes that safe: a change is VISIBLE rather than prevented. It names
+ * who changed whose colour, from what to what.
+ *
+ * Unlike the dispatch and request streams it is NOT gated on `enforcement`: those streams
+ * exist to evaluate the guardrail and are noisy, while this one is a record of a
+ * deliberate human action, is emitted at most once per click, and is the only account of
+ * a change anyone can make to anyone. A mode that silenced it would silence exactly the
+ * thing the owner asked to be able to see. `mode` still rides along, as context.
+ */
+export function colorChangeAuditLine(input: ColorChangeAuditInput): AuditLine {
+  return {
+    v: AUDIT_SCHEMA_VERSION,
+    kind: "person.color",
+    at: input.at,
+    req: input.requestId,
+    method: input.requestMethod,
+    path: input.requestPath,
+    mode: input.mode,
+    by: input.by?.person ?? null,
+    email: input.byEmail,
+    subject: input.subject,
+    from: input.from,
+    to: input.to,
+  };
+}

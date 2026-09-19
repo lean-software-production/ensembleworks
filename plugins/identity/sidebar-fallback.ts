@@ -12,6 +12,15 @@ export type ThreadStatus = NativeThreadStatus & {
   badge: string;
   /** That badge's background, so presence and ownership read differently at a glance. */
   badgeColor: string;
+  /**
+   * The ink to draw the badge text in, chosen FROM `badgeColor` by `readableInk`
+   * (person-colors.ts). Optional: a presence badge has always been white on a colour
+   * picked to suit it, and stays that way.
+   *
+   * It exists because a person may now CHOOSE their colour. The badge used to hardcode
+   * white, so pale yellow initials on pale yellow were simply invisible.
+   */
+  badgeInk?: string;
 };
 
 export type ThreadStatusSetter = (threadId: string, status: NativeThreadStatus | null) => void;
@@ -151,6 +160,9 @@ function reconcileFallbackDots(): void {
     badge.setAttribute("aria-label", status.label);
     badge.setAttribute("title", status.label);
     badge.style.background = status.badgeColor;
+    // Reassigned on every paint, not only at creation: a colour change must take its ink
+    // with it, or a repainted badge keeps the previous colour's ink.
+    badge.style.color = status.badgeInk ?? "white";
     if (!existing) anchor.append(badge);
     reserveBadgeRoom(anchor);
     liveBadges.add(badge);

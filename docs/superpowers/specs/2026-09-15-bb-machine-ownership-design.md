@@ -1298,3 +1298,138 @@ Matt, `teamMachines: ew-lsp-001-main`:
 - **Audit says nothing about who a person IS.** Every email is still the unverified
   `Cf-Access-Authenticated-User-Email`. An audit log built on a header anyone on loopback
   can set is evidence about honest traffic, not about an attacker.
+
+### Step 7 built (2026-09-19): the people page, with overridable colours
+
+Landed on `feature/identity-people-page` (`plugins/identity/person-colors.ts`,
+`person-store.ts`, `roster.ts`, plus wiring in `server.ts`, `app.tsx`,
+`sidebar-fallback.ts`, `attribution.ts` and `audit.ts`). The owner's ask: Identity's
+settings page should show **who is registered on this server**, and let a person **choose
+the colour associated with them**, used everywhere in the UI. The dealt colour (step 4's
+`personColor`, hues dealt by roster position) is the starting point; the choice overrides
+it.
+
+**What shipped.**
+- A `ui.settingsSection` ("People") listing, per person: display name, person id, emails
+  and github handle, their machines (from the same pinned `hosts.ts` classification the
+  rest of the plugin uses — the team machine and unclaimed hosts are nobody's), and
+  seen-state.
+- A colour control per person: ten well-separated swatches plus a native colour input,
+  labelled **dealt** or **chosen**, with "Reset to dealt" shown only when there is
+  something to reset.
+- `identity_roster`, `identity_set_person_color` and `identity_clear_person_color`. A
+  refusal (a person not in the directory, a value that is not a colour) comes back as an
+  ANSWER (`{ok: false, reason}`), not a thrown RPC error, so the page can say why.
+- **Anyone may change anyone's colour** (owner's decision). No authorization check: it
+  would be theatre in a plugin that never verifies the Access header, and a teammate who
+  never opens settings still needs a colour someone can fix. What makes it safe is
+  **visibility** — a new audit stream, `kind: "person.color"`, naming who changed whose,
+  from and to. Unlike the dispatch and request streams it is **not gated on
+  `enforcement`**: it is one line per deliberate human click, and a mode that silenced it
+  would silence exactly the record that makes the open write acceptable.
+- The chosen colour flows to both surfaces that already used `personColor`: the sidebar
+  badge fill and the row tint. Those were the only two call sites; the header chip and
+  the banners are text.
+
+**Where the overrides live, and why NOT in `directory`.** In `bb.storage.kv`, one row,
+`person -> #rrggbb`. The `directory` setting is **rendered by Ansible from `ew_bb_people`
+in the infra repo**, so every `ew_bb` run writes it out again from the infra source of
+truth — a preference stored there survives until the next run and then vanishes,
+silently, with no error anywhere. That argument is written at length in
+`person-store.ts`'s module header, addressed to whoever tries to fold it back in, because
+"one field on the directory entry" is otherwise the obvious simplification. The same
+reasoning covers seen-state: a fact about this server, not about the org's people list.
+The write path refuses a person the directory does not list (so typos cannot accumulate
+rows); `clear` is deliberately NOT directory-gated, because that is the only way a
+departed person's row ever leaves.
+
+**Seen-state, and its cost.** "Has any thread been attributed to this person" is
+**maintained, never scanned**. The naive answer — walking `AttributionLedger` at render
+time — is up to 2000 kv reads every time anyone opens settings, and gets worse as the
+server gets busier. Instead:
+- the dispatch that records a thread's starter also marks that person seen
+  (`attributeDispatch`'s new `observeStarter` dep): O(1), coalesced to at most one write
+  per person per hour, not called for a refused dispatch (it never happened) or an
+  unattributed one (it names nobody), and swallowing its own failures like everything
+  else on that path;
+- reading it is ONE cached kv get, so the settings page costs nothing;
+- plus **one** bounded catch-up sweep of the records the ledger still retains
+  (`AttributionLedger.starterSweep`) — one index read plus up to 2000 gets, run at most
+  once ever per server behind a durable kv marker, fired and not awaited by the roster
+  read so opening settings never waits on it.
+
+So the honest meaning of the answer is "a thread of theirs is on record, within the 2000
+most recent threads Identity retains, or at any time since seen-state shipped" — **not**
+"they have never used this server". `SEEN_UNKNOWN_CAVEAT` says that in the UI in as many
+words, and a test forbids the word "never" in that copy.
+
+**The colour format, and the contrast rule.**
+- **Stored as lowercase `#rrggbb`.** A native colour input emits exactly that; a
+  three-digit hex or a missing `#` is accepted and expanded, because the RPC is reachable
+  from a script too. Everything else — `rgb()`, `hsl()`, a named colour, a CSS fragment —
+  is REFUSED rather than stored, because the value reaches a `style` attribute and a
+  `box-shadow`. It is re-proved on the way OUT as well as in, since a row may have been
+  written by an older version.
+- **Legibility: adapt the INK, do not constrain the fill.** Clamping what a person may
+  pick would quietly answer them with a colour other than the one they chose, which is
+  the one thing "the colour associated with them" must not do. So `readableInk` returns
+  whichever of white (`#ffffff`) and near-black (`#111827`) has the better WCAG contrast
+  against the fill, and the badge's previously hardcoded `color: "white"` is gone.
+- **The measured floor is 4.212**, at `#9f66ae` and its neighbours — a band of
+  mid-saturation violets too light for white and too dark for near-black. `MIN_INK_CONTRAST`
+  is therefore **4.2**, stated as measured rather than rounded up to a WCAG number it does
+  not meet: AA for large/bold text (3:1) everywhere, AA for normal text (4.5:1)
+  everywhere except that band. The badge is 9px bold, so that is a real, narrow
+  shortfall. The comparison that matters is with what it replaced — fixed white is 1.0:1
+  on a white pick. A grid test walks the colour cube and holds the floor.
+- **A correction to step 4.** `personColor`'s comment claimed "saturation and lightness
+  are fixed so white text stays legible on every hue". Not so: white on the yellow seat
+  `hsl(60 55% 38%)` is **3.14:1** and on the green seat `hsl(120 …)` **3.81:1**, both
+  under AA. Adaptive ink fixes those hues too, and was observed doing it in the browser
+  (Bob's dealt green badge renders dark initials). Comment corrected.
+- **Clashes WARN, never refuse** — the owner's answer to a collision is information, not
+  prevention — and both sides of the pair are told. `CLASH_DISTANCE` is 64 on the
+  "redmean" weighted RGB distance, calibrated against real pairs rather than guessed:
+  near-identical picks measure 3 and 8, two ADJACENT swatches from the shipped palette
+  measure 94, and two dealt hues measure 268-277. A threshold high enough to flag 94
+  would warn on every adjacent swatch and mean nothing.
+
+**Runtime verification (throwaway `bb-app`, temp `HOME`, ports 39897/39898, 2026-09-19).**
+Directory of three (alice/bob/carol), local host renamed `ew-lsp-001-alice`. All observed,
+not reasoned about:
+- the settings section rendered the roster with machines, emails, github handles and
+  seen-state; `me` resolved to Bob from the injected Access header;
+- a swatch click wrote the colour, and it **survived a full page reload and a
+  `bb plugin reload`** (a new process) — the kv store, not memory;
+- refusals came back as answers: `"nobody" is not in Identity's directory` and
+  `"chartreuse" is not a colour; expected #rrggbb`;
+- Carol changed Bob's colour, and the clash warning appeared on BOTH rows, with the
+  clashing colour still applied;
+- "Reset to dealt" returned Alice to `hsl(0 55% 38%)` and the page repainted without a
+  reload;
+- `bb plugin logs identity` carried three `person.color` lines with `mode: "off"`,
+  naming `by`, `subject`, `from` and `to` — the stream is not gated on enforcement, as
+  designed;
+- a real `bb thread spawn` flipped Alice to `seen: true` with a timestamp, through the
+  dispatch hook (`identity: thread thr_sx28bdspwq started by alice (via agent)`);
+- **in the real app**, the sidebar badge rendered `background: rgb(255,238,136)` (Alice's
+  chosen pale yellow) with `color: rgb(17,24,39)` — the adapted dark ink — and the row
+  tint matched. With the previous hardcoded white those initials would have been
+  invisible;
+- changing the colour again to `#102a63` repainted the badge and its ink **on the
+  sidebar's own 60s poll, with no reload** (observed at t=36s).
+
+**Two things only running it found.**
+1. The sidebar's roster poll compared only the roster ids, so a colour change — which
+   leaves the roster identical — would never have repainted the badge or tint. It now
+   compares the colours too.
+2. The seen-state caveat was printed under every person, burying three short facts under
+   three copies of the same long sentence. It is stated once under the heading and kept
+   per-row as the title attribute.
+
+**Not done, and known.**
+- **The badge overlaps the thread title** in the sidebar (a `probe` row reads `robe`
+  behind the badge). That is step 4/PR #110's absolute `left: 2px` placement, not new
+  here — but a chosen colour makes the badge more prominent and the overlap more
+  obvious, so it is worth a follow-up.
+- `ux-contract: none — BB plugin outside the interaction-contract paths.`
