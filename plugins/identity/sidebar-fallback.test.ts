@@ -53,7 +53,7 @@ describe("replacement sidebar presence fallback", () => {
       .toBe("1 other viewer");
     const badge = anchor.querySelector<HTMLElement>("[data-bb-presence-badge]");
     expect(badge?.textContent).toBe("1");
-    expect(badge?.style.right).toBe("2px");
+    expect(badge?.style.right).toBe("-18px");
     expect(badge?.style.left).toBe("");
 
     const typingStatus: ThreadStatus = {
@@ -125,7 +125,7 @@ describe("ownership badges", () => {
 });
 
 describe("where the badge sits", () => {
-  it("keeps the badge inside the trailing edge of the row", async () => {
+  it("places the badge beyond the host's trailing working glyph", async () => {
     const { anchor } = renderReplacementRow();
     dispose = mountThreadStatusFallback({ document });
     replaceThreadStatuses(new Map([["thread-1", status]]));
@@ -133,8 +133,7 @@ describe("where the badge sits", () => {
 
     const badge = anchor.querySelector<HTMLElement>("[data-bb-presence-badge]");
     expect(badge).not.toBeNull();
-    const right = Number.parseFloat(badge?.style.right ?? "NaN");
-    expect(right).toBeGreaterThanOrEqual(0);
+    expect(badge?.style.right).toBe("-18px");
     expect(badge?.style.left).toBe("");
   });
 
@@ -160,9 +159,7 @@ describe("the badge must not sit on the title", () => {
 
     const reserved = Number.parseFloat(anchor.style.paddingRight || "0");
     const badge = anchor.querySelector<HTMLElement>("[data-bb-presence-badge]");
-    const badgeRight = Number.parseFloat(badge?.style.right ?? "0");
-    const badgeWidth = Number.parseFloat(badge?.style.minWidth ?? "0");
-    expect(reserved).toBeGreaterThanOrEqual(badgeRight + badgeWidth);
+    expect(reserved).toBeGreaterThanOrEqual(20);
     expect(anchor.style.paddingLeft).toBe("");
 
     replaceThreadStatuses(new Map());

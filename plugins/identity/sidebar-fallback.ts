@@ -28,9 +28,9 @@ export type ThreadStatusSetter = (threadId: string, status: NativeThreadStatus |
 const BADGE_ATTRIBUTE = "data-bb-presence-badge";
 const RESERVED_ATTRIBUTE = "data-bb-badge-reserved";
 
-/** Badge geometry, in one place: the two numbers the row's padding has to agree with. */
-const BADGE_RIGHT_PX = 2;
-const BADGE_MIN_WIDTH_PX = 14;
+/** Keep clear of BB's working glyph while retaining room between the title and controls. */
+const BADGE_RIGHT_PX = -18;
+const BADGE_RESERVED_RIGHT_PX = 20;
 
 /**
  * Reserve trailing room for the badge on the row.
@@ -42,7 +42,7 @@ const BADGE_MIN_WIDTH_PX = 14;
 function reserveBadgeRoom(anchor: HTMLElement): void {
   if (anchor.hasAttribute(RESERVED_ATTRIBUTE)) return;
   anchor.setAttribute(RESERVED_ATTRIBUTE, anchor.style.paddingRight);
-  anchor.style.paddingRight = `${BADGE_RIGHT_PX + BADGE_MIN_WIDTH_PX + 4}px`;
+  anchor.style.paddingRight = `${BADGE_RESERVED_RIGHT_PX}px`;
 }
 
 function releaseBadgeRoom(anchor: HTMLElement): void {
@@ -160,10 +160,10 @@ function createBadge(document: Document): HTMLSpanElement {
   badge.setAttribute("role", "status");
   Object.assign(badge.style, {
     position: "absolute",
-    // Keep ownership after the thread name instead of covering its first character.
+    // Sit beyond BB's trailing working glyph instead of painting over it.
     right: `${BADGE_RIGHT_PX}px`,
     top: "50%",
-    minWidth: `${BADGE_MIN_WIDTH_PX}px`,
+    minWidth: "14px",
     height: "14px",
     padding: "0 3px",
     borderRadius: "9999px",
