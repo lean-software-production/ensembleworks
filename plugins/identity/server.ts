@@ -24,10 +24,13 @@ import {
   normalizeAuditPath,
   parseEnforcement,
   postDispatchAuditLine,
+  colorChangeAuditLine,
   type AuditLine,
   type EnforcementMode,
 } from "./audit.js";
 import { identityFor, parseDirectory, type Person } from "./people.js";
+import { PersonColorStore, SeenPeople } from "./person-store.js";
+import { buildRoster, SEEN_UNKNOWN_CAVEAT } from "./roster.js";
 import {
   ACCESS_EMAIL_HEADER,
   installRequestContext,
@@ -202,6 +205,12 @@ const machineList = z.object({
    * this list (`personColor`), which is what makes two people reliably look different.
    */
   roster: z.array(z.string()),
+  /**
+   * The CHOSEN colours, `person -> #rrggbb`, so every surface that already deals a hue
+   * from `roster` paints the override instead where there is one. Rides along with the
+   * roster rather than costing the sidebar a second call.
+   */
+  colors: z.record(z.string(), z.string()),
   machines: z.array(hostClassification),
   /** The account team and unclaimed machines run as, for the header chip's wording. */
   sharedMachineUser: z.string(),
@@ -213,6 +222,81 @@ const machineList = z.object({
   /** Why the list is empty, when it is. Null when the list was read successfully. */
   unavailable: z.string().nullable(),
 }).strict();
+
+/**
+ * One person as the settings page shows them: who they are, the colour in force (with
+ * the dealt one behind it, so "reset" has something to name), the ink that stays legible
+ * on it, their machines, and whether Identity has seen them.
+ */
+const rosterPerson = z.object({
+  person: z.string(),
+  displayName: z.string(),
+  github: z.string(),
+  emails: z.array(z.string()),
+  color: z.string(),
+  dealt: z.string(),
+  overridden: z.boolean(),
+  ink: z.string(),
+  machines: z.array(z.string()),
+  seen: z.boolean(),
+  seenAt: z.number().nullable(),
+  /** Display names whose colour reads the same. A warning; nothing refuses a clash. */
+  clashesWith: z.array(z.string()),
+}).strict();
+
+const roster = z.object({
+  /** Who is asking, so the page can say whose colour a change is about to touch. */
+  me: personSummary.nullable(),
+  meViaFallback: z.boolean(),
+  people: z.array(rosterPerson).max(MAX_LEASES),
+  /** Exactly what a seen-state answer means. The UI must not imply more. */
+  seenCaveat: z.string(),
+  /** Why the machine list is missing, when it is. Null when it was read successfully. */
+  unavailable: z.string().nullable(),
+}).strict();
+
+/** What a colour write did. A refusal is an ANSWER, not a thrown RPC error. */
+const colorWrite = z.discriminatedUnion("ok", [
+  z.object({
+    ok: z.literal(true),
+    person: z.string(),
+    from: z.string().nullable(),
+    to: z.string().nullable(),
+  }).strict(),
+  z.object({ ok: z.literal(false), person: z.string(), reason: z.string() }).strict(),
+]);
+
+export type RosterAnswer = z.infer<typeof roster>;
+export type ColorWriteAnswer = z.infer<typeof colorWrite>;
+
+/**
+ * The roster answer, validated against the very schema the RPC publishes — the same
+ * guard `publicStarter` and `publicMachineList` carry, and for the same reason: a leaked
+ * internal field fails strict output validation at RUNTIME, in the browser, where the
+ * only symptom is a silently empty panel (step 4, 2026-09-18).
+ */
+export function publicRoster(input: {
+  me: LeasePerson | null;
+  meViaFallback: boolean;
+  people: readonly Person[];
+  overrides: Readonly<Record<string, string>>;
+  machines: readonly HostClassification[];
+  seen: Readonly<Record<string, number>>;
+  unavailable: string | null;
+}): RosterAnswer {
+  return roster.parse({
+    me: input.me,
+    meViaFallback: input.meViaFallback,
+    people: buildRoster({
+      people: input.people,
+      overrides: input.overrides,
+      machines: input.machines,
+      seen: input.seen,
+    }),
+    seenCaveat: SEEN_UNKNOWN_CAVEAT,
+    unavailable: input.unavailable,
+  });
+}
 
 export const rpcContract = defineRpcContract({
   identity_whoami: {
@@ -232,6 +316,28 @@ export const rpcContract = defineRpcContract({
   identity_machines: {
     input: z.object({}).strict().nullish(),
     output: machineList,
+  },
+  /** Who is registered on this server — the settings page's people list. */
+  identity_roster: {
+    input: z.object({}).strict().nullish(),
+    output: roster,
+  },
+  /**
+   * Choose a person's colour.
+   *
+   * ANYONE may set ANYONE's, deliberately: this plugin is a guardrail against mistakes
+   * and never verifies the Access header, so an authorization check here would be
+   * theatre — and a teammate who never opens settings still needs a colour someone can
+   * fix. Every call writes an audit line naming who changed whose, from and to.
+   */
+  identity_set_person_color: {
+    input: z.object({ person: z.string().min(1).max(128), color: z.string().min(1).max(32) }).strict(),
+    output: colorWrite,
+  },
+  /** Return a person to their dealt colour. */
+  identity_clear_person_color: {
+    input: z.object({ person: z.string().min(1).max(128) }).strict(),
+    output: colorWrite,
   },
   presence_heartbeat: {
     input: z.object({ tabId: opaqueId, viewerId: opaqueId, location }).strict(),
@@ -417,6 +523,16 @@ export default async function plugin(bb: BbPluginApi) {
   const requestContext = installRequestContext();
   /** Durable hostId -> person pins. */
   const pins = new HostPins(bb.storage.kv, []);
+  /**
+   * The colours people CHOSE, and who Identity has seen.
+   *
+   * Both in `bb.storage.kv` and deliberately NOT in the `directory` setting: that setting
+   * is rendered by Ansible from `ew_bb_people` in the infra repo, so a preference written
+   * there is clobbered on the next run. See person-store.ts's header for the full
+   * argument before moving either of them.
+   */
+  const colors = new PersonColorStore(bb.storage.kv);
+  const seen = new SeenPeople(bb.storage.kv);
   /**
    * bb's own host list, cached. Declared up here because the guardrail reads it — without
    * ever refreshing it — to name the machines a refusal should suggest.
@@ -640,6 +756,13 @@ export default async function plugin(bb: BbPluginApi) {
       // Display-only side effect: every machine bb itself names gets pinned on first
       // sight. `HostPins` never throws and bounds its own storage calls.
       observeHost: (host) => pins.observe(host),
+      /**
+       * Seen-state, maintained rather than scanned: the dispatch that records a thread's
+       * starter marks that person seen. O(1), coalesced to one write per person per hour,
+       * and — like everything else on this path — time-bounded and never throwing, so the
+       * settings page never has to walk the ledger.
+       */
+      observeStarter: (person) => seen.observe(person, Date.now()),
       log: { info: (message) => bb.log.info(message), warn: (message) => bb.log.warn(message) },
       /**
        * Stream (b): every dispatch, with the full attribution facts PLUS the guardrail's
@@ -694,6 +817,32 @@ export default async function plugin(bb: BbPluginApi) {
       }));
     });
   }
+
+  /**
+   * Log a colour change: who changed whose, from and to.
+   *
+   * This is what makes "anyone may change anyone's colour" safe — the change is VISIBLE
+   * rather than prevented, which is the owner's decision and the only one consistent with
+   * a plugin that never verifies the Access header. Deliberately NOT gated on
+   * `enforcement`: a mode that silenced this would silence exactly the record the owner
+   * asked for, and unlike the dispatch stream it is one line per deliberate human click.
+   *
+   * A refused write logs nothing: nothing changed, so there is nothing to account for.
+   */
+  const auditColorChange = (written: { ok: boolean; person: string; from?: string | null; to?: string | null }) => {
+    if (!written.ok) return;
+    const identity = currentIdentity();
+    emitAudit(auditLine, colorChangeAuditLine({
+      at: Date.now(),
+      ...currentRequestFields(),
+      mode: enforcement,
+      by: summarize(identity.person),
+      byEmail: identity.email,
+      subject: written.person,
+      from: written.from ?? null,
+      to: written.to ?? null,
+    }));
+  };
 
   const ownership = async (wanted: string): Promise<ThreadOwnership> => {
     const record = publicStarter(await ledger.get(wanted));
@@ -801,11 +950,42 @@ export default async function plugin(bb: BbPluginApi) {
         me: whoamiFor(requestContext.current()?.email ?? null).person,
         meViaFallback: currentIdentity().viaFallback,
         roster: people.map((entry) => entry.person),
+        // The chosen colours ride along, so the sidebar's badge and row tint paint the
+        // override wherever there is one without a second call.
+        colors: await colors.all(),
         sharedMachineUser,
         enforcement,
         machines: listed.machines,
         unavailable: listed.unavailable,
       });
+    },
+    identity_roster: async () => {
+      const listed = await machines();
+      // Fire-and-forget the ONE-SHOT catch-up sweep: it is bounded (one index read plus
+      // up to 2000 gets), runs at most once ever behind a durable marker, and is NOT
+      // awaited, so opening settings never waits on it. Steady state is maintained on
+      // the dispatch path and costs this call one cached kv get.
+      void seen.backfill(() => ledger.starterSweep(), Date.now());
+      const identity = currentIdentity();
+      return publicRoster({
+        me: summarize(identity.person),
+        meViaFallback: identity.viaFallback,
+        people,
+        overrides: await colors.all(),
+        machines: listed.machines,
+        seen: await seen.all(),
+        unavailable: listed.unavailable,
+      });
+    },
+    identity_set_person_color: async ({ person, color }) => {
+      const written = await colors.set(person, color, people.map((entry) => entry.person));
+      auditColorChange(written);
+      return written;
+    },
+    identity_clear_person_color: async ({ person }) => {
+      const written = await colors.clear(person);
+      auditColorChange(written);
+      return written;
     },
     presence_heartbeat: ({ tabId, viewerId, location }) => {
       const person = summarize(currentIdentity().person);

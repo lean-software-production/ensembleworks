@@ -556,3 +556,86 @@ describe("the eviction index, against a kv that hangs", () => {
     expect(data.get("identity/starter/v1/index")).toEqual(["thr_1", "thr_2"]);
   });
 });
+
+describe("attributeDispatch and seen-state", () => {
+  const context = {
+    thread: { id: "thr_new", parentThreadId: null, sourceThreadId: null },
+    origin: "app" as const,
+    originPluginId: null,
+    startedOnBehalfOf: null,
+    parentThreadId: null,
+    queuedMessage: null,
+    host: null,
+  };
+  const deps = (extra: Partial<Parameters<typeof attributeDispatch>[1]> = {}) => ({
+    ledger: new AttributionLedger(new FakeKv()),
+    identity: () => ({ email: "david@example.com", person: david }),
+    now: () => 4_000,
+    log: { info: () => undefined, warn: () => undefined },
+    ...extra,
+  });
+
+  it("marks the starter seen when the thread is recorded", async () => {
+    const marked: (string | null)[] = [];
+    await attributeDispatch(context, deps({ observeStarter: async (p) => { marked.push(p); } }));
+    expect(marked).toEqual([david.person]);
+  });
+
+  it("marks nobody when the dispatch could not be attributed to a person", async () => {
+    const marked: (string | null)[] = [];
+    await attributeDispatch(context, deps({
+      identity: () => ({ email: null, person: null }),
+      observeStarter: async (p) => { marked.push(p); },
+    }));
+    expect(marked).toEqual([]);
+  });
+
+  it("does not mark anyone for a dispatch the guardrail refused — it never happened", async () => {
+    const marked: (string | null)[] = [];
+    await attributeDispatch(context, deps({
+      guard: () => ({
+        mode: "enforce",
+        hostKind: null,
+        verdict: { action: "reject" as const, rule: "start-on-another-persons-machine", message: "no" },
+        action: { action: "reject" as const, message: "no" },
+      }),
+      observeStarter: async (p) => { marked.push(p); },
+    }));
+    expect(marked).toEqual([]);
+  });
+
+  it("still proceeds when marking seen throws — it is bookkeeping, not a gate", async () => {
+    expect(await attributeDispatch(context, deps({
+      observeStarter: async () => { throw new Error("kv is down"); },
+    }))).toEqual({ action: "proceed" });
+  });
+});
+
+describe("AttributionLedger.starterSweep", () => {
+  it("reads back the starter of every retained record, for the one-shot seen backfill", async () => {
+    const kv = new FakeKv();
+    const ledger = new AttributionLedger(kv);
+    await ledger.record(record({ threadId: "thr_1", starter: david }));
+    await ledger.record(record({ threadId: "thr_2", starter: matt }));
+    await ledger.record(record({ threadId: "thr_3", starter: david }));
+    expect((await ledger.starterSweep()).sort()).toEqual(["mattwynne", "mrdavidlaing", "mrdavidlaing"]);
+  });
+
+  it("skips records with no named starter, and threads whose record has gone", async () => {
+    const kv = new FakeKv();
+    const ledger = new AttributionLedger(kv);
+    await ledger.record(record({ threadId: "thr_1", starter: null }));
+    await ledger.record(record({ threadId: "thr_2", starter: david }));
+    expect(await ledger.starterSweep()).toEqual(["mrdavidlaing"]);
+  });
+
+  it("answers empty rather than throwing when the index cannot be read", async () => {
+    const broken: KvLike = {
+      get: () => Promise.reject(new Error("kv is broken")),
+      set: () => Promise.reject(new Error("kv is broken")),
+      delete: () => Promise.reject(new Error("kv is broken")),
+      list: () => Promise.reject(new Error("kv is broken")),
+    };
+    expect(await new AttributionLedger(broken).starterSweep()).toEqual([]);
+  });
+});

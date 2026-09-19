@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { LEASE_TTL_MS, PresenceStore, TYPING_TTL_MS, ownershipFor, parseHostList, publicMachineList, publicStarter } from "./server.js";
+import { LEASE_TTL_MS, PresenceStore, TYPING_TTL_MS, ownershipFor, parseHostList, publicMachineList, publicRoster, publicStarter } from "./server.js";
 import type { HostClassification } from "./hosts.js";
 
 describe("PresenceStore", () => {
@@ -233,6 +233,7 @@ describe("publicMachineList", () => {
     me: { person: "mrdavidlaing", displayName: "David", github: "mrdavidlaing" },
     meViaFallback: false,
     roster: ["mrdavidlaing"],
+    colors: { mrdavidlaing: "#ff0000" },
     sharedMachineUser: "ensembleworks-agent",
     enforcement: "off" as const,
     machines: [{ kind: "team" as const, hostId: "h3", hostName: "ew-lsp-001-main", conflict: null }],
@@ -243,9 +244,79 @@ describe("publicMachineList", () => {
     expect(publicMachineList(listed)).toEqual(listed);
   });
 
+  it("carries the chosen colours, so the sidebar paints an override without a second call", () => {
+    expect(publicMachineList(listed).colors).toEqual({ mrdavidlaing: "#ff0000" });
+  });
+
   it("refuses a payload carrying anything the contract does not publish", () => {
     // The real bug this guards: the internal cache row also carries `at`, and spreading
     // it whole into the answer failed strict output validation at runtime.
     expect(() => publicMachineList({ ...listed, at: 1 } as unknown as typeof listed)).toThrow();
+  });
+});
+
+describe("publicRoster", () => {
+  const alice = { person: "alice", github: "AliceH", displayName: "Alice", emails: ["alice@example.com"] };
+  const bob = { person: "bob", github: "bobby", displayName: "Bob", emails: ["bob@example.com"] };
+  const machines: HostClassification[] = [
+    { kind: "person", hostId: "h1", hostName: "box-alice", person: { person: "alice", displayName: "Alice", github: "AliceH" }, conflict: null },
+  ];
+
+  const answer = () => publicRoster({
+    me: { person: "bob", displayName: "Bob", github: "bobby" },
+    meViaFallback: false,
+    people: [alice, bob],
+    overrides: { alice: "#ff0000" },
+    machines,
+    seen: { alice: 1_700_000_000_000 },
+    unavailable: null,
+  });
+
+  it("answers the rows the people page renders", () => {
+    const rows = answer().people;
+    expect(rows.map((row) => row.person)).toEqual(["alice", "bob"]);
+    expect(rows[0]).toMatchObject({
+      displayName: "Alice",
+      github: "AliceH",
+      emails: ["alice@example.com"],
+      color: "#ff0000",
+      overridden: true,
+      machines: ["box-alice"],
+      seen: true,
+    });
+  });
+
+  it("names who is asking, so the page can say whose colour it is changing", () => {
+    expect(answer().me).toEqual({ person: "bob", displayName: "Bob", github: "bobby" });
+  });
+
+  it("carries the seen-state caveat, so the UI cannot imply more than Identity knows", () => {
+    expect(answer().seenCaveat).toMatch(/retain/i);
+  });
+
+  it("is VALIDATED against the contract's own output schema", () => {
+    // The guard step 4 earned the hard way: an internal field leaking into an RPC answer
+    // fails STRICT output validation at runtime, in the browser, where the only symptom
+    // is a silently empty panel.
+    //
+    // `publicRoster` is safer than `publicMachineList` was by construction — it names
+    // every field it copies, so a caller's stray key cannot reach the answer at all. The
+    // live risk is the other direction: `buildRoster` growing a row field that the
+    // contract does not publish. The strict `roster.parse` is what catches that, and
+    // this pins the published key set so a new field has to be declared deliberately.
+    expect(Object.keys(answer().people[0]!).sort()).toEqual([
+      "clashesWith", "color", "dealt", "displayName", "emails", "github",
+      "ink", "machines", "overridden", "person", "seen", "seenAt",
+    ]);
+    expect(Object.keys(answer()).sort()).toEqual(["me", "meViaFallback", "people", "seenCaveat", "unavailable"]);
+  });
+
+  it("reports why the machine list is missing rather than showing everyone as machine-less", () => {
+    const listed = publicRoster({
+      me: null, meViaFallback: false, people: [alice], overrides: {}, machines: [],
+      seen: {}, unavailable: "the machine list could not be read (bb answered 500)",
+    });
+    expect(listed.unavailable).toMatch(/could not be read/);
+    expect(listed.people[0]!.machines).toEqual([]);
   });
 });

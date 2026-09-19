@@ -344,6 +344,34 @@ export class AttributionLedger {
       await withTimeout(this.#kv.delete(KEY_PREFIX + id), this.#timeoutMs);
     }
   }
+
+  /**
+   * The starter of every record still retained, for the ONE-SHOT seen-state backfill.
+   *
+   * COST, stated plainly: one index read plus up to `MAX_STARTER_RECORDS` (2000) kv gets.
+   * That is why `SeenPeople` runs this at most once ever per server, behind a durable
+   * marker, off every render path — and why the steady-state answer is maintained on the
+   * dispatch path instead. Nothing else may call this.
+   *
+   * Never throws: an unreadable index or record is simply a person this cannot vouch for.
+   */
+  async starterSweep(): Promise<string[]> {
+    let ids: string[] = [];
+    try {
+      const stored = await withTimeout(this.#kv.get<unknown>(INDEX_KEY), this.#timeoutMs);
+      if (stored === TIMED_OUT) return [];
+      ids = Array.isArray(stored) ? stored.filter((id): id is string => typeof id === "string") : [];
+    } catch {
+      return [];
+    }
+    const people: string[] = [];
+    for (const id of ids.slice(0, this.#max)) {
+      const found = await this.get(id);
+      const person = found?.starter?.person;
+      if (typeof person === "string" && person.length > 0) people.push(person);
+    }
+    return people;
+  }
 }
 
 /** The ledger slice one dispatch needs — the class, or a fake in a test. */
@@ -434,6 +462,14 @@ export type DispatchDeps = {
    * its failure is swallowed like everything else here.
    */
   observeHost?: (host: HostRef) => Promise<unknown>;
+  /**
+   * Called with the person a newly recorded thread was attributed to, so seen-state is
+   * MAINTAINED rather than scanned (see `SeenPeople`). Called only for a dispatch that
+   * was actually recorded and actually named someone: a refused dispatch never happened,
+   * and an unattributed one names nobody. Its failure is swallowed like everything else
+   * here — it is bookkeeping, never a gate.
+   */
+  observeStarter?: (person: string) => Promise<unknown>;
 };
 
 /**
@@ -496,6 +532,12 @@ async function decideDispatch(context: DispatchContextLike, deps: DispatchDeps):
     }
 
     const outcome = await deps.ledger.record(decided);
+    const starter = decided.starter?.person ?? null;
+    if (starter !== null && deps.observeStarter !== undefined) {
+      await deps.observeStarter(starter).catch((error: unknown) => {
+        deps.log.warn(`identity: could not mark ${starter} seen: ${(error as Error).message}`);
+      });
+    }
     if (outcome.recorded) {
       deps.log.info(
         `identity: thread ${decided.threadId} started by ${decided.starter?.person ?? "unknown"} `
