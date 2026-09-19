@@ -27,9 +27,14 @@ function renderReplacementRow(threadId = "thread-1") {
   row.setAttribute("data-parent-card", "");
   const anchor = document.createElement("a");
   anchor.setAttribute("data-sidebar-thread-id", threadId);
-  row.append(anchor);
+  const titleGroup = document.createElement("span");
+  const title = document.createElement("span");
+  title.textContent = "Thread title";
+  titleGroup.append(title);
+  const controls = document.createElement("span");
+  row.append(anchor, titleGroup, controls);
   document.body.append(row);
-  return { anchor, row };
+  return { anchor, row, titleGroup, title };
 }
 
 async function settleObserver() {
@@ -39,7 +44,7 @@ async function settleObserver() {
 describe("replacement sidebar presence fallback", () => {
   it("adds, updates, and removes a dot while retaining the native setter", async () => {
     const nativeSetter = vi.fn();
-    const { anchor } = renderReplacementRow();
+    const { row, titleGroup, title } = renderReplacementRow();
     dispose = mountThreadStatusFallback({ document, setNativeStatus: nativeSetter });
 
     replaceThreadStatuses(new Map([["thread-1", status]]));
@@ -49,12 +54,13 @@ describe("replacement sidebar presence fallback", () => {
       label: "1 other viewer",
       tone: "default",
     });
-    expect(anchor.querySelector("[data-bb-presence-badge]")?.getAttribute("aria-label"))
+    expect(row.querySelector("[data-bb-presence-badge]")?.getAttribute("aria-label"))
       .toBe("1 other viewer");
-    const badge = anchor.querySelector<HTMLElement>("[data-bb-presence-badge]");
+    const badge = row.querySelector<HTMLElement>("[data-bb-presence-badge]");
     expect(badge?.textContent).toBe("1");
-    expect(badge?.style.right).toBe("24px");
-    expect(badge?.style.left).toBe("");
+    expect(titleGroup.firstElementChild).toBe(badge);
+    expect(badge?.nextElementSibling).toBe(title);
+    expect(badge?.style.position).toBe("");
 
     const typingStatus: ThreadStatus = {
       icon: "Edit",
@@ -70,14 +76,14 @@ describe("replacement sidebar presence fallback", () => {
       label: "2 other viewers · 1 typing",
       tone: "running",
     });
-    expect(anchor.querySelector("[data-bb-presence-badge]")?.textContent).toBe("2");
-    expect(anchor.querySelector<HTMLElement>("[data-bb-presence-badge]")?.style.background)
+    expect(row.querySelector("[data-bb-presence-badge]")?.textContent).toBe("2");
+    expect(row.querySelector<HTMLElement>("[data-bb-presence-badge]")?.style.background)
       .toContain("#f59e0b");
 
     replaceThreadStatuses(new Map());
     await settleObserver();
     expect(nativeSetter).toHaveBeenCalledWith("thread-1", null);
-    expect(anchor.querySelector("[data-bb-presence-badge]")).toBeNull();
+    expect(row.querySelector("[data-bb-presence-badge]")).toBeNull();
   });
 
   it("follows replacement-list rerenders and yields to a native status", async () => {
@@ -86,18 +92,18 @@ describe("replacement sidebar presence fallback", () => {
 
     const first = renderReplacementRow();
     await settleObserver();
-    expect(first.anchor.querySelector("[data-bb-presence-badge]")).not.toBeNull();
+    expect(first.row.querySelector("[data-bb-presence-badge]")).not.toBeNull();
 
     first.row.remove();
     const second = renderReplacementRow();
     await settleObserver();
-    expect(second.anchor.querySelector("[data-bb-presence-badge]")).not.toBeNull();
+    expect(second.row.querySelector("[data-bb-presence-badge]")).not.toBeNull();
 
     const nativeStatus = document.createElement("span");
     nativeStatus.setAttribute("aria-label", status.label);
     second.row.append(nativeStatus);
     await settleObserver();
-    expect(second.anchor.querySelector("[data-bb-presence-badge]")).toBeNull();
+    expect(second.row.querySelector("[data-bb-presence-badge]")).toBeNull();
 
     dispose();
     dispose = undefined;
@@ -107,7 +113,7 @@ describe("replacement sidebar presence fallback", () => {
 
 describe("ownership badges", () => {
   it("renders a starter's initials in its own colour, with no viewer count", async () => {
-    const { anchor } = renderReplacementRow();
+    const { row } = renderReplacementRow();
     dispose = mountThreadStatusFallback({ document });
     replaceThreadStatuses(new Map([["thread-1", {
       icon: "User",
@@ -117,7 +123,7 @@ describe("ownership badges", () => {
       badgeColor: "var(--muted-foreground, #6b7280)",
     }]]));
     await settleObserver();
-    const badge = anchor.querySelector<HTMLElement>("[data-bb-presence-badge]");
+    const badge = row.querySelector<HTMLElement>("[data-bb-presence-badge]");
     expect(badge?.textContent).toBe("D");
     expect(badge?.style.background).toContain("#6b7280");
     expect(badge?.getAttribute("aria-label")).toBe("Started by David");
@@ -125,25 +131,26 @@ describe("ownership badges", () => {
 });
 
 describe("where the badge sits", () => {
-  it("keeps the badge on-screen immediately before the host's trailing working glyph", async () => {
-    const { anchor } = renderReplacementRow();
+  it("puts the badge in normal flow immediately before the title", async () => {
+    const { row, titleGroup, title } = renderReplacementRow();
     dispose = mountThreadStatusFallback({ document });
     replaceThreadStatuses(new Map([["thread-1", status]]));
     await settleObserver();
 
-    const badge = anchor.querySelector<HTMLElement>("[data-bb-presence-badge]");
+    const badge = row.querySelector<HTMLElement>("[data-bb-presence-badge]");
     expect(badge).not.toBeNull();
-    expect(badge?.style.right).toBe("24px");
-    expect(Number.parseFloat(badge?.style.right ?? "NaN")).toBeGreaterThanOrEqual(0);
-    expect(badge?.style.left).toBe("");
+    expect(titleGroup.firstElementChild).toBe(badge);
+    expect(badge?.nextElementSibling).toBe(title);
+    expect(badge?.style.position).toBe("");
+    expect(badge?.style.right).toBe("");
   });
 
   it("keeps the ownership colour in the badge without drawing a leading row bracket", async () => {
-    const { anchor, row } = renderReplacementRow();
+    const { row } = renderReplacementRow();
     dispose = mountThreadStatusFallback({ document });
     replaceThreadStatuses(new Map([["thread-1", { ...status, badgeColor: "hsl(210 55% 38%)" }]]));
     await settleObserver();
-    expect(anchor.querySelector<HTMLElement>("[data-bb-presence-badge]")?.style.background)
+    expect(row.querySelector<HTMLElement>("[data-bb-presence-badge]")?.style.background)
       .toBe("rgb(44, 97, 150)");
     expect(row.style.boxShadow).toBe("");
     expect(row.hasAttribute("data-bb-ownership-tint")).toBe(false);
@@ -151,17 +158,18 @@ describe("where the badge sits", () => {
 });
 
 describe("the badge must not sit on the title", () => {
-  it("reserves trailing room for itself, leaving the title's beginning untouched", async () => {
-    const { anchor, row } = renderReplacementRow();
+  it("takes its own layout space and leaves the host link styles untouched", async () => {
+    const { anchor, row, titleGroup } = renderReplacementRow();
     anchor.style.paddingRight = "6px";
     dispose = mountThreadStatusFallback({ document });
     replaceThreadStatuses(new Map([["thread-1", status]]));
     await settleObserver();
 
-    const reserved = Number.parseFloat(anchor.style.paddingRight || "0");
-    const badge = anchor.querySelector<HTMLElement>("[data-bb-presence-badge]");
-    expect(reserved).toBeGreaterThanOrEqual(48);
+    const badge = row.querySelector<HTMLElement>("[data-bb-presence-badge]");
+    expect(titleGroup.firstElementChild).toBe(badge);
+    expect(badge?.style.flexShrink).toBe("0");
     expect(anchor.style.paddingLeft).toBe("");
+    expect(anchor.style.paddingRight).toBe("6px");
 
     replaceThreadStatuses(new Map());
     await settleObserver();
@@ -171,9 +179,8 @@ describe("the badge must not sit on the title", () => {
   });
 
   it("leaves a row the native glyph already handles alone", async () => {
-    // Native rendering means bb positioned its own glyph properly; adding padding for a
-    // badge we are not drawing would indent the row for nothing.
-    const { anchor } = renderReplacementRow();
+    // Native rendering means BB positioned its own glyph properly.
+    const { anchor, row } = renderReplacementRow();
     const native = document.createElement("span");
     native.setAttribute("aria-label", status.label);
     anchor.append(native);
@@ -181,21 +188,21 @@ describe("the badge must not sit on the title", () => {
     replaceThreadStatuses(new Map([["thread-1", status]]));
     await settleObserver();
 
-    expect(anchor.querySelector("[data-bb-presence-badge]")).toBeNull();
+    expect(row.querySelector("[data-bb-presence-badge]")).toBeNull();
     expect(anchor.style.paddingRight).toBe("");
   });
 });
 
 describe("badge ink follows the badge colour", () => {
   async function renderWith(badgeColor: string, badgeInk?: string) {
-    const { anchor } = renderReplacementRow();
+    const { row } = renderReplacementRow();
     dispose = mountThreadStatusFallback({ document });
     replaceThreadStatuses(new Map([["thread-1", {
       icon: "User", label: "Started by David", tone: "default" as const,
       badge: "D", badgeColor, ...(badgeInk === undefined ? {} : { badgeInk }),
     }]]));
     await settleObserver();
-    return anchor.querySelector<HTMLElement>("[data-bb-presence-badge]");
+    return row.querySelector<HTMLElement>("[data-bb-presence-badge]");
   }
 
   it("uses the ink it was given, so a light chosen colour is still readable", async () => {
@@ -217,14 +224,14 @@ describe("badge ink follows the badge colour", () => {
   });
 
   it("repaints the ink when the status changes colour, rather than keeping the old one", async () => {
-    const { anchor } = renderReplacementRow();
+    const { row } = renderReplacementRow();
     dispose = mountThreadStatusFallback({ document });
     const base = { icon: "User", label: "Started by David", tone: "default" as const, badge: "D" };
     replaceThreadStatuses(new Map([["thread-1", { ...base, badgeColor: "#111111", badgeInk: "#ffffff" }]]));
     await settleObserver();
     replaceThreadStatuses(new Map([["thread-1", { ...base, badgeColor: "#ffff99", badgeInk: "#111827" }]]));
     await settleObserver();
-    expect(anchor.querySelector<HTMLElement>("[data-bb-presence-badge]")?.style.color)
+    expect(row.querySelector<HTMLElement>("[data-bb-presence-badge]")?.style.color)
       .toBe("rgb(17, 24, 39)");
   });
 });

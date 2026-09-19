@@ -26,30 +26,6 @@ export type ThreadStatus = NativeThreadStatus & {
 export type ThreadStatusSetter = (threadId: string, status: NativeThreadStatus | null) => void;
 
 const BADGE_ATTRIBUTE = "data-bb-presence-badge";
-const RESERVED_ATTRIBUTE = "data-bb-badge-reserved";
-
-/** Keep clear of BB's working glyph while retaining room between the title and controls. */
-const BADGE_RIGHT_PX = 24;
-const BADGE_RESERVED_RIGHT_PX = 48;
-
-/**
- * Reserve trailing room for the badge on the row.
- *
- * The badge is absolutely positioned, so it occupies no space of its own. Keep it after
- * the title, remember the host's existing padding, and restore that padding when the
- * badge goes away.
- */
-function reserveBadgeRoom(anchor: HTMLElement): void {
-  if (anchor.hasAttribute(RESERVED_ATTRIBUTE)) return;
-  anchor.setAttribute(RESERVED_ATTRIBUTE, anchor.style.paddingRight);
-  anchor.style.paddingRight = `${BADGE_RESERVED_RIGHT_PX}px`;
-}
-
-function releaseBadgeRoom(anchor: HTMLElement): void {
-  if (!anchor.hasAttribute(RESERVED_ATTRIBUTE)) return;
-  anchor.style.paddingRight = anchor.getAttribute(RESERVED_ATTRIBUTE) ?? "";
-  anchor.removeAttribute(RESERVED_ATTRIBUTE);
-}
 
 let currentStatuses = new Map<string, ThreadStatus>();
 let currentDocument: Document | null = null;
@@ -112,21 +88,19 @@ function reconcileFallbackDots(): void {
   for (const anchor of document.querySelectorAll<HTMLElement>("[data-sidebar-thread-id]")) {
     const threadId = anchor.getAttribute("data-sidebar-thread-id");
     const status = threadId === null ? undefined : currentStatuses.get(threadId);
-    const existing = [...anchor.children].find((child) => child.hasAttribute(BADGE_ATTRIBUTE));
     const row = anchor.closest<HTMLElement>("[data-parent-card]") ?? anchor.parentElement ?? anchor;
+    const existing = row.querySelector<HTMLElement>("[" + BADGE_ATTRIBUTE + "]");
+    const badgeHost = badgeHostFor(anchor);
     const nativeRendered = status ? hasNativeStatus(row, status.label) : false;
 
-    if (!status) {
+    if (!status || badgeHost === null) {
       existing?.remove();
-      releaseBadgeRoom(anchor);
       continue;
     }
 
     if (nativeRendered) {
-      // bb positioned its own glyph; reserving room for a badge we are not drawing would
-      // indent the row for nothing.
+      // BB already positioned this status in its own row chrome.
       existing?.remove();
-      releaseBadgeRoom(anchor);
       continue;
     }
 
@@ -138,14 +112,18 @@ function reconcileFallbackDots(): void {
     // Reassigned on every paint, not only at creation: a colour change must take its ink
     // with it, or a repainted badge keeps the previous colour's ink.
     badge.style.color = status.badgeInk ?? "white";
-    if (!existing) anchor.append(badge);
-    reserveBadgeRoom(anchor);
+    if (badge.parentElement !== badgeHost) badgeHost.prepend(badge);
     liveBadges.add(badge);
   }
 
   for (const badge of document.querySelectorAll("[" + BADGE_ATTRIBUTE + "]")) {
     if (!liveBadges.has(badge)) badge.remove();
   }
+}
+
+/** BB's full-row link is an empty absolute overlay; its next sibling owns title layout. */
+function badgeHostFor(anchor: HTMLElement): HTMLElement | null {
+  return anchor.nextElementSibling instanceof HTMLElement ? anchor.nextElementSibling : null;
 }
 
 function hasNativeStatus(row: HTMLElement, label: string): boolean {
@@ -159,10 +137,10 @@ function createBadge(document: Document): HTMLSpanElement {
   badge.setAttribute(BADGE_ATTRIBUTE, "");
   badge.setAttribute("role", "status");
   Object.assign(badge.style, {
-    position: "absolute",
-    // Stay on-screen immediately before BB's trailing working glyph.
-    right: `${BADGE_RIGHT_PX}px`,
-    top: "50%",
+    display: "inline-flex",
+    alignItems: "center",
+    justifyContent: "center",
+    flexShrink: "0",
     minWidth: "14px",
     height: "14px",
     padding: "0 3px",
@@ -174,8 +152,6 @@ function createBadge(document: Document): HTMLSpanElement {
     lineHeight: "14px",
     textAlign: "center",
     pointerEvents: "none",
-    transform: "translateY(-50%)",
-    zIndex: "1",
   });
   return badge;
 }
@@ -185,6 +161,5 @@ function nativeStatus(status: ThreadStatus): NativeThreadStatus {
 }
 
 function removeAllBadges(document: Document): void {
-  for (const anchor of document.querySelectorAll<HTMLElement>("[" + RESERVED_ATTRIBUTE + "]")) releaseBadgeRoom(anchor);
   for (const badge of document.querySelectorAll("[" + BADGE_ATTRIBUTE + "]")) badge.remove();
 }
