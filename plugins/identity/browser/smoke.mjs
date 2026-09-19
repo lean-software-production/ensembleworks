@@ -22,23 +22,29 @@ try {
     const errors = [];
     page.on('pageerror', (error) => { errors.push(error.message); console.error(error.message); });
     await page.goto(server.resolvedUrls.local[0]);
-    const trigger = page.getByRole('button', { name: 'Started by Erin Example · team machine. Show ownership details' });
+    const trigger = page.getByRole('button', { name: 'Started by Erin Example · team machine. Alex and Sam here; Sam is typing. Show thread details' });
     await expect(trigger).toBeVisible();
     const box = await trigger.boundingBox();
-    expect(box.width).toBe(44);
+    expect(box.width).toBeLessThanOrEqual(60);
     expect(box.height).toBe(44);
+    await expect(trigger.locator('[data-identity-bubble="owner"]')).toHaveText('EE');
+    await expect(trigger.locator('[data-identity-bubble="viewer"]')).toHaveCount(2);
     await page.keyboard.press('Tab');
     await expect(trigger).toBeFocused();
     await expect(trigger).toHaveCSS('outline-style', 'solid');
     await expect(trigger).toHaveAttribute('aria-expanded', 'false');
     await page.keyboard.press('Enter');
-    const dialog = page.getByRole('dialog', { name: 'Thread ownership' });
+    const dialog = page.getByRole('dialog', { name: 'Thread details' });
     await expect(dialog).toBeVisible();
     await expect(trigger).toHaveAttribute('aria-expanded', 'true');
     await expect(dialog.locator('p')).toHaveText(await trigger.getAttribute('title'));
     await expect(dialog).toContainText('runs as ensembleworks-agent on shared-machine-');
     await expect(dialog).toContainText('would be refused — Erin Example\'s thread (audit mode, so it went through)');
-    await expect(page.getByRole('button', { name: 'Close ownership details' })).toBeFocused();
+    await expect(dialog).toContainText('Viewing now');
+    await expect(dialog).toContainText('Alex');
+    await expect(dialog).toContainText('Sam');
+    await expect(dialog).toContainText('typing');
+    await expect(page.getByRole('button', { name: 'Close thread details' })).toBeFocused();
     const bounds = await dialog.boundingBox();
     expect(bounds.x).toBeGreaterThanOrEqual(8);
     expect(bounds.x + bounds.width).toBeLessThanOrEqual(width - 8);
@@ -50,7 +56,7 @@ try {
     await expect(trigger).toBeFocused();
     await page.keyboard.press('Space');
     await expect(dialog).toBeVisible();
-    await page.getByRole('button', { name: 'Close ownership details' }).click();
+    await page.getByRole('button', { name: 'Close thread details' }).click();
     await expect(trigger).toBeFocused();
     if (width < 600) await trigger.tap(); else await trigger.click();
     await expect(dialog).toBeVisible();
@@ -58,7 +64,7 @@ try {
     await expect(dialog).toHaveCount(0);
     await expect(page.getByRole('button', { name: 'Outside', exact: true })).toBeFocused();
     expect(errors).toEqual([]);
-    console.log(`PASS ${width}px: 44px trigger, full details, viewport bounds, keyboard, focus, touch/click and dismissal`);
+    console.log(`PASS ${width}px: compact owner/viewer bubbles, combined details, viewport bounds, keyboard, focus, touch/click and dismissal`);
     await context.close();
   }
   const page = await browser.newPage({ viewport: { width: 320, height: 720 } });
@@ -70,9 +76,9 @@ try {
     ['conflict', 'renamed since it was pinned to Alex'],
   ]) {
     await page.goto(server.resolvedUrls.local[0] + '?variant=' + variant);
-    const trigger = page.getByRole('button', { name: /Show ownership details/ });
+    const trigger = page.getByRole('button', { name: /Show thread details/ });
     await trigger.click();
-    const detail = page.getByRole('dialog', { name: 'Thread ownership' }).locator('p');
+    const detail = page.getByRole('dialog', { name: 'Thread details' }).locator('p');
     await expect(detail).toContainText(text);
     await expect(detail).toHaveText(await trigger.getAttribute('title'));
     console.log(`PASS ${variant}: popover preserves complete headerChip text`);

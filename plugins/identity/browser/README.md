@@ -1,16 +1,18 @@
-# Ownership header interaction check
+# Ownership and presence header interaction check
 
 This fixture mounts the **registered header component from app.tsx**, with real
 React and Radix Popover and a read-only SDK/RPC substitute. It never contacts a
 BB server. It covers 320px, 390px and 1280px viewports, long machine names, exact
 preservation of `headerChip` text (including audit mode and renamed-machine
-warnings), unknown starters, automation, agents, and the starter's own machine.
+warnings), People-coloured owner/viewer bubbles, live viewer names and typing,
+unknown starters, automation, agents, and the starter's own machine.
 
 The gesture is Tab → Enter → Escape → Space → close button → touch/click →
-outside click. Invariants: a named 44×44 trigger, visible keyboard focus, correct
+outside click. Invariants: a named, at-least-44px touch target no wider than
+60px for the owner plus two viewer bubbles, visible keyboard focus, correct
 expanded state, focus enters the popover and returns on Escape/close, outside
-click keeps focus at its destination, complete details, and no horizontal
-overflow. Screenshots are saved to `/tmp/identity-header-screenshots` (override
+click keeps focus at its destination, complete ownership and viewer details,
+and no horizontal overflow. Screenshots are saved to `/tmp/identity-header-screenshots` (override
 with `IDENTITY_SCREENSHOTS`).
 
 From this checkout, with workspace dependencies and Chromium installed:
@@ -23,8 +25,8 @@ npm test
 npm run test:browser
 ```
 
-The browser script uses the repository's Vite and Playwright packages (installed
-with the workspace dependencies). To use an existing Chromium installation, set
+The isolated plugin declares Playwright and receives Vite through Vitest. To use
+an existing Chromium installation, set
 `PLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH` to its executable. Otherwise install the
 version requested by the repository's Playwright (`bunx playwright install chromium`).
 
@@ -75,3 +77,22 @@ git restore -- plugins/identity/app.tsx
 
 This verifies the standalone slot, not the surrounding production BB header or
 multi-plugin layout. No installed plugin or production settings are changed.
+
+## Combined ownership/presence RED (2026-09-19)
+
+Before merging the two header actions, the focused contract failed eight cases.
+The first failure was:
+
+```text
+expected [ 'thread-presence', …(1) ] to not include 'thread-presence'
+```
+
+The next failure showed the missing combined accessible trigger:
+
+```text
+Unable to find role="button" and name "Started by Erin Example · team machine. Alex and Sam are here; Sam is typing. Show thread details"
+```
+
+After the implementation, the focused contract and Chromium gestures at 320px,
+390px and 1280px pass with a single registered header action. Reverting
+`app.tsx` to the parent commit reproduces RED; restoring it returns GREEN.

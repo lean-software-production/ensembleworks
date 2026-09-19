@@ -9,12 +9,18 @@ export const ownership: ThreadOwnership = {
 };
 export const machines: MachineList = {
   me: { person: "alex", displayName: "Alex", github: "alex" }, meViaFallback: false,
-  machines: [], roster: ["erin", "alex"], colors: { erin: "#40e0d0" },
+  machines: [], roster: ["erin", "alex", "sam"], colors: { erin: "#40e0d0", alex: "#b4322e", sam: "#2f6bb8" },
   sharedMachineUser: "ensembleworks-agent", enforcement: "audit", unavailable: null,
 };
+const presentPeople = [
+  { person: "alex", displayName: "Alex", github: "alex", typing: false },
+  { person: "sam", displayName: "Sam", github: "sam", typing: true },
+];
 const rpc = { call: async (method: string) => {
   if (method === "identity_thread_ownership") return { threads: [ownership] };
   if (method === "identity_machines") return machines;
+  if (method === "identity_whoami") return { email: "alex@example.com", person: machines.me };
+  if (method === "presence_thread") return { viewers: presentPeople.length, typing: 1, people: presentPeople };
   throw new Error(`Unexpected fixture RPC: ${method}`);
 } };
 export const useRpc = () => rpc;
@@ -22,7 +28,7 @@ const unused = () => { throw new Error("Unexpected hook in header fixture"); };
 export const experimental_useSidebarThreads = unused;
 export const useBbContext = unused;
 export const useComposerView = unused;
-export const useRealtime = unused;
+export const useRealtime = () => undefined;
 export const useRealtimeConnectionState = unused;
 type Slot = { id: string; component: typeof Header };
 const ignore = () => undefined;

@@ -240,8 +240,15 @@ function PresenceCoordinator() {
  */
 function ThreadOwnershipChip({ threadId }: { threadId: string }) {
   const rpc = useRpc<typeof rpcContract>();
+  const ownViewerId = useMemo(viewerId, []);
   const [ownership, setOwnership] = useState<ThreadOwnership | null>(null);
   const [list, setList] = useState<MachineList | null>(null);
+  const [presence, setPresence] = useState<{ viewers: number; typing: number; people: PresentPerson[] }>({
+    viewers: 0,
+    typing: 0,
+    people: [],
+  });
+  const [me, setMe] = useState<WhoAmI | null>(null);
   useEffect(() => {
     let live = true;
     void rpc.call("identity_thread_ownership", { threadIds: [threadId] }).then(({ threads }) => {
@@ -261,6 +268,28 @@ function ThreadOwnershipChip({ threadId }: { threadId: string }) {
     const timer = window.setInterval(refresh, OWNERSHIP_REFRESH_MS);
     return () => { live = false; window.clearInterval(timer); };
   }, [rpc]);
+  const refreshPresence = useCallback(() => {
+    void rpc.call("presence_thread", { threadId, excludeViewerId: ownViewerId })
+      .then(({ viewers, typing, people }) => setPresence({ viewers, typing, people: people ?? [] }))
+      .catch(() => undefined);
+  }, [ownViewerId, rpc, threadId]);
+  useEffect(() => {
+    let live = true;
+    void rpc.call("identity_whoami").then((result) => {
+      if (live) setMe(result);
+    }).catch(() => undefined);
+    return () => { live = false; };
+  }, [rpc]);
+  useEffect(() => {
+    refreshPresence();
+    const timer = window.setInterval(refreshPresence, REFRESH_MS);
+    return () => window.clearInterval(timer);
+  }, [refreshPresence]);
+  useRealtime("presence-changed", (payload: unknown) => {
+    if (typeof payload !== "object" || payload === null) return;
+    const threadIds = (payload as { threadIds?: unknown }).threadIds;
+    if (Array.isArray(threadIds) && threadIds.includes(threadId)) refreshPresence();
+  });
   if (ownership === null) return null;
   const chip = headerChip(ownership, {
     sharedUser: list?.sharedMachineUser ?? "ensembleworks-agent",
@@ -272,26 +301,63 @@ function ThreadOwnershipChip({ threadId }: { threadId: string }) {
   const { color } = resolvePersonColor(
     ownership.starter?.person ?? null, list?.roster ?? [], list?.colors ?? {},
   );
+  const ownerPresence = ownership.starter === null
+    ? null
+    : presence.people.find((entry) => entry.person === ownership.starter?.person) ?? null;
+  const otherNamedViewers = presence.people.filter((entry) => entry.person !== ownership.starter?.person);
+  const otherViewerCount = Math.max(0, presence.viewers - (ownerPresence === null ? 0 : 1));
+  const visibleViewers = otherNamedViewers.slice(0, otherViewerCount > 2 ? 1 : 2);
+  const hiddenViewerCount = Math.max(0, otherViewerCount - visibleViewers.length);
+  const presenceSummary = combinedPresenceLabel(presence);
+  const triggerLabel = `${row.label}.${presenceSummary === null ? "" : ` ${presenceSummary}.`} Show thread details`;
   return (
     <Popover.Root key={threadId}>
       <Popover.Trigger asChild>
         <button
           type="button"
           className="identity-ownership-button"
-          aria-label={`${row.label}. Show ownership details`}
+          aria-label={triggerLabel}
           title={chip.text}
           style={{
             display: "inline-flex", alignItems: "center", justifyContent: "center",
-            width: 44, height: 44, flexShrink: 0, padding: 0,
+            minWidth: 44, height: 44, flexShrink: 0, padding: "0 2px",
             border: 0, borderRadius: 8, background: "transparent", cursor: "pointer",
           }}
         >
-          <span aria-hidden="true" style={{
-            display: "inline-flex", alignItems: "center", justifyContent: "center",
-            width: 26, height: 26, borderRadius: "50%", fontSize: 11, fontWeight: 700,
-            background: color, color: readableInk(color),
-            border: "1px solid var(--border)",
-          }}>{row.badge}</span>
+          <span aria-hidden="true" style={{ display: "inline-flex", alignItems: "center" }}>
+            <span data-identity-bubble="owner" style={{
+              display: "inline-flex", alignItems: "center", justifyContent: "center",
+              width: 26, height: 26, borderRadius: "50%", fontSize: 11, fontWeight: 700,
+              background: color, color: readableInk(color), zIndex: 10,
+              border: ownerPresence?.typing
+                ? "2px solid var(--warning, #f59e0b)"
+                : "2px solid var(--background)",
+              boxSizing: "border-box",
+            }}>{row.badge}</span>
+            {visibleViewers.map((entry, index) => {
+              const viewerColor = resolvePersonColor(entry.person, list?.roster ?? [], list?.colors ?? {}).color;
+              return (
+                <span key={entry.person} data-identity-bubble="viewer" style={{
+                  display: "inline-flex", alignItems: "center", justifyContent: "center",
+                  width: 20, height: 20, marginLeft: -6, borderRadius: "50%",
+                  fontSize: 8, fontWeight: 700, boxSizing: "border-box",
+                  background: viewerColor, color: readableInk(viewerColor), zIndex: 9 - index,
+                  border: entry.typing
+                    ? "2px solid var(--warning, #f59e0b)"
+                    : "2px solid var(--background)",
+                }}>{initials(entry.displayName)}</span>
+              );
+            })}
+            {hiddenViewerCount > 0 ? (
+              <span data-identity-bubble="viewer" style={{
+                display: "inline-flex", alignItems: "center", justifyContent: "center",
+                width: 20, height: 20, marginLeft: -6, borderRadius: "50%",
+                fontSize: 8, fontWeight: 700, boxSizing: "border-box",
+                background: "var(--muted)", color: "var(--muted-foreground)",
+                border: "2px solid var(--background)", zIndex: 7,
+              }}>+{hiddenViewerCount}</span>
+            ) : null}
+          </span>
         </button>
       </Popover.Trigger>
       <Popover.Portal>
@@ -299,7 +365,7 @@ function ThreadOwnershipChip({ threadId }: { threadId: string }) {
           align="end"
           sideOffset={6}
           collisionPadding={8}
-          aria-label="Thread ownership"
+          aria-label="Thread details"
           style={{
             boxSizing: "border-box", width: 360,
             maxWidth: "calc(100vw - 16px)",
@@ -312,8 +378,8 @@ function ThreadOwnershipChip({ threadId }: { threadId: string }) {
           }}
         >
           <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 8 }}>
-            <strong>Thread ownership</strong>
-            <Popover.Close className="identity-ownership-button" aria-label="Close ownership details" style={{
+            <strong>Thread details</strong>
+            <Popover.Close className="identity-ownership-button" aria-label="Close thread details" style={{
               width: 44, height: 44, flexShrink: 0, borderRadius: 6,
               border: "1px solid var(--border)", background: "transparent",
               color: "inherit", cursor: "pointer", fontSize: 20,
@@ -322,6 +388,36 @@ function ThreadOwnershipChip({ threadId }: { threadId: string }) {
           <p style={{ margin: "8px 0 0", color: chip.tone === "muted" ? "var(--muted-foreground)" : "inherit" }}>
             {chip.text}
           </p>
+          <div style={{ borderTop: "1px solid var(--border)", fontWeight: 600, marginTop: 12, paddingTop: 12 }}>
+            Viewing now
+          </div>
+          {presence.viewers === 0 ? (
+            <div style={{ color: "var(--muted-foreground)", fontSize: 12, marginTop: 6 }}>
+              No one else is currently viewing this thread.
+            </div>
+          ) : (
+            <>
+              <div style={{ marginTop: 6 }}>
+                {presence.people.map((entry) => <PersonRow key={entry.person} entry={entry} list={list} />)}
+                {presence.people.length === 0 || presence.viewers > presence.people.length ? (
+                  <PresenceDetail
+                    icon={<UsersRoundIcon />}
+                    text={anonymousViewerDetail(presence)}
+                  />
+                ) : null}
+                {anonymousTypingCount(presence) > 0 ? (
+                  <PresenceDetail
+                    icon={<TypingIcon />}
+                    text={`${anonymousTypingCount(presence)} anonymous ${anonymousTypingCount(presence) === 1 ? "viewer is" : "viewers are"} typing`}
+                    tone="warning"
+                  />
+                ) : null}
+              </div>
+              <div style={{ color: "var(--muted-foreground)", fontSize: 11, lineHeight: 1.4, marginTop: 10 }}>
+                {identityFooter(me)}
+              </div>
+            </>
+          )}
         </Popover.Content>
       </Popover.Portal>
     </Popover.Root>
@@ -436,109 +532,24 @@ function TypingPulse() {
   return null;
 }
 
-function ThreadPresence({ threadId }: { threadId: string }) {
-  const rpc = useRpc<typeof rpcContract>();
-  const ownViewerId = useMemo(viewerId, []);
-  const [presence, setPresence] = useState<{ viewers: number; typing: number; people: PresentPerson[] }>({
-    viewers: 0,
-    typing: 0,
-    people: [],
-  });
-  const [me, setMe] = useState<WhoAmI | null>(null);
-  const refresh = useCallback(() => {
-    void rpc.call("presence_thread", { threadId, excludeViewerId: ownViewerId })
-      .then(({ viewers, typing, people }) => setPresence({ viewers, typing, people: people ?? [] }))
-      .catch(() => undefined);
-  }, [ownViewerId, rpc, threadId]);
-  useEffect(() => {
-    let live = true;
-    void rpc.call("identity_whoami").then((result) => {
-      if (live) setMe(result);
-    }).catch(() => undefined);
-    return () => { live = false; };
-  }, [rpc]);
-  useEffect(() => {
-    refresh();
-    const timer = window.setInterval(refresh, REFRESH_MS);
-    return () => window.clearInterval(timer);
-  }, [refresh]);
-  useRealtime("presence-changed", (payload: unknown) => {
-    if (typeof payload !== "object" || payload === null) return;
-    const threadIds = (payload as { threadIds?: unknown }).threadIds;
-    if (Array.isArray(threadIds) && threadIds.includes(threadId)) refresh();
-  });
+/** A complete accessible summary: who is here, followed by who is typing. */
+function combinedPresenceLabel(presence: { viewers: number; typing: number; people: PresentPerson[] }): string | null {
   if (presence.viewers === 0) return null;
-  const label = presenceLabel(presence);
-  const anonymousViewers = Math.max(0, presence.viewers - presence.people.length);
-  const namedTypers = presence.people.filter((entry) => entry.typing).length;
-  const anonymousTypers = Math.max(0, presence.typing - namedTypers);
-  const viewerDetail = presence.people.length > 0
-    ? `+${anonymousViewers} ${anonymousViewers === 1 ? "other" : "others"}`
-    : presence.viewers === 1
-      ? "1 other viewer is here"
-      : `${presence.viewers} other viewers are here`;
-  const typingDetail = presence.people.length > 0
-    ? `${anonymousTypers} of them ${anonymousTypers === 1 ? "is" : "are"} typing`
-    : presence.typing === 1
-      ? "1 viewer is typing"
-      : `${presence.typing} viewers are typing`;
-  return (
-    <Popover.Root>
-      <Popover.Trigger asChild>
-        <button
-          type="button"
-          aria-label={`${label}. Show presence details`}
-          title={label}
-          style={{
-            alignItems: "center",
-            background: "transparent",
-            border: 0,
-            borderRadius: 6,
-            color: presence.typing > 0
-              ? "var(--warning, #f59e0b)"
-              : "var(--success, #22c55e)",
-            cursor: "pointer",
-            display: "inline-flex",
-            height: 28,
-            justifyContent: "center",
-            padding: 0,
-            width: 28,
-          }}
-        >
-          <UsersRoundIcon />
-        </button>
-      </Popover.Trigger>
-      <Popover.Portal>
-        <Popover.Content
-          align="end"
-          sideOffset={6}
-          aria-label="Thread presence"
-          style={{
-            background: "var(--popover, var(--background))",
-            border: "1px solid var(--border)",
-            borderRadius: 8,
-            color: "var(--popover-foreground, var(--foreground))",
-            padding: 12,
-            width: 220,
-            zIndex: 50,
-          }}
-        >
-          <div style={{ fontSize: 13, fontWeight: 600, marginBottom: 8 }}>People here</div>
-          {presence.people.map((entry) => <PersonRow key={entry.person} entry={entry} />)}
-          {presence.people.length === 0 || anonymousViewers > 0 ? (
-            <PresenceDetail icon={<UsersRoundIcon />} text={viewerDetail} />
-          ) : null}
-          {(presence.people.length === 0 ? presence.typing : anonymousTypers) > 0 ? (
-            <PresenceDetail icon={<TypingIcon />} text={typingDetail} tone="warning" />
-          ) : null}
-          <div style={{ color: "var(--muted-foreground)", fontSize: 11, lineHeight: 1.4, marginTop: 10 }}>
-            {identityFooter(me)}
-          </div>
-          <Popover.Arrow style={{ fill: "var(--popover, var(--background))" }} />
-        </Popover.Content>
-      </Popover.Portal>
-    </Popover.Root>
-  );
+  const viewing = presenceLabel({
+    viewers: presence.viewers,
+    typing: 0,
+    people: presence.people.map((entry) => ({ ...entry, typing: false })),
+  });
+  return presence.typing > 0 ? `${viewing}; ${presenceLabel(presence)}` : viewing;
+}
+
+function anonymousTypingCount(presence: { typing: number; people: PresentPerson[] }): number {
+  return Math.max(0, presence.typing - presence.people.filter((entry) => entry.typing).length);
+}
+
+function anonymousViewerDetail(presence: { viewers: number; people: PresentPerson[] }): string {
+  const count = Math.max(0, presence.viewers - presence.people.length);
+  return `${count} anonymous ${count === 1 ? "viewer" : "viewers"}`;
 }
 
 function identityFooter(me: WhoAmI | null): string {
@@ -547,8 +558,9 @@ function identityFooter(me: WhoAmI | null): string {
   return "You are anonymous here. Names appear once Identity's directory is configured and this BB server sits behind Cloudflare Access.";
 }
 
-function PersonRow({ entry }: { entry: PresentPerson }) {
+function PersonRow({ entry, list }: { entry: PresentPerson; list?: MachineList | null }) {
   const [avatarFailed, setAvatarFailed] = useState(false);
+  const fallbackColor = resolvePersonColor(entry.person, list?.roster ?? [], list?.colors ?? {}).color;
   return (
     <div style={{ alignItems: "center", display: "flex", gap: 8, fontSize: 12, lineHeight: 1.5, marginBottom: 4 }}>
       {avatarFailed ? (
@@ -556,11 +568,12 @@ function PersonRow({ entry }: { entry: PresentPerson }) {
           aria-hidden="true"
           style={{
             alignItems: "center",
-            background: "var(--muted, rgba(127, 127, 127, 0.2))",
+            background: fallbackColor,
             borderRadius: "50%",
             display: "inline-flex",
             flex: "0 0 auto",
             fontSize: 9,
+            color: readableInk(fallbackColor),
             fontWeight: 600,
             height: 20,
             justifyContent: "center",
@@ -883,10 +896,9 @@ export default definePluginApp((app) => {
   });
   app.slots.experimental_appOverlay({ id: "presence-coordinator", component: PresenceCoordinator });
   app.composer.customize({ id: "typing-awareness", scopes: ["thread"], actions: [{ id: "typing-pulse", component: TypingPulse }] });
-  app.slots.experimental_threadHeaderAction({ id: "thread-presence", title: "People here", component: ThreadPresence });
   app.slots.experimental_threadHeaderAction({
     id: "thread-ownership",
-    title: "Who started this thread",
+    title: "Thread ownership and viewers",
     component: ThreadOwnershipChip,
   });
   app.composer.customize({
