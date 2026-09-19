@@ -174,6 +174,40 @@ export type OwnershipRowStatus = {
 };
 
 /** The sidebar row's ownership glyph. Presence wins over this while someone is typing. */
+/** The colour of "nobody": a recorded starter Identity could not name, or no record at all. */
+export const NO_PERSON_COLOR = "var(--muted-foreground, #6b7280)";
+
+/**
+ * A per-person hue, so a list of threads can be scanned for "whose is this" without
+ * reading initials.
+ *
+ * Hues are DEALT BY POSITION in the roster, not hashed from the id. A hash cannot promise
+ * that two people look different — the four people this was built for collided at 26 and
+ * 21 degrees apart, which reads as the same colour. Dealing positions guarantees the
+ * widest gap the roster allows. The roster is sorted first, so hand-editing the order of
+ * the `directory` setting does not repaint anyone.
+ *
+ * The trade, stated: ADDING a person re-hues the people after them. That is a colour, not
+ * data — nothing is stored, and the initials and label still say who.
+ *
+ * Someone the roster does not name (a starter since removed from the directory) falls
+ * back to an FNV-1a hash of the id: stable across processes, just not separated.
+ *
+ * Saturation and lightness are fixed so white text stays legible on every hue.
+ */
+export function personColor(person: string | null, roster: readonly string[] = []): string {
+  if (person === null) return NO_PERSON_COLOR;
+  const dealt = [...new Set(roster)].sort();
+  const seat = dealt.indexOf(person);
+  if (seat !== -1) return `hsl(${Math.round(seat * (360 / dealt.length))} 55% 38%)`;
+  let hash = 0x811c9dc5;
+  for (let index = 0; index < person.length; index += 1) {
+    hash ^= person.charCodeAt(index);
+    hash = Math.imul(hash, 0x01000193) >>> 0;
+  }
+  return `hsl(${hash % 360} 55% 38%)`;
+}
+
 export function ownershipRowStatus(view: OwnershipView): OwnershipRowStatus {
   const known = view.starter !== null || view.via === "plugin";
   const icon = view.via === "agent" ? "Bot" : view.via === "plugin" ? "Clock" : known ? "User" : "CircleHelp";

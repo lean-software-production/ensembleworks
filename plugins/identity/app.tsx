@@ -11,7 +11,13 @@ import {
 } from "@get-bb/plugin-sdk/app";
 import type { MachineList, PresenceLocation, PresentPerson, rpcContract, ThreadOwnership, WhoAmI } from "./server.js";
 import { initials, presenceLabel } from "./presence-labels.js";
-import { composerBanner, headerChip, ownershipRowStatus, readOnlyBanner } from "./ownership-labels.js";
+import {
+  composerBanner,
+  headerChip,
+  ownershipRowStatus,
+  personColor,
+  readOnlyBanner,
+} from "./ownership-labels.js";
 import {
   mountThreadStatusFallback,
   replaceThreadStatuses,
@@ -22,7 +28,6 @@ const HEARTBEAT_MS = 10_000;
 const REFRESH_MS = 5_000;
 /** Ownership is durable, so it is polled far less often than presence. */
 const OWNERSHIP_REFRESH_MS = 60_000;
-const OWNERSHIP_BADGE_COLOR = "var(--muted-foreground, #6b7280)";
 
 function stableId(storage: Storage, key: string): string {
   const current = storage.getItem(key);
@@ -72,6 +77,9 @@ function PresenceCoordinator() {
    * back to who started it.
    */
   const ownershipRef = useRef(new Map<string, ThreadStatus>());
+  // The directory, for dealing per-person colours. A ref, not state: it only ever feeds
+  // the next paint, and a change of roster must not re-run the ownership fetch.
+  const rosterRef = useRef<readonly string[]>([]);
   const presenceRef = useRef(new Map<string, ThreadStatus>());
   const paint = useCallback(() => {
     const merged = new Map(ownershipRef.current);
@@ -149,7 +157,7 @@ function PresenceCoordinator() {
           label: status.label,
           tone: status.tone,
           badge: status.badge,
-          badgeColor: OWNERSHIP_BADGE_COLOR,
+          badgeColor: personColor(entry.starter?.person ?? null, rosterRef.current),
         }] as const;
       }));
       paint();
@@ -161,6 +169,28 @@ function PresenceCoordinator() {
     const timer = window.setInterval(refreshOwnership, OWNERSHIP_REFRESH_MS);
     return () => window.clearInterval(timer);
   }, [refreshOwnership]);
+
+  // The roster, for dealing per-person colours. Fetched once and refreshed on the same
+  // cadence as ownership: a directory edit should recolour without a reload, and the
+  // colours are only read on the next paint anyway.
+  useEffect(() => {
+    let live = true;
+    const readRoster = () => {
+      void rpc.call("identity_machines").then((result: MachineList) => {
+        if (!live) return;
+        const next = result.roster ?? [];
+        if (next.join(",") === rosterRef.current.join(",")) return;
+        rosterRef.current = next;
+        refreshOwnership();
+      }).catch(() => undefined);
+    };
+    readRoster();
+    const timer = window.setInterval(readRoster, OWNERSHIP_REFRESH_MS);
+    return () => {
+      live = false;
+      window.clearInterval(timer);
+    };
+  }, [refreshOwnership, rpc]);
 
   useRealtime("presence-changed", refresh);
   return null;

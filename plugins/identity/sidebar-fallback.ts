@@ -17,6 +17,25 @@ export type ThreadStatus = NativeThreadStatus & {
 export type ThreadStatusSetter = (threadId: string, status: NativeThreadStatus | null) => void;
 
 const BADGE_ATTRIBUTE = "data-bb-presence-badge";
+const TINT_ATTRIBUTE = "data-bb-ownership-tint";
+
+/**
+ * The row tint: a colour bar down the row's leading edge in the badge's colour.
+ *
+ * This is the at-a-glance half of the ownership UI — "whose thread is this" answered
+ * without reading anything, per-person hues coming from `personColor`. The badge still
+ * carries the initials for "who exactly". An inset box-shadow is used rather than a
+ * border so the row's own layout is untouched.
+ */
+function tintRow(row: HTMLElement, color: string): void {
+  row.setAttribute(TINT_ATTRIBUTE, "");
+  row.style.boxShadow = `inset 2px 0 0 0 ${color}`;
+}
+
+function untintRow(row: HTMLElement): void {
+  row.removeAttribute(TINT_ATTRIBUTE);
+  row.style.boxShadow = "";
+}
 let currentStatuses = new Map<string, ThreadStatus>();
 let currentDocument: Document | null = null;
 let nativeSetter: ThreadStatusSetter | null = null;
@@ -75,6 +94,7 @@ function reconcileFallbackDots(): void {
   if (!document) return;
 
   const liveBadges = new Set<Element>();
+  const tinted = new Set<Element>();
   for (const anchor of document.querySelectorAll<HTMLElement>("[data-sidebar-thread-id]")) {
     const threadId = anchor.getAttribute("data-sidebar-thread-id");
     const status = threadId === null ? undefined : currentStatuses.get(threadId);
@@ -82,7 +102,17 @@ function reconcileFallbackDots(): void {
     const row = anchor.closest<HTMLElement>("[data-parent-card]") ?? anchor.parentElement ?? anchor;
     const nativeRendered = status ? hasNativeStatus(row, status.label) : false;
 
-    if (!status || nativeRendered) {
+    if (!status) {
+      existing?.remove();
+      continue;
+    }
+
+    // The tint is ours either way: it is a colour the native row status has no slot for,
+    // so it is painted even when bb renders the glyph itself.
+    tintRow(row, status.badgeColor);
+    tinted.add(row);
+
+    if (nativeRendered) {
       existing?.remove();
       continue;
     }
@@ -99,6 +129,9 @@ function reconcileFallbackDots(): void {
   for (const badge of document.querySelectorAll("[" + BADGE_ATTRIBUTE + "]")) {
     if (!liveBadges.has(badge)) badge.remove();
   }
+  for (const row of document.querySelectorAll<HTMLElement>("[" + TINT_ATTRIBUTE + "]")) {
+    if (!tinted.has(row)) untintRow(row);
+  }
 }
 
 function hasNativeStatus(row: HTMLElement, label: string): boolean {
@@ -113,7 +146,9 @@ function createBadge(document: Document): HTMLSpanElement {
   badge.setAttribute("role", "status");
   Object.assign(badge.style, {
     position: "absolute",
-    left: "-7px",
+    // INSIDE the row, not hanging off it. The original -7px suited presence's 6px dot;
+    // an ownership badge carries initials, and half of it was clipped by the window edge.
+    left: "2px",
     top: "50%",
     minWidth: "14px",
     height: "14px",
@@ -137,5 +172,6 @@ function nativeStatus(status: ThreadStatus): NativeThreadStatus {
 }
 
 function removeAllBadges(document: Document): void {
+  for (const row of document.querySelectorAll<HTMLElement>("[" + TINT_ATTRIBUTE + "]")) untintRow(row);
   for (const badge of document.querySelectorAll("[" + BADGE_ATTRIBUTE + "]")) badge.remove();
 }

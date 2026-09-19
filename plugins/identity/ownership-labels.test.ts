@@ -8,6 +8,7 @@ import {
   runsAs,
   starterPhrase,
   type OwnershipView,
+  personColor,
 } from "./ownership-labels.js";
 import type { HostClassification } from "./hosts.js";
 import type { StarterSummary } from "./attribution.js";
@@ -315,5 +316,59 @@ describe("the header chip in audit mode", () => {
   it("says nothing extra when it cannot name the viewer", () => {
     expect(headerChip(view({ starter: matt, host: mattsMachine }), { ...options, enforcement: "audit", me: null }).text)
       .not.toMatch(/would be refused/i);
+  });
+});
+
+describe("personColor", () => {
+  // Option 4 of the sidebar rework: a per-person hue so a list of threads can be scanned
+  // for "whose is this" without reading initials. Derived from the person id, never
+  // stored, so it survives a rename and needs no palette assignment anywhere.
+  it("is stable for a person, and independent of display name or github handle", () => {
+    expect(personColor("mrdavidlaing")).toBe(personColor("mrdavidlaing"));
+    expect(personColor("mrdavidlaing")).not.toBe(personColor("mattwynne"));
+  });
+
+  it("falls back to a hash for someone the roster does not name", () => {
+    // A thread started by someone since removed from the directory still gets a colour,
+    // and the same one every time — just not a guaranteed-separated one.
+    const roster = ["mrdavidlaing", "mattwynne"];
+    expect(personColor("stranger", roster)).toBe(personColor("stranger", roster));
+    expect(personColor("stranger", roster)).toBe(personColor("stranger"));
+    expect(personColor("stranger", roster)).toMatch(/^hsl\(\d+ 55% 38%\)$/);
+  });
+
+  it("does not depend on the order the roster happens to arrive in", () => {
+    // The directory setting is hand-edited JSON; a reorder must not repaint everyone.
+    expect(personColor("mattwynne", ["mrdavidlaing", "mattwynne", "trevoke"]))
+      .toBe(personColor("mattwynne", ["trevoke", "mattwynne", "mrdavidlaing"]));
+  });
+
+  it("spreads a known roster around the wheel, so no two people look alike", () => {
+    // A hash alone cannot promise separation — the real four collided at 26 and 21 degrees.
+    // Given the roster (Identity knows it: it is the directory), hues are dealt by position
+    // instead, which guarantees the maximum gap for however many people there are.
+    const roster = ["mrdavidlaing", "mattwynne", "trevoke", "jeremy"];
+    const hues = roster.map((person) => {
+      const match = /hsl\((\d+)/.exec(personColor(person, roster));
+      expect(match).not.toBeNull();
+      return Number(match?.[1]);
+    });
+    for (const [i, hue] of hues.entries()) {
+      for (const other of hues.slice(i + 1)) {
+        // Far enough apart to read as different colours, not shades of one.
+        const gap = Math.min(Math.abs(hue - other), 360 - Math.abs(hue - other));
+        expect(gap).toBeGreaterThanOrEqual(80);
+      }
+    }
+  });
+
+  it("holds saturation and lightness fixed, so white text stays legible on every hue", () => {
+    for (const person of ["mrdavidlaing", "mattwynne", "trevoke", "jeremy", "someone-new"]) {
+      expect(personColor(person)).toMatch(/^hsl\(\d+ 55% 38%\)$/);
+    }
+  });
+
+  it("has one colour for nobody, which is not a hue at all", () => {
+    expect(personColor(null)).toBe("var(--muted-foreground, #6b7280)");
   });
 });

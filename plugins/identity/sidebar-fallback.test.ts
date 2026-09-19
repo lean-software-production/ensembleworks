@@ -53,7 +53,7 @@ describe("replacement sidebar presence fallback", () => {
       .toBe("1 other viewer");
     const badge = anchor.querySelector<HTMLElement>("[data-bb-presence-badge]");
     expect(badge?.textContent).toBe("1");
-    expect(badge?.style.left).toBe("-7px");
+    expect(badge?.style.left).toBe("2px");
 
     const typingStatus: ThreadStatus = {
       icon: "Edit",
@@ -120,5 +120,36 @@ describe("ownership badges", () => {
     expect(badge?.textContent).toBe("D");
     expect(badge?.style.background).toContain("#6b7280");
     expect(badge?.getAttribute("aria-label")).toBe("Started by David");
+  });
+});
+
+describe("where the badge sits, and the row tint", () => {
+  it("keeps the badge inside the row, so the window edge cannot clip it", async () => {
+    // It used to hang at left:-7px — fine for presence's 6px dot, but an ownership badge
+    // carries initials, and half of it disappeared off the left of the window.
+    const { anchor } = renderReplacementRow();
+    dispose = mountThreadStatusFallback({ document });
+    replaceThreadStatuses(new Map([["thread-1", status]]));
+    await settleObserver();
+
+    const badge = anchor.querySelector<HTMLElement>("[data-bb-presence-badge]");
+    expect(badge).not.toBeNull();
+    const left = Number.parseFloat(badge?.style.left ?? "NaN");
+    expect(left).toBeGreaterThanOrEqual(0);
+  });
+
+  it("tints the row with the badge's colour, and takes the tint away with the status", async () => {
+    // Option 4: the colour is the at-a-glance signal — whose thread this is, without
+    // reading anything. The badge still says who exactly.
+    const { anchor, row } = renderReplacementRow();
+    dispose = mountThreadStatusFallback({ document });
+    replaceThreadStatuses(new Map([["thread-1", { ...status, badgeColor: "hsl(210 55% 38%)" }]]));
+    await settleObserver();
+    expect(row.style.boxShadow).toContain("hsl(210 55% 38%)");
+
+    replaceThreadStatuses(new Map());
+    await settleObserver();
+    expect(row.style.boxShadow).toBe("");
+    expect(anchor.querySelector("[data-bb-presence-badge]")).toBeNull();
   });
 });

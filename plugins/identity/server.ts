@@ -197,6 +197,11 @@ const machineList = z.object({
    * a chip would contradict the audit log it exists to illustrate.
    */
   meViaFallback: z.boolean(),
+  /**
+   * Every person in the directory, by id. The UI deals per-person colours by position in
+   * this list (`personColor`), which is what makes two people reliably look different.
+   */
+  roster: z.array(z.string()),
   machines: z.array(hostClassification),
   /** The account team and unclaimed machines run as, for the header chip's wording. */
   sharedMachineUser: z.string(),
@@ -795,6 +800,7 @@ export default async function plugin(bb: BbPluginApi) {
       return publicMachineList({
         me: whoamiFor(requestContext.current()?.email ?? null).person,
         meViaFallback: currentIdentity().viaFallback,
+        roster: people.map((entry) => entry.person),
         sharedMachineUser,
         enforcement,
         machines: listed.machines,
