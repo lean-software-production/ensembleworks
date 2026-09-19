@@ -1,3 +1,4 @@
+import "./identity.css";
 import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import * as Popover from "@radix-ui/react-popover";
 import {
@@ -250,12 +251,15 @@ function ThreadOwnershipChip({ threadId }: { threadId: string }) {
   }, [rpc, threadId]);
   useEffect(() => {
     let live = true;
-    // The shared account's name, who I am and which mode is in force all ride along with
-    // the machine list rather than costing a call each.
-    void rpc.call("identity_machines").then((result: MachineList) => {
-      if (live) setList(result);
-    }).catch(() => undefined);
-    return () => { live = false; };
+    // Keep People colour choices in step with the sidebar without reloading the plugin.
+    const refresh = () => {
+      void rpc.call("identity_machines").then((result: MachineList) => {
+        if (live) setList(result);
+      }).catch(() => undefined);
+    };
+    refresh();
+    const timer = window.setInterval(refresh, OWNERSHIP_REFRESH_MS);
+    return () => { live = false; window.clearInterval(timer); };
   }, [rpc]);
   if (ownership === null) return null;
   const chip = headerChip(ownership, {
@@ -264,23 +268,63 @@ function ThreadOwnershipChip({ threadId }: { threadId: string }) {
     me: list?.me ?? null,
     meViaFallback: list?.meViaFallback === true,
   });
+  const row = ownershipRowStatus(ownership);
+  const { color } = resolvePersonColor(
+    ownership.starter?.person ?? null, list?.roster ?? [], list?.colors ?? {},
+  );
   return (
-    <span
-      title={chip.text}
-      style={{
-        alignItems: "center",
-        color: chip.tone === "muted" ? "var(--muted-foreground)" : "var(--foreground)",
-        display: "inline-flex",
-        fontSize: 12,
-        gap: 6,
-        maxWidth: 420,
-        overflow: "hidden",
-        textOverflow: "ellipsis",
-        whiteSpace: "nowrap",
-      }}
-    >
-      {chip.text}
-    </span>
+    <Popover.Root key={threadId}>
+      <Popover.Trigger asChild>
+        <button
+          type="button"
+          className="identity-ownership-button"
+          aria-label={`${row.label}. Show ownership details`}
+          title={chip.text}
+          style={{
+            display: "inline-flex", alignItems: "center", justifyContent: "center",
+            width: 44, height: 44, flexShrink: 0, padding: 0,
+            border: 0, borderRadius: 8, background: "transparent", cursor: "pointer",
+          }}
+        >
+          <span aria-hidden="true" style={{
+            display: "inline-flex", alignItems: "center", justifyContent: "center",
+            width: 26, height: 26, borderRadius: "50%", fontSize: 11, fontWeight: 700,
+            background: color, color: readableInk(color),
+            border: "1px solid var(--border)",
+          }}>{row.badge}</span>
+        </button>
+      </Popover.Trigger>
+      <Popover.Portal>
+        <Popover.Content
+          align="end"
+          sideOffset={6}
+          collisionPadding={8}
+          aria-label="Thread ownership"
+          style={{
+            boxSizing: "border-box", width: 360,
+            maxWidth: "calc(100vw - 16px)",
+            maxHeight: "var(--radix-popover-content-available-height)", overflowY: "auto",
+            overflowWrap: "anywhere", whiteSpace: "normal",
+            background: "var(--popover, var(--background))",
+            border: "1px solid var(--border)", borderRadius: 8,
+            color: "var(--popover-foreground, var(--foreground))",
+            padding: 12, fontSize: 13, lineHeight: 1.5, zIndex: 50,
+          }}
+        >
+          <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 8 }}>
+            <strong>Thread ownership</strong>
+            <Popover.Close className="identity-ownership-button" aria-label="Close ownership details" style={{
+              width: 44, height: 44, flexShrink: 0, borderRadius: 6,
+              border: "1px solid var(--border)", background: "transparent",
+              color: "inherit", cursor: "pointer", fontSize: 20,
+            }}>×</Popover.Close>
+          </div>
+          <p style={{ margin: "8px 0 0", color: chip.tone === "muted" ? "var(--muted-foreground)" : "inherit" }}>
+            {chip.text}
+          </p>
+        </Popover.Content>
+      </Popover.Portal>
+    </Popover.Root>
   );
 }
 

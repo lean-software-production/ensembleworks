@@ -1,0 +1,4 @@
+.identity-ownership-button:focus-visible {
+  outline: 2px solid var(--ring, #2563eb);
+  outline-offset: 2px;
+}
