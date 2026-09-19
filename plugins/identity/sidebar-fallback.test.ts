@@ -53,7 +53,8 @@ describe("replacement sidebar presence fallback", () => {
       .toBe("1 other viewer");
     const badge = anchor.querySelector<HTMLElement>("[data-bb-presence-badge]");
     expect(badge?.textContent).toBe("1");
-    expect(badge?.style.left).toBe("2px");
+    expect(badge?.style.right).toBe("2px");
+    expect(badge?.style.left).toBe("");
 
     const typingStatus: ThreadStatus = {
       icon: "Edit",
@@ -124,9 +125,7 @@ describe("ownership badges", () => {
 });
 
 describe("where the badge sits, and the row tint", () => {
-  it("keeps the badge inside the row, so the window edge cannot clip it", async () => {
-    // It used to hang at left:-7px — fine for presence's 6px dot, but an ownership badge
-    // carries initials, and half of it disappeared off the left of the window.
+  it("keeps the badge inside the trailing edge of the row", async () => {
     const { anchor } = renderReplacementRow();
     dispose = mountThreadStatusFallback({ document });
     replaceThreadStatuses(new Map([["thread-1", status]]));
@@ -134,8 +133,9 @@ describe("where the badge sits, and the row tint", () => {
 
     const badge = anchor.querySelector<HTMLElement>("[data-bb-presence-badge]");
     expect(badge).not.toBeNull();
-    const left = Number.parseFloat(badge?.style.left ?? "NaN");
-    expect(left).toBeGreaterThanOrEqual(0);
+    const right = Number.parseFloat(badge?.style.right ?? "NaN");
+    expect(right).toBeGreaterThanOrEqual(0);
+    expect(badge?.style.left).toBe("");
   });
 
   it("tints the row with the badge's colour, and takes the tint away with the status", async () => {
@@ -155,25 +155,24 @@ describe("where the badge sits, and the row tint", () => {
 });
 
 describe("the badge must not sit on the title", () => {
-  it("reserves room for itself on the row, and gives it back when the status goes", async () => {
-    // Moving the badge inside the row (it used to hang at left:-7px) put it ON TOP of the
-    // thread title: a row titled "probe" read "robe". The badge is absolutely positioned,
-    // so it takes no space of its own — the row has to be told to leave some.
+  it("reserves trailing room for itself, leaving the title's beginning untouched", async () => {
     const { anchor, row } = renderReplacementRow();
+    anchor.style.paddingRight = "6px";
     dispose = mountThreadStatusFallback({ document });
     replaceThreadStatuses(new Map([["thread-1", status]]));
     await settleObserver();
 
-    const reserved = Number.parseFloat(anchor.style.paddingLeft || "0");
+    const reserved = Number.parseFloat(anchor.style.paddingRight || "0");
     const badge = anchor.querySelector<HTMLElement>("[data-bb-presence-badge]");
-    const badgeLeft = Number.parseFloat(badge?.style.left ?? "0");
+    const badgeRight = Number.parseFloat(badge?.style.right ?? "0");
     const badgeWidth = Number.parseFloat(badge?.style.minWidth ?? "0");
-    expect(reserved).toBeGreaterThanOrEqual(badgeLeft + badgeWidth);
+    expect(reserved).toBeGreaterThanOrEqual(badgeRight + badgeWidth);
+    expect(anchor.style.paddingLeft).toBe("");
 
     replaceThreadStatuses(new Map());
     await settleObserver();
     // Not left behind on a row we do not own.
-    expect(anchor.style.paddingLeft).toBe("");
+    expect(anchor.style.paddingRight).toBe("6px");
     expect(row.style.boxShadow).toBe("");
   });
 
@@ -189,7 +188,7 @@ describe("the badge must not sit on the title", () => {
     await settleObserver();
 
     expect(anchor.querySelector("[data-bb-presence-badge]")).toBeNull();
-    expect(anchor.style.paddingLeft).toBe("");
+    expect(anchor.style.paddingRight).toBe("");
   });
 });
 
