@@ -666,9 +666,12 @@ function RosterPersonRow({
             ? `Machines: ${row.machines.join(", ")}`
             : "No machines of their own are known"}
         </span>
-        <span style={{ color: "var(--muted-foreground)", fontSize: 12 }} title={SEEN_CAVEAT_TITLE}>
+        {/* The caveat is stated ONCE, under the heading. Repeating it on every row —
+            which is what the first version did, and what looking at the rendered page
+            showed — buried the rows it was supposed to qualify under three copies of the
+            same sentence. It stays reachable per-row as the title. */}
+        <span style={{ color: "var(--muted-foreground)", fontSize: 12 }} title={SEEN_UNKNOWN_CAVEAT}>
           {seenPhrase(row.seen)}
-          {row.seen ? "" : ` — ${SEEN_UNKNOWN_CAVEAT}`}
         </span>
 
         {row.clashesWith.length > 0 && (
@@ -739,8 +742,6 @@ function RosterPersonRow({
   );
 }
 
-const SEEN_CAVEAT_TITLE = SEEN_UNKNOWN_CAVEAT;
-
 function PeopleSettings() {
   const rpc = useRpc<typeof rpcContract>();
   const [roster, setRoster] = useState<RosterAnswer | null>(null);
@@ -786,6 +787,9 @@ function PeopleSettings() {
         {roster.me === null
           ? " This sign-in is not in the directory, so a change will be logged with no name against it."
           : ` You are signed in as ${roster.me.displayName}.`}
+      </span>
+      <span style={{ color: "var(--muted-foreground)", fontSize: 12, paddingBottom: 8 }}>
+        {SEEN_UNKNOWN_CAVEAT}
       </span>
       {roster.unavailable !== null && (
         <span style={{ color: "var(--muted-foreground)", fontSize: 12, paddingBottom: 8 }}>
