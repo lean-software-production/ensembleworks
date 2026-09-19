@@ -1,7 +1,12 @@
 import http from "node:http";
 import type { AddressInfo } from "node:net";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
-import { installRequestContext, selfTestRequestContext, type SelfTestResult } from "./request-context.js";
+import {
+  installRequestContext,
+  REQUEST_CONTEXT_VERSION,
+  selfTestRequestContext,
+  type SelfTestResult,
+} from "./request-context.js";
 
 const context = installRequestContext();
 let server: http.Server;
@@ -31,6 +36,75 @@ function get(path: string, headers: Record<string, string> = {}): Promise<unknow
 }
 
 describe("installRequestContext", () => {
+  it("migrates any singleton older than the current shape, not just the observer-less one", () => {
+    // The process-global survives reloads by design (S7 lesson 1), which makes its SHAPE a
+    // contract between plugin versions. #109 fixed one crossing — pre-audit `current()`-only
+    // to the audit shape — by asking whether `observe` existed. A version number generalises
+    // that: the NEXT method added does not need its own bespoke sniff, and a generation that
+    // finds a newer context than its own leaves it alone rather than downgrading it.
+    const key = Symbol.for("ew.identity.requestContext.v1");
+    const globals = globalThis as typeof globalThis & { [key]?: unknown };
+    const savedContext = globals[key];
+    const savedEmit = http.Server.prototype.emit;
+    try {
+      // A hypothetical future shape: has observe(), but is a version behind.
+      const stale = { version: REQUEST_CONTEXT_VERSION - 1, current: () => undefined, observe: () => () => undefined };
+      globals[key] = stale;
+      const migrated = installRequestContext();
+      expect(migrated).not.toBe(stale);
+      expect((globals[key] as { version: number }).version).toBe(REQUEST_CONTEXT_VERSION);
+
+      // And the complete, current context is reused rather than re-patched.
+      expect(installRequestContext()).toBe(migrated);
+    } finally {
+      globals[key] = savedContext;
+      http.Server.prototype.emit = savedEmit;
+    }
+  });
+
+  it("upgrades the observer-less singleton left by the pre-audit generation", async () => {
+    const key = Symbol.for("ew.identity.requestContext.v1");
+    const globals = globalThis as typeof globalThis & { [key]?: unknown };
+    const savedContext = globals[key];
+    const savedEmit = http.Server.prototype.emit;
+    const legacyContext = { current: () => undefined };
+    // The deployed pre-audit generation left both an observer-less global and an
+    // unmarked emit wrapper behind. A hot reload has to layer the new context over it.
+    globals[key] = legacyContext;
+    http.Server.prototype.emit = function legacyEmit(this: http.Server, ...args: unknown[]) {
+      return (savedEmit as (...values: unknown[]) => boolean).apply(this, args);
+    } as typeof http.Server.prototype.emit;
+
+    let migratedServer: http.Server | undefined;
+    try {
+      const migrated = installRequestContext();
+      expect(migrated).not.toBe(legacyContext);
+      expect(migrated.observe).toBeTypeOf("function");
+
+      const observed: string[] = [];
+      const stop = migrated.observe((facts) => observed.push(facts.email ?? "anonymous"));
+      migratedServer = http.createServer((_req, res) => {
+        res.setHeader("content-type", "application/json");
+        res.end(JSON.stringify(migrated.current() ?? null));
+      });
+      await new Promise<void>((resolve) => migratedServer?.listen(0, "127.0.0.1", resolve));
+      const port = (migratedServer.address() as AddressInfo).port;
+      const handled = await fetch(`http://127.0.0.1:${port}/migrated`, {
+        headers: { "cf-access-authenticated-user-email": "reload@example.com" },
+      }).then((response) => response.json()) as { email: string };
+      stop();
+
+      expect(handled.email).toBe("reload@example.com");
+      expect(observed).toEqual(["reload@example.com"]);
+    } finally {
+      if (migratedServer?.listening) {
+        await new Promise<void>((resolve) => migratedServer?.close(() => resolve()));
+      }
+      globals[key] = savedContext;
+      http.Server.prototype.emit = savedEmit;
+    }
+  });
+
   it("gives concurrent requests their own email across a shared await", async () => {
     gate = new Promise<void>((resolve) => { releaseGate = resolve; });
     const emails = ["Matt@Example.com", "david@example.com", " trevoke@example.com "];

@@ -822,6 +822,7 @@ export default async function plugin(bb: BbPluginApi) {
     presence_thread: ({ threadId, excludeViewerId }) => store.thread(threadId, excludeViewerId),
     presence_typing_list: ({ threadId }) => ({ count: store.thread(threadId, "__legacy-no-viewer__").typing }),
   });
+  bb.log.info("identity: loaded");
   bb.onDispose(() => {
     store.clear();
     stopObserving();
@@ -832,5 +833,6 @@ export default async function plugin(bb: BbPluginApi) {
     // Deliberately NOT unpatching the request context: bb disposes the old generation
     // after the new one has loaded, so restoring `emit` here would remove the live
     // patch (S7, lesson 1).
+    bb.log.info("identity: disposed");
   });
 }

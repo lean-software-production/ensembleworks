@@ -195,6 +195,45 @@ Rollout details:
   without `--parent-self`, `bb thread tell` from a thread). Check that nothing
   legitimate arrives identity-less before turning the policy on.
 
+### The reload contract (2026-09-19): S7 lesson 1 has a corollary
+
+The first production install of PR #106 on ew-lsp-001 failed during
+`bb plugin reload identity`:
+
+```
+requestContext.observe is not a function
+```
+
+**What it means.** S7 lesson 1 says the `http.Server.prototype.emit` patch must NEVER be
+unpatched, because bb loads the new generation before disposing the old one. The plugin
+therefore keeps a singleton on a `Symbol.for` global that deliberately outlives a reload.
+The corollary nobody wrote down: **anything that survives a reload has a shape that is a
+contract between plugin VERSIONS, not an implementation detail.** The audit work added
+`observe()` to that singleton, while `installRequestContext` still returned any existing
+global untouched — so on the running server the new generation was handed the pre-audit
+object and called a method it did not have. Nothing on a fresh install can catch this: the
+bug only exists when an OLDER generation is already live in the process, which is exactly
+the case every production upgrade has and no throwaway does.
+
+**Fixed in PR #109**, by detecting the observer-less singleton and layering a fresh
+context over the legacy patch (the old generation keeps its own reference until bb
+disposes it), plus explicit `identity: loaded` / `identity: disposed` log markers so
+reload ORDER is observable rather than inferred.
+
+**Generalised straight after:** the context carries `REQUEST_CONTEXT_VERSION`, and
+`installRequestContext` reuses a context at that version or newer and migrates anything
+older. #109's check asked whether `observe` existed, which fixes this crossing but not the
+next one; a version comparison means the next member added migrates without its own
+bespoke sniff, and a generation that finds a NEWER context than its own leaves it alone
+rather than downgrading an object a still-live generation is holding. A migration costs
+one extra `emit` layer for the life of the process — bounded by shape versions crossed,
+not by reloads.
+
+**The rule for anyone touching `request-context.ts`:** if you change `RequestContext`'s
+members, bump `REQUEST_CONTEXT_VERSION`. And when reviewing a plugin change, ask what a
+RUNNING server's older generation will hand the new code — a test suite that only ever
+starts from an empty process cannot answer that question.
+
 ### S7 result (2026-09-16): the monkey patch works in real bb 0.43.0
 
 Setup: a throwaway `bb-app` (Node 24.19, its own `--data-dir`, `HOME` set to a temp dir,
