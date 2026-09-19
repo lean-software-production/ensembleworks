@@ -10,8 +10,8 @@ const status: ThreadStatus = {
   icon: "UsersRound",
   label: "1 other viewer",
   tone: "default",
-  viewers: 1,
-  typing: 0,
+  badge: "1",
+  badgeColor: "var(--success, #22c55e)",
 };
 
 let dispose: (() => void) | undefined;
@@ -59,8 +59,8 @@ describe("replacement sidebar presence fallback", () => {
       icon: "Edit",
       label: "2 other viewers · 1 typing",
       tone: "running",
-      viewers: 2,
-      typing: 1,
+      badge: "2",
+      badgeColor: "var(--warning, #f59e0b)",
     };
     replaceThreadStatuses(new Map([["thread-1", typingStatus]]));
     await settleObserver();
@@ -101,5 +101,24 @@ describe("replacement sidebar presence fallback", () => {
     dispose();
     dispose = undefined;
     expect(document.querySelector("[data-bb-presence-badge]")).toBeNull();
+  });
+});
+
+describe("ownership badges", () => {
+  it("renders a starter's initials in its own colour, with no viewer count", async () => {
+    const { anchor } = renderReplacementRow();
+    dispose = mountThreadStatusFallback({ document });
+    replaceThreadStatuses(new Map([["thread-1", {
+      icon: "User",
+      label: "Started by David",
+      tone: "default",
+      badge: "D",
+      badgeColor: "var(--muted-foreground, #6b7280)",
+    }]]));
+    await settleObserver();
+    const badge = anchor.querySelector<HTMLElement>("[data-bb-presence-badge]");
+    expect(badge?.textContent).toBe("D");
+    expect(badge?.style.background).toContain("#6b7280");
+    expect(badge?.getAttribute("aria-label")).toBe("Started by David");
   });
 });

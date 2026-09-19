@@ -11,19 +11,39 @@ import http from "node:http";
  * see who is doing what; it is not an access control.
  */
 export type RequestFacts = {
+  /**
+   * A short id for this request, unique within this process's lifetime. It is what joins
+   * the audit log's three streams: a dispatch line carries the id of the request that
+   * caused it, so `bb plugin logs identity | jq` can put a refusal next to the POST that
+   * triggered it.
+   */
+  id: string;
   email: string | null;
   method: string | undefined;
   url: string | undefined;
 };
 
+/** Called with the facts of every http request bb handles. Must not throw; wrapped anyway. */
+export type RequestObserver = (facts: RequestFacts) => void;
+
 export type RequestContext = {
   /** The facts of the request being handled, or undefined outside any request. */
   current(): RequestFacts | undefined;
+  /**
+   * Watch every request. Returns a disposer.
+   *
+   * Observers are per-generation and DO come off on dispose, unlike the `emit` patch
+   * itself (S7 lesson 1): a disposer removes only the callback it registered, so a
+   * reloaded generation's observer is never removed by the old generation's dispose.
+   */
+  observe(observer: RequestObserver): () => void;
 };
 
 export const ACCESS_EMAIL_HEADER = "cf-access-authenticated-user-email";
 
 const GLOBAL_KEY = Symbol.for("ew.identity.requestContext.v1");
+/** Stamped on the patched `emit` so the self-test can tell OUR patch is the live one. */
+const PATCH_MARKER = Symbol.for("ew.identity.requestContext.patched.v1");
 
 export function normalizeEmail(value: string | string[] | null | undefined): string | null {
   const raw = Array.isArray(value) ? value[0] : value;
@@ -53,22 +73,87 @@ export function installRequestContext(): RequestContext {
   if (existing) return existing;
 
   const als = new AsyncLocalStorage<RequestFacts>();
+  const observers = new Set<RequestObserver>();
+  let counter = 0;
+  const boot = Math.floor(Math.random() * 0xffffff).toString(36);
   const originalEmit = http.Server.prototype.emit;
   const emit = originalEmit as (this: http.Server, event: string | symbol, ...args: unknown[]) => boolean;
   http.Server.prototype.emit = function patchedEmit(this: http.Server, event: string | symbol, ...args: unknown[]) {
     if (event === "request") {
       const request = args[0] as http.IncomingMessage;
+      counter += 1;
       const facts: RequestFacts = {
+        id: `${boot}-${counter.toString(36)}`,
         email: normalizeEmail(request.headers[ACCESS_EMAIL_HEADER]),
         method: request.method,
         url: request.url,
       };
+      for (const observer of observers) {
+        try {
+          observer(facts);
+        } catch {
+          // An audit line is never worth failing a request over.
+        }
+      }
       return als.run(facts, () => emit.call(this, event, ...args));
     }
     return emit.call(this, event, ...args);
   } as typeof http.Server.prototype.emit;
+  Object.defineProperty(http.Server.prototype.emit, PATCH_MARKER, { value: true });
 
-  const context: RequestContext = { current: () => als.getStore() };
+  const context: RequestContext = {
+    current: () => als.getStore(),
+    observe: (observer) => {
+      observers.add(observer);
+      return () => observers.delete(observer);
+    },
+  };
   globals[GLOBAL_KEY] = context;
   return context;
+}
+
+/** Is the `emit` currently on the prototype our patch? */
+export function requestContextPatchIsLive(): boolean {
+  const emit = http.Server.prototype.emit as unknown as Record<symbol, unknown>;
+  return emit[PATCH_MARKER] === true;
+}
+
+export type SelfTestResult = { ok: boolean; detail: string };
+
+export const SELF_TEST_EMAIL = "identity-self-test@localhost.invalid";
+
+/**
+ * Prove the patch is live IN THIS PROCESS: check that the `emit` on the prototype is
+ * still ours (S7's lesson 1 — a later generation restoring `emit` silently removed the
+ * live patch), then drive one real request through the server carrying a tagged email
+ * and assert the handler read that email back out of the async context rather than off
+ * the request.
+ *
+ * Never throws and never touches the patch: a failure is REPORTED, and Identity carries
+ * on with no identity (starter "unknown"), because a broken patch must cost UX only and
+ * must never block bb from working.
+ */
+export async function selfTestRequestContext(
+  context: RequestContext,
+  options: { probe: (headers: Record<string, string>) => Promise<unknown> },
+): Promise<SelfTestResult> {
+  if (!requestContextPatchIsLive()) {
+    return { ok: false, detail: "the live http.Server.prototype.emit is not Identity's patch" };
+  }
+  // The plugin factory — and any timer it schedules — runs inside the async context of
+  // the request that loaded the plugin (`bb plugin reload` is an HTTP request), so this
+  // is normal and must NOT fail the test. It is only worth naming in the detail: the
+  // verdict itself comes from the probe's own, separate request.
+  const nested = context.current() !== undefined ? ", nested in the loading request's context" : "";
+  let seen: unknown;
+  try {
+    seen = await options.probe({ [ACCESS_EMAIL_HEADER]: SELF_TEST_EMAIL });
+  } catch (error) {
+    return { ok: false, detail: `the self-test probe failed: ${(error as Error).message}` };
+  }
+  const email = (seen as { email?: unknown } | null)?.email;
+  if (email !== SELF_TEST_EMAIL) {
+    return { ok: false, detail: `the probe's request context had email ${JSON.stringify(email ?? null)}` };
+  }
+  return { ok: true, detail: `request context is live (probe saw its own tagged email${nested})` };
 }

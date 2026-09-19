@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
-import { LEASE_TTL_MS, PresenceStore, TYPING_TTL_MS } from "./server.js";
+import { LEASE_TTL_MS, PresenceStore, TYPING_TTL_MS, ownershipFor, parseHostList, publicMachineList, publicStarter } from "./server.js";
+import type { HostClassification } from "./hosts.js";
 
 describe("PresenceStore", () => {
   it("excludes the local viewer and aggregates another viewer's tabs", () => {
@@ -119,5 +120,131 @@ describe("PresenceStore", () => {
       expect([...store.heartbeat("tab", "viewer", here, 3_000, matt)]).toEqual(["t"]);
       expect(store.thread("t", "local", 3_000).people).toEqual([{ ...matt, typing: false }]);
     });
+  });
+});
+
+describe("publicStarter", () => {
+  const stored = {
+    threadId: "thr_1",
+    starter: { person: "mattwynne", displayName: "Matt", github: "mattwynne" },
+    email: "matt@example.com",
+    via: "browser" as const,
+    origin: "app" as const,
+    originPluginId: null,
+    inheritedFrom: null,
+    recordedAt: 500,
+  };
+
+  it("is null when nothing was recorded", () => {
+    expect(publicStarter(null)).toBeNull();
+  });
+
+  it("drops the private email and keeps only the contract's fields", () => {
+    expect(publicStarter(stored)).toEqual({
+      threadId: "thr_1",
+      starter: stored.starter,
+      via: "browser",
+      inheritedFrom: null,
+      recordedAt: 500,
+      host: null,
+    });
+  });
+
+  it("validates its output against the RPC contract's schema, on both arms", () => {
+    expect(() => publicStarter({ ...stored, via: "telepathy" as unknown as typeof stored.via })).toThrow();
+  });
+});
+
+describe("publicStarter, with the machine the thread ran on", () => {
+  const stored = {
+    threadId: "thr_1",
+    starter: { person: "mattwynne", displayName: "Matt", github: "mattwynne" },
+    email: "matt@example.com",
+    via: "browser" as const,
+    origin: "app" as const,
+    originPluginId: null,
+    inheritedFrom: null,
+    recordedAt: 500,
+    host: { id: "h1", name: "ew-lsp-001-mattwynne" },
+  };
+
+  it("carries the recorded host through", () => {
+    expect(publicStarter(stored)?.host).toEqual({ id: "h1", name: "ew-lsp-001-mattwynne" });
+  });
+
+  it("reads a record written before hosts were recorded as no host", () => {
+    const { host: _host, ...older } = stored;
+    expect(publicStarter(older)?.host).toBeNull();
+  });
+});
+
+describe("ownershipFor", () => {
+  const classified: HostClassification = {
+    kind: "team",
+    hostId: "h3",
+    hostName: "ew-lsp-001-main",
+    conflict: null,
+  };
+
+  it("is an unknown, never-null-looking view when nothing was recorded", () => {
+    expect(ownershipFor("thr_1", null, null)).toEqual({
+      threadId: "thr_1",
+      starter: null,
+      via: "unknown",
+      inheritedFrom: null,
+      host: null,
+    });
+  });
+
+  it("classifies the recorded host", () => {
+    const view = ownershipFor("thr_1", publicStarter({
+      threadId: "thr_1",
+      starter: { person: "mrdavidlaing", displayName: "David", github: "mrdavidlaing" },
+      email: null,
+      via: "browser",
+      origin: "app",
+      originPluginId: null,
+      inheritedFrom: null,
+      recordedAt: 1,
+      host: { id: "h3", name: "ew-lsp-001-main" },
+    }), classified);
+    expect(view.host?.kind).toBe("team");
+    expect(view.starter?.displayName).toBe("David");
+  });
+});
+
+describe("parseHostList", () => {
+  it("reads bb's own GET /api/v1/hosts payload", () => {
+    expect(parseHostList({ hosts: [{ id: "h1", name: "ew-lsp-001-main", lifecycle: { phase: "active" } }] }))
+      .toEqual([{ id: "h1", name: "ew-lsp-001-main" }]);
+  });
+
+  it("reads a bare array, and ignores anything that is not a host", () => {
+    expect(parseHostList([{ id: "h1", name: "a" }, { id: 2 }, null, "x"])).toEqual([{ id: "h1", name: "a" }]);
+  });
+
+  it("is empty for a payload it does not understand", () => {
+    expect(parseHostList({ error: "nope" })).toEqual([]);
+  });
+});
+
+describe("publicMachineList", () => {
+  const listed = {
+    me: { person: "mrdavidlaing", displayName: "David", github: "mrdavidlaing" },
+    meViaFallback: false,
+    sharedMachineUser: "ensembleworks-agent",
+    enforcement: "off" as const,
+    machines: [{ kind: "team" as const, hostId: "h3", hostName: "ew-lsp-001-main", conflict: null }],
+    unavailable: null,
+  };
+
+  it("validates against the contract's own schema", () => {
+    expect(publicMachineList(listed)).toEqual(listed);
+  });
+
+  it("refuses a payload carrying anything the contract does not publish", () => {
+    // The real bug this guards: the internal cache row also carries `at`, and spreading
+    // it whole into the answer failed strict output validation at runtime.
+    expect(() => publicMachineList({ ...listed, at: 1 } as unknown as typeof listed)).toThrow();
   });
 });

@@ -78,21 +78,21 @@ describe("resolvePerson", () => {
 describe("identityFor", () => {
   it("uses the request email when present", () => {
     expect(identityFor([matt, david], "david@example.com", "matt@example.com"))
-      .toEqual({ email: "david@example.com", person: david });
+      .toEqual({ email: "david@example.com", person: david, viaFallback: false });
   });
 
   it("reports an email not in the directory without a person", () => {
     expect(identityFor([matt], "stranger@example.com", ""))
-      .toEqual({ email: "stranger@example.com", person: null });
+      .toEqual({ email: "stranger@example.com", person: null, viaFallback: false });
   });
 
   it("falls back to fallbackEmail when the request has no email", () => {
     expect(identityFor([matt, david], null, " Matt@example.com "))
-      .toEqual({ email: "matt@example.com", person: matt });
+      .toEqual({ email: "matt@example.com", person: matt, viaFallback: true });
   });
 
   it("is anonymous with neither a request email nor a fallback", () => {
-    expect(identityFor([matt], null, "")).toEqual({ email: null, person: null });
-    expect(identityFor([matt], undefined, undefined)).toEqual({ email: null, person: null });
+    expect(identityFor([matt], null, "")).toEqual({ email: null, person: null, viaFallback: false });
+    expect(identityFor([matt], undefined, undefined)).toEqual({ email: null, person: null, viaFallback: false });
   });
 });

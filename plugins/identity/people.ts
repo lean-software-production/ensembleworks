@@ -62,7 +62,14 @@ export function identityFor(
   people: readonly Person[],
   email: string | null | undefined,
   fallbackEmail: string | null | undefined,
-): { email: string | null; person: Person | null } {
-  const effective = normalizeEmail(email) ?? normalizeEmail(fallbackEmail);
-  return { email: effective, person: resolvePerson(people, effective) };
+): { email: string | null; person: Person | null; viaFallback: boolean } {
+  const own = normalizeEmail(email);
+  const effective = own ?? normalizeEmail(fallbackEmail);
+  return {
+    email: effective,
+    person: resolvePerson(people, effective),
+    // True when the request carried no identity of its own and the setting supplied one.
+    // The guardrail must not act on that: it is a display default, not a person asking.
+    viaFallback: own === null && effective !== null,
+  };
 }
