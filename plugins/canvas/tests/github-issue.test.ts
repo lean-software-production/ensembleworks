@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
 import { githubIssueUrl, isValidatedRepo, parseGithubIssueUrl } from "../canvas/github-issue.js";
-import { readGithubRepo, readGithubStatus } from "../canvas/github-cache-server.js";
+import { readGithubRepo, readGithubStatus, searchGithubIssues } from "../canvas/github-cache-server.js";
 import { GithubCacheClient } from "../canvas/github-cache-client.js";
 import { createUnlinkedIssueShape, resolveIssueLink } from "../canvas/panel/github-draft-model.js";
 import { GithubIssueCard, GithubIssueShape } from "../canvas/shapes/GithubIssueShape.js";
@@ -46,6 +46,29 @@ describe("GitHub issue identity", () => {
 });
 
 describe("project-scoped GitHub cache adapter", () => {
+  it("searches only project repositories and projects cached issue summaries", async () => {
+    const calls: any[] = [];
+    const plugins = { callRpc: async ({ method, input, outputSchema }: any) => {
+      calls.push({ method, input });
+      if (method === "status") return outputSchema.parse(status);
+      return outputSchema.parse({ items: [item, { ...item, kind: "pr", number: 43, body: "PRIVATE PR BODY" },
+        { ...item, repo: "other/repo", number: 44, body: "OTHER PROJECT BODY" }] });
+    } } as any;
+    const result = await searchGithubIssues(plugins, "project:ours", "Fix");
+    expect(calls).toEqual([{ method: "status", input: null }, { method: "listItems", input: { kind: "issue", repo: "Owner/Repo", query: "Fix" } }]);
+    expect(result.items).toEqual([{ repo: "Owner/Repo", number: 42, title: "Fix selection", state: "OPEN", updatedAt: item.updatedAt }]);
+    expect(JSON.stringify(result)).not.toContain("SECRET ISSUE BODY");
+    expect(JSON.stringify(result)).not.toContain("PRIVATE PR BODY");
+    expect(JSON.stringify(result)).not.toContain("OTHER PROJECT BODY");
+  });
+  it("keeps picker errors explicit and never lists issues when GitHub auth is unavailable", async () => {
+    const needsAuth = plugin({ ...status, ghState: "needs_configuration", ghOk: false });
+    expect(await searchGithubIssues(needsAuth.plugins, "project:ours", "fix"))
+      .toEqual({ state: "needs_configuration", lastSyncedAt: status.lastSyncedAt, items: [] });
+    expect(needsAuth.calls).toEqual(["status"]);
+    expect((await searchGithubIssues({ callRpc: async () => { throw new Error("offline"); } } as any, "project:ours", "fix")).state)
+      .toBe("plugin_unavailable");
+  });
   it("projects only display fields and never returns body", async () => {
     const fake = plugin();
     const result = await readGithubRepo(fake.plugins, "project:ours", "owner/repo");
@@ -155,7 +178,7 @@ describe("issue card presentation and routing", () => {
       shape: { ...shape, props: { w: 470, h: 256, schemaVersion: 2 } },
     } as any));
     expect(html).toContain('data-github-issue-unlinked=""');
-    expect(html).toContain('aria-label="GitHub issue URL"');
+    expect(html).toContain('role="combobox"');
     expect(html).toContain('data-canvas-interactive=""');
     expect(html).not.toContain('<article data-canvas-interactive');
   });

@@ -1,5 +1,11 @@
 # Canvas GitHub issue card (2026-09-23)
 
+## Follow-up implementation
+
+The shipped placement flow now creates an unlinked shared card immediately. Its URL/search draft stays local while the card can be moved, resized, copied, and left on the canvas. Linking stores one canonical `issueUrl` field in version-2 props; version-1 linked cards remain readable. The unlinked card offers a keyboard-accessible cached-issue picker and a URL paste fallback. Picker results come from the installed GitHub plugin's cache-only `listItems` RPC, limited to repositories tracked by this Canvas project's ID and projected to issue identity, title, state, and update time. Pull requests are excluded. The plugin cache is bounded, so missing picker results do not imply a missing or deleted issue.
+
+The picker interaction contract's unfixed RED was: `AssertionError: unlinked card must expose an issue search combobox: expected null not to be null` (`plugins/canvas/tests/github-issue-picker.test.tsx`). After implementation, the contract test and pointer-selection test passed. The live Canvas RPC returned only the configured project's cached issues; a `cohort` query returned three matching issue titles.
+
 ## Decision and scope
 
 The BB Canvas plugin adds a read-only GitHub issue card. The toolbar has an Issue button. Placing it opens a local URL-entry draft; submitting a valid `https://github.com/<owner>/<repo>/issues/<number>` URL for a repository tracked by the Canvas project creates a shared card. The card can be freely resized. It displays the issue number as a new-tab link, title, open/closed state, labels, assignee, author, issue update time, and the BB GitHub plugin's **global** sync time. Clicking the card selects it. The GitHub-style HTML mockup in the thread's reports directory is the visual reference; use the number link in the large card's header.

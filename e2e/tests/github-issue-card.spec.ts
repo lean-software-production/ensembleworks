@@ -12,7 +12,7 @@ for (const [width, height] of [[260, 170], [470, 256]]) {
     const bounds = await card.boundingBox()
     expect(bounds).not.toBeNull()
     expect(await card.getAttribute('data-canvas-interactive')).toBeNull()
-    await expect(card.locator('form[data-canvas-interactive] input[aria-label="GitHub issue URL"]')).toBeVisible()
+    await expect(card.locator('form[data-canvas-interactive] input[role="combobox"]')).toBeVisible()
     await expect(card.locator('button[type="submit"]')).toBeVisible()
     for (const element of await card.locator('h2, form, p').all()) {
       const box = await element.boundingBox()

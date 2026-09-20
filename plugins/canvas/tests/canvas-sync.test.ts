@@ -152,7 +152,7 @@ describe("the room over bb rpc + realtime", () => {
     const writer = await connect(host, "upgraded-writer");
     writer.peer.doc.putPage({ id: "page:p", name: "P" });
     writer.peer.putShape(githubIssue("shape:issue"));
-    writer.peer.putShape({ ...githubIssue("shape:unlinked"), props: { w: 470, h: 256, schemaVersion: 2 } });
+    writer.peer.putShape({ ...(githubIssue("shape:unlinked") as object), props: { w: 470, h: 256, schemaVersion: 2 } } as never);
     await writer.pump();
     expect((await debug(host)).shapeIds).toContain("shape:issue");
 

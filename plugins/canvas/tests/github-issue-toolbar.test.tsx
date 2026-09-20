@@ -105,7 +105,7 @@ it("leaves an unlinked card in place after a rejected URL, then links it through
   const shape = { id: "shape:issue", kind: "github-issue", parentId: "page:p", index: "a1", x: 0, y: 0,
     rotation: 0, isLocked: false, opacity: 1, meta: {}, props: { w: 470, h: 256, schemaVersion: 2 } };
   await act(async () => root.render(createElement(GithubIssueShape, { shape, dispatch } as any)));
-  const input = host.querySelector('input[aria-label="GitHub issue URL"]') as HTMLInputElement;
+  const input = host.querySelector('input[role="combobox"]') as HTMLInputElement;
   const form = host.querySelector("form") as HTMLFormElement;
   const setUrl = async (url: string) => act(async () => {
     Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "value")!.set!.call(input, url);

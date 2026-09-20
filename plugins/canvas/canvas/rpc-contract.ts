@@ -2,7 +2,7 @@ import { defineRpcContract } from "@get-bb/plugin-sdk";
 import { z } from "zod";
 import { MAX_PATH_LENGTH } from "./dock/where.js";
 import { MAX_NAME_LENGTH } from "./identity.js";
-import { githubRepoResponseSchema, githubStatusResponseSchema } from "./github-issue.js";
+import { githubPickerResponseSchema, githubRepoResponseSchema, githubStatusResponseSchema } from "./github-issue.js";
 
 /** A client address minted by transport.ts's `newClientId()`. */
 const clientIdSchema = z.string().trim().min(1).max(128);
@@ -34,6 +34,7 @@ const pathSchema = z
 export const rpcContract = defineRpcContract({
   canvas_github_status: { input: z.null(), output: githubStatusResponseSchema },
   canvas_github_repo: { input: z.object({ repo: z.string().regex(/^[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+$/) }).strict(), output: githubRepoResponseSchema },
+  canvas_github_picker: { input: z.object({ query: z.string().trim().max(120) }).strict(), output: githubPickerResponseSchema },
   // The client half of the canvas transport. Replies are never returned here:
   // every server -> client frame goes out over bb.realtime on CANVAS_CHANNEL,
   // because a SyncRequest can produce several frames and some server -> client

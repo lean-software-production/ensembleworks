@@ -1,8 +1,8 @@
-import { memo, useEffect, useRef, useState, type CSSProperties, type FormEvent } from "react";
+import { memo, type CSSProperties } from "react";
 import type { ShapeBodyProps } from "@ensembleworks/canvas-react";
 import { githubIssueUrl, parseGithubIssueUrl } from "../github-issue.js";
-import { githubCache, useGithubRepo, type RepoSnapshot } from "../github-cache-client.js";
-import { resolveIssueLink } from "../panel/github-draft-model.js";
+import { useGithubRepo, type RepoSnapshot } from "../github-cache-client.js";
+import { GithubIssuePicker } from "./GithubIssuePicker.js";
 
 const ink = "#1f2328", muted = "#57606a", hairline = "#d0d7de";
 
@@ -85,24 +85,6 @@ export function GithubIssueCard({ shape, repoSnapshot }: Pick<ShapeBodyProps, "s
 }
 
 function UnlinkedIssueCard({ shape, dispatch }: ShapeBodyProps) {
-  const [url, setUrl] = useState(""), [error, setError] = useState<string | null>(null);
-  const [busy, setBusy] = useState(false), token = useRef(0);
-  const linked = typeof shape.props.issueUrl === "string", linkedRef = useRef(linked); linkedRef.current = linked;
-  useEffect(() => () => { token.current++; }, []);
-  useEffect(() => { if (linked) token.current++; }, [linked]);
-  const submit = async (event: FormEvent) => {
-    event.preventDefault(); if (busy || linked) return;
-    setBusy(true); setError(null); const current = ++token.current;
-    const result = await resolveIssueLink({ url, read: (repo) => githubCache.read(repo, true),
-      isCurrent: () => current === token.current && !linkedRef.current });
-    if (result.state === "cancelled") return;
-    if (result.state === "linked") {
-      dispatch?.([{ type: "UpdateProps", id: shape.id, props: { issueUrl: githubIssueUrl(result.identity) } }]); return;
-    }
-    setError(result.state === "invalid_url" ? "Enter an https://github.com/owner/repo/issues/123 URL."
-      : result.state === "untracked" ? "That repository is not tracked by this Canvas project."
-      : "Cannot validate this repository right now. Try again later."); setBusy(false);
-  };
   const compact = Number(shape.props.w) < 360 || Number(shape.props.h) < 220;
   return <article data-shape-body="github-issue" data-github-issue-unlinked="" aria-label="Unlinked GitHub issue card"
     style={{ width: "100%", height: "100%", boxSizing: "border-box", display: "flex", flexDirection: "column", overflow: "hidden",
@@ -111,17 +93,8 @@ function UnlinkedIssueCard({ shape, dispatch }: ShapeBodyProps) {
     <header style={{ padding: compact ? "8px 11px" : "11px 16px", borderBottom: `1px solid ${hairline}`, background: "#f6f8fa", color: "#0969da", fontWeight: 650, fontSize: 12 }}>◉ GitHub issue</header>
     <div style={{ display: "flex", flex: 1, minHeight: 0, flexDirection: "column", padding: compact ? "10px 11px" : "15px 16px" }}>
       {!compact && <div style={{ color: muted, fontSize: 11, fontWeight: 750, letterSpacing: ".08em", textTransform: "uppercase" }}>New card</div>}
-      <h2 style={{ margin: compact ? "0 0 9px" : "5px 0 13px", fontSize: compact ? 15 : 18 }}>Paste an issue URL</h2>
-      <form data-canvas-interactive="" noValidate onSubmit={submit} onPointerDown={(event) => event.stopPropagation()}
-        style={{ display: "flex", gap: 7, minWidth: 0 }}>
-        <input type="url" aria-label="GitHub issue URL" value={url} onChange={(event) => { setUrl(event.target.value); setError(null); }}
-          placeholder="https://github.com/owner/repo/issues/123"
-          style={{ minWidth: 0, flex: 1, padding: compact ? "7px 8px" : "10px 11px", border: "1px solid #b9c7d8", borderRadius: 7, color: "#20304a", fontSize: 12 }} />
-        <button type="submit" disabled={busy} style={{ padding: "0 11px", border: 0, borderRadius: 7, background: "#1759a5", color: "white", fontWeight: 700, cursor: "pointer" }}>{busy ? "Checking…" : "Link"}</button>
-      </form>
-      <p role={error ? "alert" : undefined} style={{ margin: "9px 0 0", color: error ? "#ab3247" : muted, fontSize: 11, lineHeight: 1.35 }}>
-        {error ?? "Only repositories tracked by this BB project can be linked."}
-      </p>
+      <h2 style={{ margin: compact ? "0 0 9px" : "5px 0 13px", fontSize: compact ? 15 : 18 }}>Find an issue</h2>
+      <GithubIssuePicker shape={shape} dispatch={dispatch} compact={compact} />
     </div>
   </article>;
 }

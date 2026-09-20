@@ -14,7 +14,7 @@ export function useGithubIssueDraft(editor: Editor, canvas: CanvasSession, snaps
       pageId, siblings: snapshot.shapes.filter((candidate) => candidate.parentId === pageId), newId: () => `shape:${crypto.randomUUID()}` });
     canvas.dispatch([{ type: "CreateShape", shape }, { type: "SetSelection", ids: [shape.id] }]);
     setPlacing(false);
-    requestAnimationFrame(() => document.querySelector<HTMLInputElement>(`[data-shape-id="${shape.id}"] input[aria-label="GitHub issue URL"]`)?.focus());
+    requestAnimationFrame(() => document.querySelector<HTMLInputElement>(`[data-shape-id="${shape.id}"] input[role="combobox"]`)?.focus());
   }, [canvas, editor, snapshot]);
   const place = useCallback((event: PointerEvent<HTMLDivElement>) => {
     if (!placing || (event.target as Element).closest("[data-canvas-interactive]")) return;

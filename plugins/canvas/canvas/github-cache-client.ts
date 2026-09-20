@@ -1,6 +1,6 @@
 import { useEffect, useSyncExternalStore } from "react";
 import type { RpcClient } from "./panel/connection-types.js";
-import type { GithubRepoResponse } from "./github-issue.js";
+import type { GithubPickerResponse, GithubRepoResponse } from "./github-issue.js";
 
 export interface RepoSnapshot {
   readonly current: GithubRepoResponse | null; readonly lastGood: GithubRepoResponse | null; readonly loading: boolean;
@@ -53,6 +53,11 @@ export class GithubCacheClient {
       return result;
     });
     this.pending.set(key, task); return task;
+  }
+  async searchIssues(query: string): Promise<GithubPickerResponse> {
+    if (!this.rpc) return { state: "plugin_unavailable", lastSyncedAt: null, items: [] };
+    try { return await this.rpc.call("canvas_github_picker", { query: query.slice(0, 120) }); }
+    catch { return { state: "cache_error", lastSyncedAt: null, items: [] }; }
   }
   refreshAll() { for (const repo of this.listeners.keys()) void this.read(repo, true); }
   refreshOnFocus() {

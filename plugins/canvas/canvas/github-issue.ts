@@ -1,6 +1,7 @@
 import { z } from "zod";
 
 const REPO = /^[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+$/;
+export const githubRepoNameSchema = z.string().regex(REPO).refine((repo) => repo.split("/").every((part) => part !== "." && part !== ".."));
 
 export interface GithubIssueIdentity { readonly repo: string; readonly number: number }
 
@@ -29,6 +30,14 @@ export const githubRepoResponseSchema = z.object({
 }).strict();
 export type GithubRepoResponse = z.infer<typeof githubRepoResponseSchema>;
 export const isValidatedRepo = (response: GithubRepoResponse): boolean => response.state === "ready" || response.state === "needs_configuration" || response.state === "unavailable";
+
+export const githubPickerResponseSchema = z.object({
+  state: z.enum(["ready", "needs_configuration", "unavailable", "plugin_unavailable", "cache_error"]),
+  lastSyncedAt: z.string().nullable(),
+  items: z.array(z.object({ repo: githubRepoNameSchema, number: z.number().int().positive().safe(), title: z.string(),
+    state: z.string(), updatedAt: z.string() }).strict()).max(20),
+}).strict();
+export type GithubPickerResponse = z.infer<typeof githubPickerResponseSchema>;
 
 export const githubStatusResponseSchema = z.object({
   state: z.enum(["ready", "needs_configuration", "unavailable"]),

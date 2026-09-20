@@ -2,7 +2,7 @@ import type { BbPluginApi, PluginRpcHandlers } from "@get-bb/plugin-sdk";
 import { base64ToBytes } from "./base64.js";
 import { threadListArgsFor, threadPickerOptions } from "./thread-picker.js";
 import { hasThreadFrameFor } from "./thread-frames.js";
-import { readGithubRepo, readGithubStatus } from "./github-cache-server.js";
+import { readGithubRepo, readGithubStatus, searchGithubIssues } from "./github-cache-server.js";
 import type { rpcContract } from "../server.js";
 import type { CanvasRoomHost } from "./room.js";
 import { CANVAS_SCHEMA_VERSION } from "./wire.js";
@@ -51,6 +51,7 @@ export function createRpcHandlers(
   return {
     canvas_github_status: () => readGithubStatus(deps.sdk.plugins),
     canvas_github_repo: async ({ repo }) => readGithubRepo(deps.sdk.plugins, await resolveProjectId(), repo),
+    canvas_github_picker: async ({ query }) => searchGithubIssues(deps.sdk.plugins, await resolveProjectId(), query),
     canvas_join: ({ clientId, name, schemaVersion }) => {
       requireCompatibleCanvas(schemaVersion);
       room.join(clientId, Date.now(), name);
