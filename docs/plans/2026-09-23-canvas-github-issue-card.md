@@ -53,3 +53,11 @@ The mixed-version, interaction, and compact-footer repairs were completed in the
 The subsequent independent review found that, despite the footer fitting, the title collapsed at 260×170 (2.4px in stale state). The short-height layout now reserves two title lines and removes the label row at that size. A dedicated Chromium geometry test covers ready, stale, cache-miss, and loading cards. Its RED/GREEN and final checks are recorded in `/home/ensembleworks-agent/.bb/thread-storage/thr_n7frpw5ze4/github-issue-card-final-repair-evidence.md`.
 
 The second independent review found sliced warning, badge/author, and label/assignee rows at the default 470×256 size and intermediate heights. The renderer now uses compact rows below 300px, omits the label row when it cannot fit, and omits the badge row on 170px stale/auth cards while retaining the title, warning, issue link, and both timestamps. Keyboard activation of the armed Issue button opens the local draft at viewport centre; its coarse-pointer size uses the shared 44px control metric. Browser geometry, toolbar, root/plugin RED/GREEN and final gate evidence is in `/home/ensembleworks-agent/.bb/thread-storage/thr_qng7fz2uz4/github-issue-card-repair-evidence.md`.
+
+## Picker mobile layout repair (2026-09-23)
+
+The issue list previously used a fixed page-level portal, viewport coordinates, and a minimum popup width, causing the list to differ from the card width or open offscreen on an iPhone. The picker now shows a scrollable list inside the card body, following the card when moved or resized. The interaction contract asserts containment. Its genuine RED against the old implementation was:
+
+`AssertionError: issue choices must remain inside the canvas card: expected false to be true // Object.is equality`
+
+The repaired contract passes, and touch-emulated Chromium tests check open-list geometry and scrolling at 260×170 and 320×256 in a 390×844 viewport. The option rows leave touch gestures available for scrolling. A separate browser RED found the search input at 12px (`Expected: >= 16; Received: 12`); it now uses a 16px font to avoid the usual iPhone focus zoom.

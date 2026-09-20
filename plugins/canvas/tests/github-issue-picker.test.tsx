@@ -27,10 +27,13 @@ it(`interaction contract: ${contract.name}`, async () => {
     input!.dispatchEvent(new Event("input", { bubbles: true }));
   });
   await act(async () => { await new Promise((resolve) => setTimeout(resolve, 250)); });
-  expect(document.querySelector('[role="listbox"]')?.textContent).toContain(contract.option);
+  const list = document.querySelector('[role="listbox"]');
+  expect(list?.textContent).toContain(contract.option);
+  const insideCard = Boolean(host.querySelector('[data-github-issue-unlinked]')?.contains(list));
+  expect(insideCard, "issue choices must remain inside the canvas card").toBe(true);
   for (const key of contract.keys) await act(async () => input!.dispatchEvent(new KeyboardEvent("keydown", { key, bubbles: true, cancelable: true })));
   const linkedUrl = dispatch.mock.calls[0]?.[0]?.[0]?.props?.issueUrl ?? null;
-  expect(contract.check({ combobox: Boolean(input), options: [contract.option], linkedUrl })).toBeNull();
+  expect(contract.check({ combobox: Boolean(input), options: [contract.option], listInsideCard: insideCard, linkedUrl })).toBeNull();
   expect(dispatch).toHaveBeenCalledWith([{ type: "UpdateProps", id: shape.id, props: { issueUrl: contract.issueUrl } }]);
   await act(async () => root.unmount());
 });

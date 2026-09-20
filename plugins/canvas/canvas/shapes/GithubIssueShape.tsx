@@ -93,7 +93,6 @@ function UnlinkedIssueCard({ shape, dispatch }: ShapeBodyProps) {
     <header style={{ padding: compact ? "8px 11px" : "11px 16px", borderBottom: `1px solid ${hairline}`, background: "#f6f8fa", color: "#0969da", fontWeight: 650, fontSize: 12 }}>◉ GitHub issue</header>
     <div style={{ display: "flex", flex: 1, minHeight: 0, flexDirection: "column", padding: compact ? "10px 11px" : "15px 16px" }}>
       {!compact && <div style={{ color: muted, fontSize: 11, fontWeight: 750, letterSpacing: ".08em", textTransform: "uppercase" }}>New card</div>}
-      <h2 style={{ margin: compact ? "0 0 9px" : "5px 0 13px", fontSize: compact ? 15 : 18 }}>Find an issue</h2>
       <GithubIssuePicker shape={shape} dispatch={dispatch} compact={compact} />
     </div>
   </article>;

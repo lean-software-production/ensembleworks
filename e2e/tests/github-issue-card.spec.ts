@@ -1,8 +1,54 @@
 import { test, expect } from '@playwright/test'
 import { execFileSync } from 'node:child_process'
 import { fileURLToPath } from 'node:url'
+import { mkdtempSync, rmSync } from 'node:fs'
+import { tmpdir } from 'node:os'
+import { join } from 'node:path'
 
 const renderScript = fileURLToPath(new URL('../scripts/render-github-issue-card.ts', import.meta.url))
+const pickerHarness = fileURLToPath(new URL('../../plugins/canvas/tests/browser-github-issue-picker.tsx', import.meta.url))
+
+test.describe('iPhone-sized touch viewport', () => {
+  test.use({ viewport: { width: 390, height: 844 }, isMobile: true, hasTouch: true, deviceScaleFactor: 3 })
+  for (const [width, height] of [[260, 170], [320, 256]]) {
+  test(`${width}×${height} open issue picker fits the card on an iPhone viewport`, async ({ page }) => {
+    const outputDir = mkdtempSync(join(tmpdir(), 'canvas-github-picker-'))
+    const bundle = join(outputDir, 'picker.js')
+    try {
+      execFileSync('bun', ['build', pickerHarness, '--target', 'browser', '--outfile', bundle], { encoding: 'utf8' })
+      await page.setContent(`<meta name="viewport" content="width=device-width,initial-scale=1"><main id="card" style="position:absolute;right:5px;bottom:5px;width:${width}px;height:${height}px"></main>`)
+      await page.addScriptTag({ path: bundle })
+      const card = page.locator('[data-github-issue-unlinked]')
+      const input = card.getByRole('combobox')
+      expect(await input.evaluate((node) => parseFloat(getComputedStyle(node).fontSize))).toBeGreaterThanOrEqual(16)
+      await input.click()
+      const list = card.getByRole('listbox')
+      await expect(list.getByRole('option')).toHaveCount(20)
+      const cardBox = (await card.boundingBox())!
+      const listBox = (await list.boundingBox())!
+      expect(listBox.x).toBeGreaterThanOrEqual(cardBox.x - 1)
+      expect(listBox.x + listBox.width).toBeLessThanOrEqual(cardBox.x + cardBox.width + 1)
+      expect(Math.abs(listBox.width - cardBox.width)).toBeLessThanOrEqual(3)
+      expect(listBox.y).toBeGreaterThanOrEqual(cardBox.y)
+      expect(listBox.y + listBox.height).toBeLessThanOrEqual(cardBox.y + cardBox.height + 1)
+      expect(listBox.x + listBox.width).toBeLessThanOrEqual(391)
+      expect(listBox.y + listBox.height).toBeLessThanOrEqual(845)
+      expect(await list.evaluate((node) => node.scrollHeight)).toBeGreaterThan(await list.evaluate((node) => node.clientHeight))
+      const touch = await page.context().newCDPSession(page)
+      const x = listBox.x + listBox.width / 2
+      const startY = listBox.y + listBox.height - 8
+      await touch.send('Input.dispatchTouchEvent', { type: 'touchStart', touchPoints: [{ x, y: startY }] })
+      for (let step = 1; step <= 5; step++) {
+        await touch.send('Input.dispatchTouchEvent', { type: 'touchMove', touchPoints: [{ x, y: startY - step * 12 }] })
+      }
+      await touch.send('Input.dispatchTouchEvent', { type: 'touchEnd', touchPoints: [] })
+      await expect.poll(() => list.evaluate((node) => node.scrollTop)).toBeGreaterThan(0)
+    } finally {
+      rmSync(outputDir, { recursive: true, force: true })
+    }
+  })
+  }
+})
 
 for (const [width, height] of [[260, 170], [470, 256]]) {
   test(`${width}×${height} unlinked card keeps the URL form visible and leaves the body draggable`, async ({ page }) => {
