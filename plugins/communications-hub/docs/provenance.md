@@ -6,10 +6,12 @@ at commit `dd7622cba6a0618d1cb4e33c50c4b8a84fa32df9` on 12 September 2026.
 
 The import copies the source checkout's tracked files and keeps the plugin's
 own `package.json`, `package-lock.json`, tests, fixture, and BB entrypoints.
-The installed BB host reports Plugin SDK `0.4.84`, so the package's
-development-only SDK pin and corresponding lockfile entry were synchronized
-from the source's `0.4.47` to `0.4.84`; `bb plugin types --check` passes with
-that host. The EnsembleWorks preview version remains `0.1.1-preview.3`.
+At import time, the installed BB host reported Plugin SDK `0.4.84`, so the
+package's development-only SDK pin and corresponding lockfile entry were
+synchronized from the source's `0.4.47` to `0.4.84`. On 19 September 2026 the
+pin and lockfile were advanced to the current host SDK, `0.4.104`;
+`bb plugin types --check` passes with that host. The EnsembleWorks preview
+version remains `0.1.1-preview.3`.
 
 This import includes the source's reusable Zoom-room work: room-based thread
 attachments, registrant-specific links, room renewal and deletion, the Zoom
