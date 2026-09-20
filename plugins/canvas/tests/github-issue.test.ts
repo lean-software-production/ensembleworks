@@ -191,12 +191,10 @@ describe("issue card presentation and routing", () => {
       const html = renderToStaticMarkup(createElement(GithubIssueCard, {
         shape: resized, repoSnapshot: { current: { ...ready, issues: [issue] }, lastGood: null, loading: false },
       }));
-      const preview = html.match(/<p data-github-issue-body="" style="([^"]*)">([^<]*)<\/p>/);
-      return { lines: Number(preview?.[1]?.match(/-webkit-line-clamp:(\d+)/)?.[1] ?? 0), text: preview?.[2] ?? "" };
+      const preview = html.match(/<div data-github-issue-body="" style="([^"]*)"><p style="[^"]*">([^<]*)<\/p><\/div>/);
+      return { style: preview?.[1] ?? null, text: preview?.[2] ?? null };
     });
-    const [small, medium, large] = observation;
-    expect(githubIssueBodyResize.check({ smallLines: small!.lines, mediumLines: medium!.lines,
-      largeLines: large!.lines, mediumText: medium!.text, largeText: large!.text })).toBeNull();
+    expect(githubIssueBodyResize.check({ previews: observation })).toBeNull();
   });
   it("renders the URL form inside an unlinked card without making its body interactive", () => {
     const html = renderToStaticMarkup(createElement(GithubIssueShape, {

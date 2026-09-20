@@ -69,23 +69,27 @@ for (const [width, height] of [[260, 170], [470, 256]]) {
   })
 }
 
-test('issue description reveals more whole lines as the card grows', async ({ page }) => {
-  const visibleLines: number[] = []
+test('issue description stays mounted while its clipping area grows with the card', async ({ page }) => {
+  const heights: number[] = []
+  const texts: string[] = []
   for (const height of [170, 256, 420]) {
     const html = execFileSync('bun', [renderScript, 'ready', '470', String(height)], { encoding: 'utf8' })
     await page.setContent(`<div style="width:470px;height:${height}px">${html}</div>`)
     const description = page.locator('[data-github-issue-body]')
-    if (height === 170) { await expect(description).toHaveCount(0); visibleLines.push(0); continue }
-    await expect(description).toBeVisible()
+    await expect(description).toHaveCount(1)
+    texts.push((await description.textContent()) ?? '')
+    expect(await description.evaluate((node) => getComputedStyle(node).overflowY)).toBe('hidden')
+    expect(await description.evaluate((node) => getComputedStyle(node).webkitLineClamp)).toBe('none')
     const bounds = (await description.boundingBox())!
-    const lineHeight = await description.evaluate((node) => parseFloat(getComputedStyle(node).lineHeight))
-    expect(Math.abs(bounds.height / lineHeight - Math.round(bounds.height / lineHeight))).toBeLessThan(0.1)
     const footer = (await page.locator('footer').boundingBox())!
     expect(bounds.y + bounds.height).toBeLessThanOrEqual(footer.y)
-    visibleLines.push(Math.round(bounds.height / lineHeight))
+    heights.push(bounds.height)
+    expect(await description.evaluate((node) => node.scrollHeight)).toBeGreaterThan(await description.evaluate((node) => node.clientHeight))
   }
-  expect(visibleLines[1]).toBeGreaterThan(visibleLines[0]!)
-  expect(visibleLines[2]).toBeGreaterThan(visibleLines[1]!)
+  expect(texts[0]).toBe(texts[1])
+  expect(texts[1]).toBe(texts[2])
+  expect(heights[1]).toBeGreaterThan(heights[0]!)
+  expect(heights[2]).toBeGreaterThan(heights[1]!)
 })
 
 for (const state of ['ready', 'stale', 'cache-miss', 'loading'] as const) {
