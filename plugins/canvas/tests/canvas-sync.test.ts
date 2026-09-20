@@ -42,6 +42,22 @@ function shape(id: string) {
   } as never;
 }
 
+function threadFrame(id: string, threadId: string) {
+  return {
+    id,
+    kind: "bbthread",
+    parentId: "page:p",
+    props: { threadId, w: 960, h: 600 },
+    index: "a1",
+    x: 0,
+    y: 0,
+    rotation: 0,
+    isLocked: false,
+    opacity: 1,
+    meta: {},
+  } as never;
+}
+
 /**
  * Couples one client transport to a fake host: drains new realtime signals
  * addressed to this client into `transport.deliver`, and keeps going while the
@@ -122,6 +138,26 @@ function standaloneRoom() {
 }
 
 describe("the room over bb rpc + realtime", () => {
+  it("reports whether the authoritative canvas document binds a thread", async () => {
+    const host = createFakePluginHost({ pluginId: "canvas" });
+    await plugin(host.bb);
+    const client = await connect(host, "connection-reader");
+    client.peer.doc.putPage({ id: "page:p", name: "P" });
+    client.peer.putShape(threadFrame("shape:thread", "thread:connected"));
+    await client.pump();
+
+    await expect(host.harness.behavior.callRpc(
+      "canvas_thread_connection",
+      { threadId: "thread:connected" },
+    )).resolves.toEqual({ connected: true });
+    await expect(host.harness.behavior.callRpc(
+      "canvas_thread_connection",
+      { threadId: "thread:elsewhere" },
+    )).resolves.toEqual({ connected: false });
+
+    await host.harness.lifecycle.dispose();
+  });
+
   it("relays writes between clients and honors join/leave/auto-join", async () => {
     const host = createFakePluginHost({ pluginId: "canvas" });
     await plugin(host.bb);
