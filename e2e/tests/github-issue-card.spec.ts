@@ -4,6 +4,25 @@ import { fileURLToPath } from 'node:url'
 
 const renderScript = fileURLToPath(new URL('../scripts/render-github-issue-card.ts', import.meta.url))
 
+for (const [width, height] of [[260, 170], [470, 256]]) {
+  test(`${width}×${height} unlinked card keeps the URL form visible and leaves the body draggable`, async ({ page }) => {
+    const html = execFileSync('bun', [renderScript, 'unlinked', String(width), String(height)], { encoding: 'utf8' })
+    await page.setContent(`<div style="width:${width}px;height:${height}px">${html}</div>`)
+    const card = page.locator('[data-github-issue-unlinked]')
+    const bounds = await card.boundingBox()
+    expect(bounds).not.toBeNull()
+    expect(await card.getAttribute('data-canvas-interactive')).toBeNull()
+    await expect(card.locator('form[data-canvas-interactive] input[aria-label="GitHub issue URL"]')).toBeVisible()
+    await expect(card.locator('button[type="submit"]')).toBeVisible()
+    for (const element of await card.locator('h2, form, p').all()) {
+      const box = await element.boundingBox()
+      expect(box).not.toBeNull()
+      expect(box!.y + box!.height).toBeLessThanOrEqual(bounds!.y + bounds!.height + 1)
+      expect(box!.x + box!.width).toBeLessThanOrEqual(bounds!.x + bounds!.width + 1)
+    }
+  })
+}
+
 for (const state of ['ready', 'stale', 'cache-miss', 'loading'] as const) {
   test(`260×170 ${state} card keeps its primary content and timestamps in bounds`, async ({ page }) => {
     const html = execFileSync('bun', [renderScript, state], { encoding: 'utf8' })

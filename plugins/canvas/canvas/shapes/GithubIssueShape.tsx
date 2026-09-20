@@ -1,7 +1,8 @@
-import { memo, type CSSProperties } from "react";
+import { memo, useEffect, useRef, useState, type CSSProperties, type FormEvent } from "react";
 import type { ShapeBodyProps } from "@ensembleworks/canvas-react";
 import { githubIssueUrl, parseGithubIssueUrl } from "../github-issue.js";
-import { useGithubRepo, type RepoSnapshot } from "../github-cache-client.js";
+import { githubCache, useGithubRepo, type RepoSnapshot } from "../github-cache-client.js";
+import { resolveIssueLink } from "../panel/github-draft-model.js";
 
 const ink = "#1f2328", muted = "#57606a", hairline = "#d0d7de";
 
@@ -12,8 +13,10 @@ function timeLabel(raw: string | null): string {
 }
 
 export function GithubIssueCard({ shape, repoSnapshot }: Pick<ShapeBodyProps, "shape"> & { repoSnapshot: RepoSnapshot }) {
-  const identity = shape.props.schemaVersion === 1 && typeof shape.props.repo === "string" && typeof shape.props.number === "number"
-    ? parseGithubIssueUrl(`https://github.com/${shape.props.repo}/issues/${shape.props.number}`) : null;
+  const identity = shape.props.schemaVersion === 2 && typeof shape.props.issueUrl === "string"
+    ? parseGithubIssueUrl(shape.props.issueUrl)
+    : shape.props.schemaVersion === 1 && typeof shape.props.repo === "string" && typeof shape.props.number === "number"
+      ? parseGithubIssueUrl(`https://github.com/${shape.props.repo}/issues/${shape.props.number}`) : null;
   const repo = identity?.repo ?? "";
   const snapshot = repoSnapshot; const current = snapshot.current;
   const activeIssue = current?.state === "ready" && identity ? current.issues.find((issue) => issue.number === identity.number) ?? null : null;
@@ -81,10 +84,56 @@ export function GithubIssueCard({ shape, repoSnapshot }: Pick<ShapeBodyProps, "s
   );
 }
 
-function GithubIssueShapeInner({ shape }: ShapeBodyProps) {
-  const repo = typeof shape.props.repo === "string" ? shape.props.repo : "";
-  const snapshot = useGithubRepo(repo);
-  return <GithubIssueCard shape={shape} repoSnapshot={snapshot} />;
+function UnlinkedIssueCard({ shape, dispatch }: ShapeBodyProps) {
+  const [url, setUrl] = useState(""), [error, setError] = useState<string | null>(null);
+  const [busy, setBusy] = useState(false), token = useRef(0);
+  const linked = typeof shape.props.issueUrl === "string", linkedRef = useRef(linked); linkedRef.current = linked;
+  useEffect(() => () => { token.current++; }, []);
+  useEffect(() => { if (linked) token.current++; }, [linked]);
+  const submit = async (event: FormEvent) => {
+    event.preventDefault(); if (busy || linked) return;
+    setBusy(true); setError(null); const current = ++token.current;
+    const result = await resolveIssueLink({ url, read: (repo) => githubCache.read(repo, true),
+      isCurrent: () => current === token.current && !linkedRef.current });
+    if (result.state === "cancelled") return;
+    if (result.state === "linked") {
+      dispatch?.([{ type: "UpdateProps", id: shape.id, props: { issueUrl: githubIssueUrl(result.identity) } }]); return;
+    }
+    setError(result.state === "invalid_url" ? "Enter an https://github.com/owner/repo/issues/123 URL."
+      : result.state === "untracked" ? "That repository is not tracked by this Canvas project."
+      : "Cannot validate this repository right now. Try again later."); setBusy(false);
+  };
+  const compact = Number(shape.props.w) < 360 || Number(shape.props.h) < 220;
+  return <article data-shape-body="github-issue" data-github-issue-unlinked="" aria-label="Unlinked GitHub issue card"
+    style={{ width: "100%", height: "100%", boxSizing: "border-box", display: "flex", flexDirection: "column", overflow: "hidden",
+      border: `1px solid ${hairline}`, borderRadius: 7, background: "#fff", color: ink,
+      fontFamily: "-apple-system, BlinkMacSystemFont, Segoe UI, Helvetica, Arial, sans-serif", boxShadow: "0 8px 27px #283b5c1b, 0 1px 3px #22385612" }}>
+    <header style={{ padding: compact ? "8px 11px" : "11px 16px", borderBottom: `1px solid ${hairline}`, background: "#f6f8fa", color: "#0969da", fontWeight: 650, fontSize: 12 }}>◉ GitHub issue</header>
+    <div style={{ display: "flex", flex: 1, minHeight: 0, flexDirection: "column", padding: compact ? "10px 11px" : "15px 16px" }}>
+      {!compact && <div style={{ color: muted, fontSize: 11, fontWeight: 750, letterSpacing: ".08em", textTransform: "uppercase" }}>New card</div>}
+      <h2 style={{ margin: compact ? "0 0 9px" : "5px 0 13px", fontSize: compact ? 15 : 18 }}>Paste an issue URL</h2>
+      <form data-canvas-interactive="" noValidate onSubmit={submit} onPointerDown={(event) => event.stopPropagation()}
+        style={{ display: "flex", gap: 7, minWidth: 0 }}>
+        <input type="url" aria-label="GitHub issue URL" value={url} onChange={(event) => { setUrl(event.target.value); setError(null); }}
+          placeholder="https://github.com/owner/repo/issues/123"
+          style={{ minWidth: 0, flex: 1, padding: compact ? "7px 8px" : "10px 11px", border: "1px solid #b9c7d8", borderRadius: 7, color: "#20304a", fontSize: 12 }} />
+        <button type="submit" disabled={busy} style={{ padding: "0 11px", border: 0, borderRadius: 7, background: "#1759a5", color: "white", fontWeight: 700, cursor: "pointer" }}>{busy ? "Checking…" : "Link"}</button>
+      </form>
+      <p role={error ? "alert" : undefined} style={{ margin: "9px 0 0", color: error ? "#ab3247" : muted, fontSize: 11, lineHeight: 1.35 }}>
+        {error ?? "Only repositories tracked by this BB project can be linked."}
+      </p>
+    </div>
+  </article>;
+}
+
+function LinkedIssueShape({ shape }: ShapeBodyProps) {
+  const repo = shape.props.schemaVersion === 2 ? parseGithubIssueUrl(String(shape.props.issueUrl))?.repo : shape.props.repo;
+  return <GithubIssueCard shape={shape} repoSnapshot={useGithubRepo(String(repo ?? ""))} />;
+}
+
+function GithubIssueShapeInner(props: ShapeBodyProps) {
+  return props.shape.props.schemaVersion === 2 && props.shape.props.issueUrl === undefined
+    ? <UnlinkedIssueCard {...props} /> : <LinkedIssueShape {...props} />;
 }
 
 export const GithubIssueShape = memo(GithubIssueShapeInner, (a, b) => a.shape === b.shape);

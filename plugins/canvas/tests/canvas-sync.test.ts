@@ -152,6 +152,7 @@ describe("the room over bb rpc + realtime", () => {
     const writer = await connect(host, "upgraded-writer");
     writer.peer.doc.putPage({ id: "page:p", name: "P" });
     writer.peer.putShape(githubIssue("shape:issue"));
+    writer.peer.putShape({ ...githubIssue("shape:unlinked"), props: { w: 470, h: 256, schemaVersion: 2 } });
     await writer.pump();
     expect((await debug(host)).shapeIds).toContain("shape:issue");
 
@@ -160,6 +161,7 @@ describe("the room over bb rpc + realtime", () => {
     await expect(host.harness.behavior.callRpc("canvas_join", { clientId: "legacy" })).rejects.toThrow();
     await expect(host.harness.behavior.callRpc("canvas_frame", { clientId: "legacy", data: "AA==" })).rejects.toThrow();
     await expect(host.harness.behavior.callRpc("canvas_join", { clientId: "wrong", schemaVersion: 1 })).rejects.toThrow();
+    await expect(host.harness.behavior.callRpc("canvas_join", { clientId: "old-card-bundle", schemaVersion: 2 })).rejects.toThrow();
     expect((await debug(host)).clientIds).toEqual(["upgraded-writer"]);
     expect((await debug(host)).shapeIds).toContain("shape:issue");
 
@@ -167,11 +169,12 @@ describe("the room over bb rpc + realtime", () => {
     expect(reader.peer.doc.getShape("shape:issue")?.props).toEqual({
       w: 470, h: 256, schemaVersion: 1, repo: "owner/repo", number: 42,
     });
+    expect(reader.peer.doc.getShape("shape:unlinked")?.props).toEqual({ w: 470, h: 256, schemaVersion: 2 });
     writer.peer.putShape(shape("shape:later"));
     await writer.pump();
     await reader.pump();
-    expect(reader.peer.doc.listShapes().map((s) => s.id).sort()).toEqual(["shape:issue", "shape:later"]);
-    expect((await debug(host)).shapeIds.sort()).toEqual(["shape:issue", "shape:later"]);
+    expect(reader.peer.doc.listShapes().map((s) => s.id).sort()).toEqual(["shape:issue", "shape:later", "shape:unlinked"]);
+    expect((await debug(host)).shapeIds.sort()).toEqual(["shape:issue", "shape:later", "shape:unlinked"]);
     await host.harness.lifecycle.dispose();
   });
   it("reports whether the authoritative canvas document binds a thread", async () => {

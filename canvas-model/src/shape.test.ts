@@ -51,8 +51,11 @@ console.log('ok: shape schema')
 
 const githubIssue = { ...note, id: 'shape:issue', kind: 'github-issue', props: { w: 470, h: 256, schemaVersion: 1, repo: 'owner/repo', number: 42 } }
 assert.ok(validateShape(githubIssue).ok, 'versioned identity and layout validate')
+assert.ok(validateShape({ ...githubIssue, props: { w: 470, h: 256, schemaVersion: 2 } }).ok, 'v2 unlinked issue validates')
+assert.ok(validateShape({ ...githubIssue, props: { w: 470, h: 256, schemaVersion: 2, issueUrl: 'https://github.com/owner/repo/issues/42' } }).ok, 'v2 linked issue validates')
 for (const props of [
-  { ...githubIssue.props, schemaVersion: 2 },
+  { w: 470, h: 256, schemaVersion: 2, issueUrl: 'https://github.com/owner/repo/issues/9007199254740993' },
+  { w: 470, h: 256, schemaVersion: 2, issueUrl: 'https://github.com/../repo/issues/42' },
   { ...githubIssue.props, repo: 'owner/repo/other' },
   { ...githubIssue.props, repo: '../repo' },
   { ...githubIssue.props, number: 0 },

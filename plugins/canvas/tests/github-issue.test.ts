@@ -2,8 +2,8 @@ import { describe, expect, it, vi } from "vitest";
 import { githubIssueUrl, isValidatedRepo, parseGithubIssueUrl } from "../canvas/github-issue.js";
 import { readGithubRepo, readGithubStatus } from "../canvas/github-cache-server.js";
 import { GithubCacheClient } from "../canvas/github-cache-client.js";
-import { resolveIssueDraft } from "../canvas/panel/github-draft-model.js";
-import { GithubIssueCard } from "../canvas/shapes/GithubIssueShape.js";
+import { createUnlinkedIssueShape, resolveIssueLink } from "../canvas/panel/github-draft-model.js";
+import { GithubIssueCard, GithubIssueShape } from "../canvas/shapes/GithubIssueShape.js";
 import { createElement } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 
@@ -114,32 +114,31 @@ describe("per-repository Canvas cache", () => {
   });
 });
 
-describe("issue draft commit boundary", () => {
-  const base = { point: { x: 300, y: 200 }, pageId: "page:p", siblings: [],
-    isCurrent: () => true, newId: () => "shape:new",
+describe("issue placement and link boundary", () => {
+  const base = { isCurrent: () => true,
     read: async () => ({ state: "ready" as const, lastSyncedAt: status.lastSyncedAt, issues: [] }) };
-  it("keeps invalid and untracked URLs out of the document", async () => {
+  it("creates a shared unlinked card before any URL exists", () => {
+    const shape = createUnlinkedIssueShape({ point: { x: 300, y: 200 }, pageId: "page:p", siblings: [], newId: () => "shape:new" });
+    expect(shape.props).toEqual({ w: 470, h: 256, schemaVersion: 2 });
+    expect({ x: shape.x, y: shape.y }).toEqual({ x: 65, y: 72 });
+  });
+  it("keeps invalid and untracked URLs from becoming linked identities", async () => {
     const read = vi.fn(base.read);
-    expect((await resolveIssueDraft({ ...base, read, url: "https://evil.test/a/b/issues/42" })).state).toBe("invalid_url");
+    expect((await resolveIssueLink({ ...base, read, url: "https://evil.test/a/b/issues/42" })).state).toBe("invalid_url");
     expect(read).not.toHaveBeenCalled();
-    expect((await resolveIssueDraft({ ...base, url: "https://github.com/other/repo/issues/42",
+    expect((await resolveIssueLink({ ...base, url: "https://github.com/other/repo/issues/42",
       read: async () => ({ state: "untracked", lastSyncedAt: null, issues: [] }) })).state).toBe("untracked");
   });
-  it("cancels a pending validation without creating an id, then commits identity and layout only", async () => {
+  it("cancels a pending validation, then resolves identity only", async () => {
     let finish!: (value: any) => void;
     let current = true;
-    const newId = vi.fn(() => "shape:new");
-    const pending = resolveIssueDraft({ ...base, url: "https://github.com/Owner/Repo/issues/42",
-      read: () => new Promise((resolve) => { finish = resolve; }), isCurrent: () => current, newId });
+    const pending = resolveIssueLink({ ...base, url: "https://github.com/Owner/Repo/issues/42",
+      read: () => new Promise((resolve) => { finish = resolve; }), isCurrent: () => current });
     current = false;
     finish({ state: "ready", lastSyncedAt: status.lastSyncedAt, issues: [] });
     expect(await pending).toEqual({ state: "cancelled" });
-    expect(newId).not.toHaveBeenCalled();
-    const committed = await resolveIssueDraft({ ...base, url: "https://github.com/Owner/Repo/issues/42", newId });
-    expect(committed.state).toBe("created");
-    if (committed.state !== "created") throw new Error("draft did not commit");
-    expect(committed.shape.props).toEqual({ w: 470, h: 256, schemaVersion: 1, repo: "Owner/Repo", number: 42 });
-    expect({ x: committed.shape.x, y: committed.shape.y }).toEqual({ x: 65, y: 72 });
+    expect(await resolveIssueLink({ ...base, url: "https://github.com/Owner/Repo/issues/42" }))
+      .toEqual({ state: "linked", identity: { repo: "Owner/Repo", number: 42 } });
   });
 });
 
@@ -151,6 +150,15 @@ describe("issue card presentation and routing", () => {
     shape, repoSnapshot: { current, lastGood, loading: false },
   }));
   const ready = { state: "ready", lastSyncedAt: status.lastSyncedAt, issues: [item] };
+  it("renders the URL form inside an unlinked card without making its body interactive", () => {
+    const html = renderToStaticMarkup(createElement(GithubIssueShape, {
+      shape: { ...shape, props: { w: 470, h: 256, schemaVersion: 2 } },
+    } as any));
+    expect(html).toContain('data-github-issue-unlinked=""');
+    expect(html).toContain('aria-label="GitHub issue URL"');
+    expect(html).toContain('data-canvas-interactive=""');
+    expect(html).not.toContain('<article data-canvas-interactive');
+  });
   it("keeps the only navigation on the issue number while the card body remains selectable", () => {
     const html = render(ready);
     expect(html).toContain('href="https://github.com/Owner/Repo/issues/42"');

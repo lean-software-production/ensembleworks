@@ -130,7 +130,6 @@ function CanvasViewport({
         selfKey={selfKey}
         currentPageId={editorState.currentPageId}
       />
-      {issueDraft.draftUi}
       {issueDraft.placing && <div role="status" style={{ position: "absolute", zIndex: CHROME_DOCK_Z_INDEX, top: 12, left: "50%", transform: "translateX(-50%)", padding: "7px 11px", borderRadius: 6, background: "#24292f", color: "white", fontSize: 12, pointerEvents: CHROME_DOCK_POINTER_EVENTS.wrapper }}>Click the canvas to place a GitHub issue card · Esc to cancel</div>}
     </div>
   );
@@ -148,9 +147,9 @@ export function CanvasChrome({ canvas, editorState, issueDraft }: SessionViewPro
             nextShapeStyle={editorState.nextShapeStyle}
             onArmStyle={canvas.onArmStyle}
             tools={BB_TOOLBAR_TOOLS}
-            afterTools={<button type="button" data-canvas-tool="github-issue" aria-label="GitHub issue" title="GitHub issue" aria-pressed={issueDraft.placing || issueDraft.draftUi !== null} onClick={issueDraft.arm}
+            afterTools={<button type="button" data-canvas-tool="github-issue" aria-label="GitHub issue" title="GitHub issue" aria-pressed={issueDraft.placing} onClick={issueDraft.arm}
               onKeyDown={(event) => { if (issueDraft.placing && (event.key === "Enter" || event.key === " ")) { event.preventDefault(); event.stopPropagation(); issueDraft.openAtCenter(); } }}
-              style={{ width: controlSizePx(prefersCoarsePointer(), 32), height: controlSizePx(prefersCoarsePointer(), 32), display: "grid", placeItems: "center", padding: 0, border: 0, borderRadius: 6, background: issueDraft.placing || issueDraft.draftUi ? "#24292f" : "transparent", color: issueDraft.placing || issueDraft.draftUi ? "white" : "#34435b", cursor: "pointer" }}>
+              style={{ width: controlSizePx(prefersCoarsePointer(), 32), height: controlSizePx(prefersCoarsePointer(), 32), display: "grid", placeItems: "center", padding: 0, border: 0, borderRadius: 6, background: issueDraft.placing ? "#24292f" : "transparent", color: issueDraft.placing ? "white" : "#34435b", cursor: "pointer" }}>
               <svg width="19" height="19" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><path d="M12 .5C5.73.5.5 5.73.5 12c0 5.02 3.18 9.27 7.59 10.78.56.1.77-.24.77-.54 0-.27-.01-1.16-.02-2.11-3.09.67-3.74-1.31-3.74-1.31-.5-1.28-1.23-1.62-1.23-1.62-1.01-.69.08-.68.08-.68 1.12.08 1.71 1.15 1.71 1.15.99 1.7 2.6 1.21 3.24.93.1-.72.39-1.21.7-1.49-2.47-.28-5.06-1.24-5.06-5.5 0-1.21.43-2.2 1.14-2.98-.12-.28-.5-1.41.11-2.95 0 0 .93-.3 3.05 1.14A10.5 10.5 0 0 1 12 6.32c.95 0 1.91.13 2.81.38 2.12-1.44 3.05-1.14 3.05-1.14.6 1.54.23 2.67.11 2.95.71.78 1.14 1.77 1.14 2.98 0 4.27-2.59 5.22-5.07 5.5.4.34.75 1.02.75 2.06 0 1.49-.01 2.69-.01 3.05 0 .3.2.65.77.54A11.51 11.51 0 0 0 23.5 12C23.5 5.73 18.27.5 12 .5Z"/></svg>
             </button>}
             style={{ background: "transparent", border: "none", padding: 0 }}

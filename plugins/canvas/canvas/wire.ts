@@ -6,8 +6,8 @@
 /** The one room this spike serves. */
 export const ROOM_ID = "main";
 
-/** Bundles below this schema cannot safely repair a github-issue shape. */
-export const CANVAS_SCHEMA_VERSION = 2;
+/** Older bundles cannot safely repair an unlinked github-issue shape. */
+export const CANVAS_SCHEMA_VERSION = 3;
 
 /** The realtime channel every server -> client frame is published on. */
 export const CANVAS_CHANNEL = "canvas:main";
