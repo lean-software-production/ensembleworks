@@ -8,7 +8,7 @@ import { describe, expect, it } from "vitest";
 import { createFakePluginHost } from "@get-bb/plugin-sdk/testing";
 import { CanvasRoomHost } from "../canvas/room.js";
 import { CANVAS_MIGRATIONS, CanvasStore } from "../canvas/store.js";
-import { CANVAS_CHANNEL } from "../canvas/wire.js";
+import { CANVAS_CHANNEL, CANVAS_SCHEMA_VERSION } from "../canvas/wire.js";
 import {
   CF_ACCESS_EMAIL_HEADER,
   IDENTITY_ROUTE_PATH,
@@ -197,10 +197,12 @@ describe("the room's identity map", () => {
     await host.harness.behavior.callRpc("canvas_join", {
       clientId: "tab-1",
       name: "local:mrdavidlaing",
+      schemaVersion: CANVAS_SCHEMA_VERSION,
     });
     await host.harness.behavior.callRpc("canvas_join", {
       clientId: "tab-2",
       name: "local:mrdavidlaing",
+      schemaVersion: CANVAS_SCHEMA_VERSION,
     });
 
     // What a panel actually consumes: the last identity map published on the

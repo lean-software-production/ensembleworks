@@ -46,9 +46,9 @@ console.log('ok: shape-registry — registerCoreShapes() is idempotent')
 // SVG overlay, not a shape body) still correctly fall back to BoxShape —
 // proving registerCoreShapes() doesn't accidentally widen the registry
 // beyond the six core kinds it owns.
-for (const kind of ['group', 'arrow']) {
+for (const kind of ['group', 'arrow', 'github-issue']) {
   assert.equal(lookupShapeComponent(kind), BoxShape, `unregistered kind ${kind} should still fall back to BoxShape`)
 }
-console.log('ok: shape-registry — unregistered kinds (group/arrow) still fall back to BoxShape, unchanged')
+console.log('ok: shape-registry — unregistered kinds (group/arrow/github-issue) fall back to BoxShape')
 
 console.log('ok: shape-registry (registerCoreShapes wires note/frame/text/geo/draw/line to their dedicated bodies; everything else still falls back to BoxShape)')

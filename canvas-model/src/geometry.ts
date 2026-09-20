@@ -98,6 +98,7 @@ const DEFAULTS: Partial<Record<Shape['kind'], { w: number; h: number }>> = {
   geo: { w: 220, h: 120 }, frame: { w: 800, h: 600 },
   text: { w: 200, h: 40 }, image: { w: 200, h: 200 },
   bbthread: { w: 960, h: 600 },
+  'github-issue': { w: 470, h: 256 },
 }
 // Rendered size, clamped to >= 0 so inverted bounds can never reach downstream
 // rectangle math. Notes never store w/h in tldraw: their real rendered size is

@@ -5,6 +5,7 @@
 export * from './types.js'
 import type { Contract } from './types.js'
 import { armedStyleAppliesToCreatedShape } from './contracts/armed-style-applies-to-created-shape.js'
+import { githubIssueCardResizeReadable } from './contracts/github-issue-card-resize-readable.js'
 import { arrowBindsToTargetShape } from './contracts/arrow-binds-to-target-shape.js'
 import { bbthreadPaneIsSolid } from './contracts/bbthread-pane-is-solid.js'
 import { bbthreadWorkspaceIsHollow } from './contracts/bbthread-workspace-is-hollow.js'
@@ -60,6 +61,7 @@ import { switchingPageChangesRenderedShapes } from './contracts/switching-page-c
 import { toolShortcutSwitchesAndArmsTool } from './contracts/tool-shortcut-switches-and-arms-tool.js'
 
 export const CONTRACTS: readonly Contract[] = [
+  githubIssueCardResizeReadable,
   // Pilot declarations are added here, one per phase (B–F).
   scrollDirection,
   cursorLock,

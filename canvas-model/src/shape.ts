@@ -7,7 +7,7 @@ import { shapeIdField, parentIdField, type ShapeId, type ParentId } from './ids.
 // (contracts/src/shapes.ts).
 export const SHAPE_KINDS = [
   'note', 'text', 'geo', 'arrow', 'frame', 'group', 'line', 'draw', 'highlight', 'image',
-  'terminal', 'iframe', 'neko', 'roadmap', 'screenshare', 'file-viewer', 'bbthread',
+  'terminal', 'iframe', 'neko', 'roadmap', 'screenshare', 'file-viewer', 'bbthread', 'github-issue',
 ] as const
 export type ShapeKind = (typeof SHAPE_KINDS)[number]
 
@@ -283,6 +283,13 @@ const propsByKind: Record<ShapeKind, z.ZodTypeAny> = {
   // out-of-range or stale value from an older client still round-trips
   // losslessly through the doc.
   bbthread: box.extend({ name: z.string().optional(), threadId: z.string().optional(), paneFraction: z.number().optional() }),
+  'github-issue': z.strictObject({
+    w: z.number().finite().positive(),
+    h: z.number().finite().positive(),
+    schemaVersion: z.literal(1),
+    repo: z.string().regex(/^[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+$/).refine((repo) => repo.split('/').every((part) => part !== '.' && part !== '..')),
+    number: z.number().int().positive().safe(),
+  }),
 }
 
 // The strict envelope shared by every shape. props is refined per-kind below.

@@ -3,6 +3,7 @@ import { Editor, createToolContext, createToolSet } from "@ensembleworks/canvas-
 import { PresenceStore, SyncClientPeer } from "@ensembleworks/canvas-sync";
 import { registerCoreShapes, registerShape } from "@ensembleworks/canvas-react";
 import { BbThreadShape } from "../shapes/BbThreadShape.js";
+import { GithubIssueShape } from "../shapes/GithubIssueShape.js";
 import { createBbTransport, newPeerId, type BbTransport } from "../../transport.js";
 import { fetchIdentity } from "../identity.js";
 import { resolvePageId } from "../page.js";
@@ -89,6 +90,7 @@ export function useConnectionBoot({
       // errors on a second call), so re-running this effect on reconnect is
       // safe.
       registerShape("bbthread", BbThreadShape);
+      registerShape("github-issue", GithubIssueShape);
       const next: Session = {
         peer,
         editor,

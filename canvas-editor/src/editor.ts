@@ -514,8 +514,8 @@ export class Editor {
           // while its size floors). Different shapes in one intent may
           // clamp to different factors (each has its own w/h) — the
           // per-shape putShape below already makes that coherent.
-          const scaleX = clampScale(intent.scaleX, w)
-          const scaleY = clampScale(intent.scaleY, h)
+          const scaleX = clampScale(intent.scaleX, w, shape.kind === 'github-issue' ? 260 : MIN_STORED_SIZE)
+          const scaleY = clampScale(intent.scaleY, h, shape.kind === 'github-issue' ? 170 : MIN_STORED_SIZE)
           const anchor = worldToParentFrame(this.doc, shape, intent.anchor)
           const x = anchor.x + (shape.x - anchor.x) * scaleX
           const y = anchor.y + (shape.y - anchor.y) * scaleY
@@ -1307,10 +1307,10 @@ const MIN_STORED_SIZE = 1
 // the pointer returns past the floor — dragging through the anchor and back
 // lands near the floor rather than exactly retracing; exact retrace (like
 // flip itself) is part of the same Phase-4 parity item.
-function clampScale(scale: number, dim: number | undefined): number {
+function clampScale(scale: number, dim: number | undefined, minimum = MIN_STORED_SIZE): number {
   if (dim === undefined) return scale
   if (!(dim > 0)) return Math.max(scale, 0)
-  return Math.max(scale, MIN_STORED_SIZE / dim)
+  return Math.max(scale, minimum / dim)
 }
 
 // Drop any id that has an ANCESTOR also present in `ids` — the shared

@@ -10,12 +10,15 @@ import { useSessionViewport } from "./session-viewport.js";
 import { SessionView } from "./session-view.js";
 import { useThreadReturn } from "./session-thread-return.js";
 import { setBbThreadHost } from "../shapes/bbthread-host.js";
+import { githubCache } from "../github-cache-client.js";
+import { useGithubIssueDraft } from "./github-draft.js";
 
 export function CanvasSession({
   session,
   subPath,
   identities,
   selfName,
+  rpc,
 }: CanvasSessionProps) {
   const { editor, toolContext, tools, presenceStore, presencePublisher, selfKey } = session;
   const editorState = useEditorState(editor);
@@ -50,6 +53,21 @@ export function CanvasSession({
     keyboardScopeRef: viewport.panelRef,
     viewportContainerRef: viewport.viewportRef,
   });
+  const issueDraft = useGithubIssueDraft(editor, canvas, snapshot, viewport.viewportRef);
+  useEffect(() => {
+    githubCache.configure(rpc);
+    const onFocus = () => githubCache.refreshOnFocus();
+    const onVisibility = () => { if (document.visibilityState === "visible") onFocus(); };
+    window.addEventListener("focus", onFocus);
+    document.addEventListener("visibilitychange", onVisibility);
+    const timer = window.setInterval(() => void githubCache.checkStatus(), 60_000);
+    return () => {
+      window.removeEventListener("focus", onFocus);
+      document.removeEventListener("visibilitychange", onVisibility);
+      window.clearInterval(timer);
+      githubCache.configure(null);
+    };
+  }, [rpc]);
   useSessionDebug({ editor, toolContext, presenceStore, handleInput: canvas.handleInput });
   const { navigate, pageSwitcher } = useSessionPages({
     editor,
@@ -87,6 +105,7 @@ export function CanvasSession({
       canvas={canvas}
       onOpen={openThread}
       pageSwitcher={pageSwitcher}
+      issueDraft={issueDraft}
     />
   );
 }

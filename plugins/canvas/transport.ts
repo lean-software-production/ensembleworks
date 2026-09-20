@@ -10,6 +10,7 @@ import type { Transport } from "@ensembleworks/canvas-sync";
 import { base64ToBytes, bytesToBase64 } from "./canvas/base64.js";
 import {
   CANVAS_CHANNEL,
+  CANVAS_SCHEMA_VERSION,
   ROOM_ID,
   type CanvasEnvelope,
   type CanvasFramePayload,
@@ -73,7 +74,7 @@ export function createBbTransport(
       chain = chain.then(async () => {
         if (closed) return;
         try {
-          await sendFrame({ clientId, data });
+          await sendFrame({ clientId, data, schemaVersion: CANVAS_SCHEMA_VERSION });
         } catch (error) {
           onError?.(error);
         }

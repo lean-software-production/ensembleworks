@@ -14,6 +14,7 @@ import {
   CHROME_SHADOW,
 } from "../pages/chrome-dock.js";
 import type { PresencePublisher } from "../presence-publisher.js";
+import { CANVAS_SCHEMA_VERSION } from "../wire.js";
 
 export const READY_TIMEOUT_MS = 4_000;
 export const PRESENCE_POLL_MS = 150;
@@ -114,8 +115,8 @@ export function delay(ms: number): Promise<void> {
 export function joinInput(
   clientId: string,
   name: string | null,
-): { clientId: string; name?: string } {
-  return name === null ? { clientId } : { clientId, name };
+): { clientId: string; name?: string; schemaVersion: number } {
+  return name === null ? { clientId, schemaVersion: CANVAS_SCHEMA_VERSION } : { clientId, name, schemaVersion: CANVAS_SCHEMA_VERSION };
 }
 
 export function canvasDebugEnabled(): boolean {
