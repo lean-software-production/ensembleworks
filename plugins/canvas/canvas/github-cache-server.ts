@@ -1,6 +1,6 @@
 import type { BbPluginApi } from "@get-bb/plugin-sdk";
 import { z } from "zod";
-import { githubPickerResponseSchema, githubRepoNameSchema, githubRepoResponseSchema, type GithubPickerResponse, type GithubRepoResponse, type GithubStatusResponse } from "./github-issue.js";
+import { githubPickerResponseSchema, githubRepoNameSchema, githubRepoResponseSchema, githubRepoWithBodyResponseSchema, type GithubPickerResponse, type GithubRepoResponse, type GithubRepoWithBodyResponse, type GithubStatusResponse } from "./github-issue.js";
 
 const pluginStatusSchema = z.object({
   ghState: z.enum(["ready", "needs_configuration", "unavailable"]), repos: z.array(z.object({ repo: githubRepoNameSchema, projectId: z.string().nullable() })),
@@ -8,7 +8,7 @@ const pluginStatusSchema = z.object({
 });
 const pluginItemsSchema = z.object({ items: z.array(z.object({
   repo: githubRepoNameSchema, number: z.number().int().positive().safe(), kind: z.enum(["issue", "pr"]), title: z.string(),
-  state: z.string(), author: z.string(), labels: z.array(z.string()), assignees: z.array(z.string()), updatedAt: z.string(),
+  state: z.string(), author: z.string(), labels: z.array(z.string()), assignees: z.array(z.string()), updatedAt: z.string(), body: z.string(),
 })) });
 
 type Plugins = BbPluginApi["sdk"]["plugins"];
@@ -25,8 +25,23 @@ export async function readGithubStatus(plugins: Plugins): Promise<GithubStatusRe
   }
 }
 
+/** Plain-text, bounded preview of the plugin's cached Markdown body. */
+export function issueBodyPreview(body: string): string {
+  const source = body.slice(0, 8192);
+  const text = source.replace(/^\s*```[^\n]*$/gm, " ")
+    .replace(/!\[([^\]]*)\]\([^)]*\)/g, "$1")
+    .replace(/\[([^\]]+)\]\([^)]*\)/g, "$1")
+    .replace(/<[^>]+>/g, " ")
+    .replace(/^\s{0,3}(?:#{1,6}\s+|>\s*|[-*+]\s+|\d+\.\s+)/gm, "")
+    .replace(/[*`~]/g, "")
+    .replace(/\s+/g, " ").trim();
+  return text.length > 4096 || body.length > source.length ? `${text.slice(0, 4096).trimEnd()}…` : text;
+}
+
 /** Every read checks the current Canvas project against GitHub's tracked repos. */
-export async function readGithubRepo(plugins: Plugins, projectId: string, requestedRepo: string): Promise<GithubRepoResponse> {
+export function readGithubRepo(plugins: Plugins, projectId: string, requestedRepo: string): Promise<GithubRepoResponse>;
+export function readGithubRepo(plugins: Plugins, projectId: string, requestedRepo: string, withBody: true): Promise<GithubRepoWithBodyResponse>;
+export async function readGithubRepo(plugins: Plugins, projectId: string, requestedRepo: string, withBody = false): Promise<GithubRepoResponse | GithubRepoWithBodyResponse> {
   let result: Awaited<ReturnType<typeof status>>;
   try {
     result = await status(plugins);
@@ -40,8 +55,10 @@ export async function readGithubRepo(plugins: Plugins, projectId: string, reques
     const rows = await plugins.callRpc({ pluginId: "github", method: "listItems", input: { kind: "issue", repo: tracked.repo }, outputSchema: pluginItemsSchema });
     const issues = rows.items.filter((row) => row.kind === "issue" && row.repo.toLowerCase() === tracked.repo.toLowerCase()).map((row) => ({
       number: row.number, title: row.title, state: row.state, author: row.author, labels: row.labels, assignees: row.assignees, updatedAt: row.updatedAt,
+      ...(withBody ? { bodyPreview: issueBodyPreview(row.body) } : {}),
     }));
-    return githubRepoResponseSchema.parse({ state: "ready", lastSyncedAt: result.lastSyncedAt, issues });
+    const response = { state: "ready", lastSyncedAt: result.lastSyncedAt, issues };
+    return withBody ? githubRepoWithBodyResponseSchema.parse(response) : githubRepoResponseSchema.parse(response);
   } catch {
     return { state: "cache_error", lastSyncedAt: result.lastSyncedAt, issues: [] };
   }

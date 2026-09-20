@@ -1,11 +1,12 @@
 import { describe, expect, it, vi } from "vitest";
 import { githubIssueUrl, isValidatedRepo, parseGithubIssueUrl } from "../canvas/github-issue.js";
-import { readGithubRepo, readGithubStatus, searchGithubIssues } from "../canvas/github-cache-server.js";
+import { issueBodyPreview, readGithubRepo, readGithubStatus, searchGithubIssues } from "../canvas/github-cache-server.js";
 import { GithubCacheClient } from "../canvas/github-cache-client.js";
 import { createUnlinkedIssueShape, resolveIssueLink } from "../canvas/panel/github-draft-model.js";
 import { GithubIssueCard, GithubIssueShape } from "../canvas/shapes/GithubIssueShape.js";
 import { createElement } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
+import { githubIssueBodyResize } from "../../../interaction-contracts/src/index.js";
 
 const status = {
   ghOk: true, ghState: "ready", ghError: null, lastSyncedAt: "2026-09-23T12:00:00Z",
@@ -77,6 +78,16 @@ describe("project-scoped GitHub cache adapter", () => {
     expect(result.lastSyncedAt).toBe(status.lastSyncedAt);
     expect(result.issues.find((issue) => issue.number === 42)).toEqual({ number: 42, title: "Fix selection", state: "OPEN", author: "morgan", labels: ["bug"], assignees: ["alex"], updatedAt: item.updatedAt });
     expect(JSON.stringify(result)).not.toContain("SECRET ISSUE BODY");
+  });
+  it("projects a bounded plain-text body only through the versioned repo read", async () => {
+    const markdown = "# Summary\nA useful [description](https://private.test) with ![diagram](https://private.test/image.png).";
+    const fake = plugin(status, { items: [{ ...item, body: markdown }] });
+    const result = await readGithubRepo(fake.plugins, "project:ours", "owner/repo", true);
+    expect(result.issues[0]?.bodyPreview).toBe("Summary A useful description with diagram.");
+    expect(JSON.stringify(result)).not.toContain("https://private.test");
+    expect(issueBodyPreview("a".repeat(9000)).length).toBeLessThanOrEqual(4097);
+    expect(issueBodyPreview("```ts\nconst foo_bar = 1\n```")).toBe("const foo_bar = 1");
+    expect((await readGithubRepo(fake.plugins, "project:other", "owner/repo", true)).state).toBe("untracked");
   });
   it("refuses other projects and unowned extra repos before listItems", async () => {
     for (const repo of ["other/repo", "extra/repo", "untracked/repo"]) {
@@ -172,7 +183,21 @@ describe("issue card presentation and routing", () => {
   const render = (current: any, lastGood: any = null) => renderToStaticMarkup(createElement(GithubIssueCard, {
     shape, repoSnapshot: { current, lastGood, loading: false },
   }));
-  const ready = { state: "ready", lastSyncedAt: status.lastSyncedAt, issues: [item] };
+  const ready = { state: "ready" as const, lastSyncedAt: status.lastSyncedAt, issues: [item] };
+  it(`interaction contract: ${githubIssueBodyResize.name}`, () => {
+    const observation = githubIssueBodyResize.heights.map((height) => {
+      const resized = { ...shape, props: { ...shape.props, w: 470, h: height } };
+      const issue = { ...item, bodyPreview: `${githubIssueBodyResize.bodyText}. `.repeat(80) };
+      const html = renderToStaticMarkup(createElement(GithubIssueCard, {
+        shape: resized, repoSnapshot: { current: { ...ready, issues: [issue] }, lastGood: null, loading: false },
+      }));
+      const preview = html.match(/<p data-github-issue-body="" style="([^"]*)">([^<]*)<\/p>/);
+      return { lines: Number(preview?.[1]?.match(/-webkit-line-clamp:(\d+)/)?.[1] ?? 0), text: preview?.[2] ?? "" };
+    });
+    const [small, medium, large] = observation;
+    expect(githubIssueBodyResize.check({ smallLines: small!.lines, mediumLines: medium!.lines,
+      largeLines: large!.lines, mediumText: medium!.text, largeText: large!.text })).toBeNull();
+  });
   it("renders the URL form inside an unlinked card without making its body interactive", () => {
     const html = renderToStaticMarkup(createElement(GithubIssueShape, {
       shape: { ...shape, props: { w: 470, h: 256, schemaVersion: 2 } },

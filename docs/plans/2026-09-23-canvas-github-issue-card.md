@@ -20,7 +20,7 @@ No GitHub mutations, Canvas-owned GitHub credentials/API client, direct issue re
 
 ## Data boundary
 
-- Add a thin Canvas server RPC that calls the installed official GitHub plugin through `bb.sdk.plugins.callRpc`. Use `status` to obtain tracked repositories and global `lastSyncedAt`; use cache-only `listItems` for issue rows. Validate that the requested repository belongs to this Canvas plugin's configured project ID, including on every read. Return only display fields required by the card; never forward issue body or credentials.
+- Add a thin Canvas server RPC that calls the installed official GitHub plugin through `bb.sdk.plugins.callRpc`. Use `status` to obtain tracked repositories and global `lastSyncedAt`; use cache-only `listItems` for issue rows. Validate that the requested repository belongs to this Canvas plugin's configured project ID, including on every read. Return only display fields required by the card; never forward credentials. The original RPC omits issue bodies; the later approved preview uses a separately versioned RPC with bounded plain text.
 - Treat plugin-unavailable, auth/sync failure, untracked repository, missing cache row, and malformed URL distinctly. A missing row says **Not in GitHub cache**, not **deleted**: the plugin caches only a bounded newest set of open/closed issues, and a miss cannot prove deletion. Preserve the identity link when details are unavailable.
 - The plugin sync cursor is global, not proof that a particular issue was refreshed. Label it `GitHub sync` (or clearer equivalent) and explain the scope in accessible help text. Label the remote issue's `updatedAt` separately as `Issue updated`. No card refresh button.
 - Fetch on first render from Canvas's adapter. Re-read the plugin cache on panel focus and after a bounded shared status check detects a newer global sync time; deduplicate by repository so cards do not make one RPC each. An updated global cursor triggers a cache re-read but does not imply per-repo success. Keep the last successful display payload locally while a later read fails, with a visible stale/error message. Do not copy remote data into Loro.
@@ -61,3 +61,9 @@ The issue list previously used a fixed page-level portal, viewport coordinates, 
 `AssertionError: issue choices must remain inside the canvas card: expected false to be true // Object.is equality`
 
 The repaired contract passes, and touch-emulated Chromium tests check open-list geometry and scrolling at 260×170 and 320×256 in a 390×844 viewport. The option rows leave touch gestures available for scrolling. A separate browser RED found the search input at 12px (`Expected: >= 16; Received: 12`); it now uses a 16px font to avoid the usual iPhone focus zoom.
+
+## Issue description preview (2026-09-23)
+
+The user approved a read-only, plain-text preview of cached issue descriptions. The existing `canvas_github_repo` reply stays body-free for already-open clients. `canvas_github_repo_v2` projects a 4096-character Markdown-to-text excerpt from the installed GitHub plugin's cache, after the same project/repository authorization check. No issue body enters shape props or Loro. The card hides the preview at its minimum height, shows a short excerpt at medium sizes, and increases its line clamp as it grows; stale warning and existing metadata take priority when space is tight. The issue-number link opens the complete description on GitHub.
+
+The plugin-owned resize interaction contract failed against unfixed code with `AssertionError: expected 'medium issue card must show a descrip…' to be null`. Browser geometry checks cover whole preview lines and preserved title, metadata, and timestamps across the resize matrix.

@@ -12,6 +12,12 @@ function timeLabel(raw: string | null): string {
   return Number.isNaN(date.getTime()) ? "Unknown" : date.toLocaleString(undefined, { month: "short", day: "numeric", hour: "2-digit", minute: "2-digit" });
 }
 
+function bodyPreviewLines(height: number, stale: boolean): number {
+  if (height < 240) return 0;
+  const available = height < 320 ? 2 : 2 + Math.floor((height - 320) / 20);
+  return Math.max(0, Math.min(64, available - (stale ? 2 : 0)));
+}
+
 export function GithubIssueCard({ shape, repoSnapshot }: Pick<ShapeBodyProps, "shape"> & { repoSnapshot: RepoSnapshot }) {
   const identity = shape.props.schemaVersion === 2 && typeof shape.props.issueUrl === "string"
     ? parseGithubIssueUrl(shape.props.issueUrl)
@@ -32,6 +38,7 @@ export function GithubIssueCard({ shape, repoSnapshot }: Pick<ShapeBodyProps, "s
     : current.state === "cache_error" ? "GitHub cache read failed"
     : current.state === "unavailable" ? "GitHub cache unavailable"
     : !activeIssue ? "Not in GitHub cache" : null;
+  const previewLines = bodyPreviewLines(h, Boolean(status));
   const url = identity ? githubIssueUrl(identity) : null;
   const header: CSSProperties = { display: "flex", alignItems: "center", justifyContent: "space-between", gap: 8,
     minHeight: compact ? 37 : 48, padding: compact ? "7px 11px" : "10px 16px", background: "#f6f8fa", borderBottom: `1px solid ${hairline}` };
@@ -65,6 +72,9 @@ export function GithubIssueCard({ shape, repoSnapshot }: Pick<ShapeBodyProps, "s
             <span style={{ color: muted, fontSize: compact ? 10 : 11, minWidth: 0, overflow: tight ? "hidden" : undefined, textOverflow: tight ? "ellipsis" : undefined, whiteSpace: tight ? "nowrap" : undefined }}>{compact ? "by " : "Opened by "}<strong>@{issue.author || "unknown"}</strong></span>
             {tight && issue.assignees.length > 0 && <span title={`Assignees: ${issue.assignees.join(", ")}`} style={{ color: muted, fontSize: 10, minWidth: 0, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>to <strong>@{issue.assignees[0]}</strong></span>}
           </div>}
+          {previewLines > 0 && issue.bodyPreview && <p data-github-issue-body="" style={{ margin: `${tight ? 5 : 8}px 0 0`, color: muted,
+            fontSize: compact ? 11 : 12, lineHeight: "16px", overflow: "hidden", overflowWrap: "anywhere", flexShrink: 0,
+            display: "-webkit-box", WebkitBoxOrient: "vertical", WebkitLineClamp: previewLines }}>{issue.bodyPreview}</p>}
           {!tight && h >= 250 && <div style={{ display: "flex", gap: 5, alignItems: "center", marginTop: "auto", paddingTop: 8, minWidth: 0, overflow: "hidden", flexShrink: 0 }}>
             {issue.labels.slice(0, compact ? 2 : 3).map((label) => <span key={label} title={label} style={{ display: "inline-block", maxWidth: compact ? 72 : 110, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", border: "1px solid #b6e3ff", borderRadius: 999, padding: "3px 7px", background: "#ddf4ff", color: "#0969da", fontSize: 10, fontWeight: 650 }}>{label}</span>)}
             {issue.labels.length > (compact ? 2 : 3) && <span style={{ fontSize: 10, color: muted }}>+{issue.labels.length - (compact ? 2 : 3)}</span>}

@@ -1,9 +1,9 @@
 import { useEffect, useSyncExternalStore } from "react";
 import type { RpcClient } from "./panel/connection-types.js";
-import type { GithubPickerResponse, GithubRepoResponse } from "./github-issue.js";
+import type { GithubPickerResponse, GithubRepoWithBodyResponse } from "./github-issue.js";
 
 export interface RepoSnapshot {
-  readonly current: GithubRepoResponse | null; readonly lastGood: GithubRepoResponse | null; readonly loading: boolean;
+  readonly current: GithubRepoWithBodyResponse | null; readonly lastGood: GithubRepoWithBodyResponse | null; readonly loading: boolean;
 }
 const EMPTY: RepoSnapshot = { current: null, lastGood: null, loading: false };
 
@@ -11,7 +11,7 @@ export class GithubCacheClient {
   private rpc: RpcClient | null = null; private generation = 0;
   private snapshots = new Map<string, RepoSnapshot>();
   private listeners = new Map<string, Set<() => void>>();
-  private pending = new Map<string, Promise<GithubRepoResponse>>();
+  private pending = new Map<string, Promise<GithubRepoWithBodyResponse>>();
   private lastCursor: string | null | undefined = undefined; private lastFocusRead = 0;
 
   configure(rpc: RpcClient | null) {
@@ -32,7 +32,7 @@ export class GithubCacheClient {
     const key = repo.toLowerCase();
     this.snapshots.set(key, snapshot); for (const notify of this.listeners.get(key) ?? []) notify();
   }
-  async read(repo: string, force = false): Promise<GithubRepoResponse> {
+  async read(repo: string, force = false): Promise<GithubRepoWithBodyResponse> {
     const key = repo.toLowerCase();
     const pending = this.pending.get(key);
     if (pending) return pending;
@@ -42,7 +42,7 @@ export class GithubCacheClient {
     if (!rpc) return { state: "cache_error", lastSyncedAt: null, issues: [] };
     const generation = this.generation;
     this.set(key, { ...previous, loading: true });
-    const task = rpc.call("canvas_github_repo", { repo }).catch((): GithubRepoResponse => ({
+    const task = rpc.call("canvas_github_repo_v2", { repo }).catch((): GithubRepoWithBodyResponse => ({
       state: "cache_error", lastSyncedAt: previous.current?.lastSyncedAt ?? null, issues: [],
     })).then((result) => {
       if (generation === this.generation) {

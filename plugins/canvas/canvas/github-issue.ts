@@ -22,6 +22,7 @@ export const githubDisplayIssueSchema = z.object({
   number: z.number().int().positive(), title: z.string(), state: z.string(), author: z.string(),
   labels: z.array(z.string()), assignees: z.array(z.string()), updatedAt: z.string(),
 }).strict();
+export const githubDisplayIssueWithBodySchema = githubDisplayIssueSchema.extend({ bodyPreview: z.string().max(4097) }).strict();
 
 export const githubRepoResponseSchema = z.object({
   state: z.enum(["ready", "needs_configuration", "unavailable", "plugin_unavailable", "cache_error", "untracked"]),
@@ -29,6 +30,8 @@ export const githubRepoResponseSchema = z.object({
   issues: z.array(githubDisplayIssueSchema),
 }).strict();
 export type GithubRepoResponse = z.infer<typeof githubRepoResponseSchema>;
+export const githubRepoWithBodyResponseSchema = githubRepoResponseSchema.extend({ issues: z.array(githubDisplayIssueWithBodySchema) }).strict();
+export type GithubRepoWithBodyResponse = z.infer<typeof githubRepoWithBodyResponseSchema>;
 export const isValidatedRepo = (response: GithubRepoResponse): boolean => response.state === "ready" || response.state === "needs_configuration" || response.state === "unavailable";
 
 export const githubPickerResponseSchema = z.object({

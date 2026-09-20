@@ -69,6 +69,25 @@ for (const [width, height] of [[260, 170], [470, 256]]) {
   })
 }
 
+test('issue description reveals more whole lines as the card grows', async ({ page }) => {
+  const visibleLines: number[] = []
+  for (const height of [170, 256, 420]) {
+    const html = execFileSync('bun', [renderScript, 'ready', '470', String(height)], { encoding: 'utf8' })
+    await page.setContent(`<div style="width:470px;height:${height}px">${html}</div>`)
+    const description = page.locator('[data-github-issue-body]')
+    if (height === 170) { await expect(description).toHaveCount(0); visibleLines.push(0); continue }
+    await expect(description).toBeVisible()
+    const bounds = (await description.boundingBox())!
+    const lineHeight = await description.evaluate((node) => parseFloat(getComputedStyle(node).lineHeight))
+    expect(Math.abs(bounds.height / lineHeight - Math.round(bounds.height / lineHeight))).toBeLessThan(0.1)
+    const footer = (await page.locator('footer').boundingBox())!
+    expect(bounds.y + bounds.height).toBeLessThanOrEqual(footer.y)
+    visibleLines.push(Math.round(bounds.height / lineHeight))
+  }
+  expect(visibleLines[1]).toBeGreaterThan(visibleLines[0]!)
+  expect(visibleLines[2]).toBeGreaterThan(visibleLines[1]!)
+})
+
 for (const state of ['ready', 'stale', 'cache-miss', 'loading'] as const) {
   test(`260×170 ${state} card keeps its primary content and timestamps in bounds`, async ({ page }) => {
     const html = execFileSync('bun', [renderScript, state], { encoding: 'utf8' })
@@ -104,7 +123,8 @@ for (const width of [260, 360, 470]) for (const height of width === 470 ? [170, 
       const title = article.querySelector('h2')!
       const badge = [...article.querySelectorAll('span')].find((el) => el.textContent?.includes('◉ Open'))
       const label = article.querySelector('span[title="bug"]')
-      const elements = { title, warning: article.querySelector('[role="status"]'), status: badge?.parentElement, labels: label?.parentElement }
+      const elements = { title, warning: article.querySelector('[role="status"]'), status: badge?.parentElement,
+        description: article.querySelector('[data-github-issue-body]'), labels: label?.parentElement }
       return Object.entries(elements).map(([name, element]) => {
         if (!element) return { name, shown: false, visible: 0, required: 0, scroll: 0, client: 0 }
         const box = element.getBoundingClientRect()
@@ -120,7 +140,7 @@ for (const width of [260, 360, 470]) for (const height of width === 470 ? [170, 
     for (const row of rows) {
       if (!row.shown) continue
       expect(row.visible, `${state} ${height}px ${row.name}: ${JSON.stringify(row)}`).toBeGreaterThanOrEqual(row.required - 1)
-      if (row.name !== 'title') expect(row.client, `${state} ${height}px ${row.name}: ${JSON.stringify(row)}`).toBeGreaterThanOrEqual(row.scroll - 1)
+      if (row.name !== 'title' && row.name !== 'description') expect(row.client, `${state} ${height}px ${row.name}: ${JSON.stringify(row)}`).toBeGreaterThanOrEqual(row.scroll - 1)
     }
     for (const timestamp of await card.locator('footer span').all()) {
       const box = await timestamp.boundingBox()

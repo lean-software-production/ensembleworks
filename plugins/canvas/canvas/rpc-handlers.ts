@@ -51,6 +51,7 @@ export function createRpcHandlers(
   return {
     canvas_github_status: () => readGithubStatus(deps.sdk.plugins),
     canvas_github_repo: async ({ repo }) => readGithubRepo(deps.sdk.plugins, await resolveProjectId(), repo),
+    canvas_github_repo_v2: async ({ repo }) => readGithubRepo(deps.sdk.plugins, await resolveProjectId(), repo, true),
     canvas_github_picker: async ({ query }) => searchGithubIssues(deps.sdk.plugins, await resolveProjectId(), query),
     canvas_join: ({ clientId, name, schemaVersion }) => {
       requireCompatibleCanvas(schemaVersion);

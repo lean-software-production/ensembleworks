@@ -9,7 +9,8 @@ const shape = { id: 'shape:issue', kind: 'github-issue', parentId: 'page:p', ind
   rotation: 0, isLocked: false, opacity: 1, meta: {},
   props: { w: Number(process.argv[3] ?? 260), h: Number(process.argv[4] ?? 170), schemaVersion: 1, repo: 'Owner/Repo', number: 42 } } as any
 const issue = { number: 42, title: 'A long issue title that should remain readable on the smallest supported card size and across every freely resized intermediate card height without slicing any metadata',
-  state: 'OPEN', author: 'morgan', labels: ['bug', 'urgent'], assignees: ['alex'], updatedAt: '2026-09-23T09:15:00Z' }
+  state: 'OPEN', author: 'morgan', labels: ['bug', 'urgent'], assignees: ['alex'], updatedAt: '2026-09-23T09:15:00Z',
+  bodyPreview: 'The issue description should reveal more context as the card grows while keeping every other visible row readable. '.repeat(50) }
 const ready = { state: 'ready', lastSyncedAt: '2026-09-23T12:00:00Z', issues: [issue] }
 const state = process.argv[2]
 if (state === 'unlinked') {
