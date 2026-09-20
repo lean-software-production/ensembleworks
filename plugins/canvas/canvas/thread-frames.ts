@@ -15,7 +15,7 @@
 // whichever order they are rebased in). `BBTHREAD_KIND` is typed `string`,
 // not the literal, so `shape.kind === BBTHREAD_KIND` compiles whether or not
 // `'bbthread'` is a member of `ShapeKind` yet.
-import { childrenOf, type CanvasDocument } from "@ensembleworks/canvas-model";
+import { childrenOf, type CanvasDocument, type Shape } from "@ensembleworks/canvas-model";
 import { promptTextFor } from "./shape-text.js";
 
 const BBTHREAD_KIND: string = "bbthread";
@@ -44,6 +44,18 @@ export interface ThreadFrameRow {
 function stringProp(props: unknown, key: string): string | null {
   const value = (props as Record<string, unknown> | undefined)?.[key];
   return typeof value === "string" && value.trim().length > 0 ? value : null;
+}
+
+/** Whether the document currently contains a `bbthread` frame bound to this
+ * thread. Kept beside `threadFrameRows` so the CLI and header visibility use
+ * the same definition of a real binding, including the empty-string unbind
+ * convention. */
+export function hasThreadFrameFor(shapes: Iterable<Shape>, threadId: string): boolean {
+  if (threadId.trim().length === 0) return false;
+  for (const shape of shapes) {
+    if (shape.kind === BBTHREAD_KIND && stringProp(shape.props, "threadId") === threadId) return true;
+  }
+  return false;
 }
 
 /**

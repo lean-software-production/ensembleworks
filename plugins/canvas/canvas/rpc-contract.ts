@@ -119,6 +119,13 @@ export const rpcContract = defineRpcContract({
       })
       .strict(),
   },
+  /** Whether a live `bbthread` shape is currently bound to this thread. The
+   * thread-header action uses the authoritative room document rather than
+   * treating local return history as proof that a connection still exists. */
+  canvas_thread_connection: {
+    input: z.object({ threadId: z.string().trim().min(1).max(300) }).strict(),
+    output: z.object({ connected: z.boolean() }).strict(),
+  },
   /**
    * Who is in the room, by name. What the sidebar accessory's "N online" count
    * seeds itself from: the room broadcasts membership changes on

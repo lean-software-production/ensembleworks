@@ -5,7 +5,7 @@
 // children say.
 import { describe, expect, it } from "vitest";
 import { makeDocument, type Shape } from "@ensembleworks/canvas-model";
-import { formatThreadFrames, threadFrameRows } from "../canvas/thread-frames.js";
+import { formatThreadFrames, hasThreadFrameFor, threadFrameRows } from "../canvas/thread-frames.js";
 
 function shape(partial: Partial<Shape> & { id: string; kind: string; parentId: string }): Shape {
   return {
@@ -92,6 +92,20 @@ describe("threadFrameRows", () => {
       shape({ id: "shape:aaa", kind: "bbthread", parentId: "page:p" }),
     );
     expect(threadFrameRows(doc, () => "").map((row) => row.id)).toEqual(["shape:aaa", "shape:zzz"]);
+  });
+});
+
+describe("hasThreadFrameFor", () => {
+  it("only matches a non-empty threadId on a bbthread frame", () => {
+    const doc = docWith(
+      shape({ id: "shape:bound", kind: "bbthread", parentId: "page:p", props: { threadId: "thread:bound" } }),
+      shape({ id: "shape:unbound", kind: "bbthread", parentId: "page:p", props: { threadId: "" } }),
+      shape({ id: "shape:plain", kind: "frame", parentId: "page:p", props: { threadId: "thread:plain" } }),
+    );
+    expect(hasThreadFrameFor(doc.shapes, "thread:bound")).toBe(true);
+    expect(hasThreadFrameFor(doc.shapes, "thread:plain")).toBe(false);
+    expect(hasThreadFrameFor(doc.shapes, "thread:missing")).toBe(false);
+    expect(hasThreadFrameFor(doc.shapes, "")).toBe(false);
   });
 });
 

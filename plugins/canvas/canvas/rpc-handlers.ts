@@ -1,6 +1,7 @@
 import type { BbPluginApi, PluginRpcHandlers } from "@get-bb/plugin-sdk";
 import { base64ToBytes } from "./base64.js";
 import { threadListArgsFor, threadPickerOptions } from "./thread-picker.js";
+import { hasThreadFrameFor } from "./thread-frames.js";
 import type { rpcContract } from "../server.js";
 import type { CanvasRoomHost } from "./room.js";
 
@@ -78,6 +79,9 @@ export function createRpcHandlers(
       // `attachedShapeId` for why the field stays on the wire regardless.
       return { options: threadPickerOptions(rows, {}) };
     },
+    canvas_thread_connection: ({ threadId }) => ({
+      connected: hasThreadFrameFor(room.peer.doc.listShapes(), threadId),
+    }),
     // Kept as an explicit compatibility result for existing Canvas bundles.
     // Presence and Huddle now own these capabilities and their configuration.
     canvas_roster: () => ({ members: [] }),
