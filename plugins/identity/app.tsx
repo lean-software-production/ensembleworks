@@ -46,7 +46,7 @@ const REFRESH_MS = 5_000;
 /** Ownership is durable, so it is polled far less often than presence. */
 const OWNERSHIP_REFRESH_MS = 60_000;
 const volatileIds = new Map<string, string>();
-const IDENTITY_PROMPT_SESSION_KEY = "bb.identity.picker.prompted.v2";
+const IDENTITY_PROMPT_SESSION_KEY = "bb.identity.picker.prompted.v3";
 
 function claimIdentityPrompt(): boolean {
   try {
