@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { randomBytes } from "node:crypto";
-import { mintSelection, verifySelection, selectionCookie, selectionCookieName, readNamedCookie, SELECTION_COOKIE } from "./selection.js";
+import { identityMutationAllowed, mintSelection, verifySelection, selectionCookie, selectionCookieName, readNamedCookie, SELECTION_COOKIE } from "./selection.js";
 
 describe("browser selection", () => {
   const key = randomBytes(32);
@@ -30,5 +30,12 @@ describe("browser selection", () => {
     expect(readNamedCookie(`other=1; ${SELECTION_COOKIE}=abc; tail=2`)).toBe("abc");
     expect(readNamedCookie(`${SELECTION_COOKIE}=a; ${SELECTION_COOKIE}=b`)).toBeNull();
     expect(readNamedCookie(`${SELECTION_COOKIE}=${"a".repeat(1025)}`)).toBeNull();
+  });
+
+  it("accepts JSON mutations when an iOS WebView omits Origin, but rejects a foreign Origin", () => {
+    expect(identityMutationAllowed("application/json", undefined, origin)).toBe(true);
+    expect(identityMutationAllowed("application/json; charset=utf-8", origin, origin)).toBe(true);
+    expect(identityMutationAllowed("application/json", "https://evil.example", origin)).toBe(false);
+    expect(identityMutationAllowed("text/plain", undefined, origin)).toBe(false);
   });
 });

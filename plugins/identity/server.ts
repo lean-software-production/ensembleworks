@@ -30,7 +30,7 @@ import {
   type EnforcementMode,
 } from "./audit.js";
 import { parseDirectory, resolveRequester, type Person, type ResolvedIdentity } from "./people.js";
-import { mintSelection, readNamedCookie, SELECTION_COOKIE, selectionCookie, selectionCookieName, verifySelection } from "./selection.js";
+import { identityMutationAllowed, mintSelection, readNamedCookie, SELECTION_COOKIE, selectionCookie, selectionCookieName, verifySelection } from "./selection.js";
 import { QueuedRequesterLedger, digestQueuedContent } from "./queued-requester.js";
 import { PersonColorStore, SeenPeople } from "./person-store.js";
 import { buildRoster, SEEN_UNKNOWN_CAVEAT } from "./roster.js";
@@ -780,9 +780,7 @@ export default async function plugin(bb: BbPluginApi) {
   }, { auth: "local" });
 
   const jsonMutation = (c: { req: { header: (name: string) => string | undefined } }) => {
-    const type = c.req.header("content-type") ?? "";
-    const origin = c.req.header("origin");
-    return /^application\/json(?:;|$)/i.test(type) && origin === selectionPublicOrigin;
+    return identityMutationAllowed(c.req.header("content-type"), c.req.header("origin"), selectionPublicOrigin);
   };
   bb.http.route("POST", "/select-identity", async (c) => {
     if (pickerStatus() !== "ready") return c.json({ ok: false, reason: pickerStatus() }, 409);

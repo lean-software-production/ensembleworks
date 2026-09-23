@@ -1,6 +1,18 @@
 import { createHash, createHmac, randomBytes, timingSafeEqual, type KeyObject } from "node:crypto";
 
 export const SELECTION_COOKIE = "ew-identity-selection-v1";
+
+export function identityMutationAllowed(
+  contentType: string | undefined,
+  origin: string | undefined,
+  publicOrigin: string,
+): boolean {
+  if (!/^application\/json(?:;|$)/i.test(contentType ?? "")) return false;
+  // WKWebView may omit Origin for a same-origin fetch. A browser cross-origin
+  // JSON request still sends Origin (and requires a successful CORS preflight),
+  // so reject every present value except the configured public origin.
+  return origin === undefined || origin === publicOrigin;
+}
 export function selectionCookieName(origin: string): string {
   return `${SELECTION_COOKIE}-${createHash("sha256").update(origin).digest("hex").slice(0, 12)}`;
 }
