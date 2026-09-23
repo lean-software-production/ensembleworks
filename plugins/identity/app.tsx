@@ -1,5 +1,6 @@
 import "./identity.css";
 import { useCallback, useEffect, useId, useMemo, useRef, useState, type ReactNode } from "react";
+import * as Dialog from "@radix-ui/react-dialog";
 import * as Popover from "@radix-ui/react-popover";
 import {
   definePluginApp,
@@ -45,7 +46,7 @@ const REFRESH_MS = 5_000;
 /** Ownership is durable, so it is polled far less often than presence. */
 const OWNERSHIP_REFRESH_MS = 60_000;
 const volatileIds = new Map<string, string>();
-const IDENTITY_PROMPT_SESSION_KEY = "bb.identity.picker.prompted.v1";
+const IDENTITY_PROMPT_SESSION_KEY = "bb.identity.picker.prompted.v2";
 
 function claimIdentityPrompt(): boolean {
   try {
@@ -278,7 +279,6 @@ function ThreadOwnershipChip({ threadId }: { threadId: string }) {
     people: [],
   });
   const [me, setMe] = useState<WhoAmI | null>(null);
-  const triggerRef = useRef<HTMLButtonElement | null>(null);
   useEffect(() => {
     let live = true;
     void rpc.call("identity_thread_ownership", { threadIds: [threadId] }).then(({ threads }) => {
@@ -298,15 +298,6 @@ function ThreadOwnershipChip({ threadId }: { threadId: string }) {
     const timer = window.setInterval(refresh, OWNERSHIP_REFRESH_MS);
     return () => { live = false; window.clearInterval(timer); };
   }, [rpc]);
-  const anonymousPickerReady = me?.provenance === "unknown"
-    && me.picker.enabled
-    && me.picker.status === "ready"
-    && me.picker.people.length > 0;
-  useEffect(() => {
-    if (anonymousPickerReady && ownership !== null && triggerRef.current !== null && claimIdentityPrompt()) {
-      triggerRef.current.click();
-    }
-  }, [anonymousPickerReady, ownership]);
   const refreshPresence = useCallback(() => {
     void rpc.call("presence_thread", { threadId, excludeViewerId: ownViewerId })
       .then(({ viewers, typing, people }) => setPresence({ viewers, typing, people: people ?? [] }))
@@ -356,7 +347,6 @@ function ThreadOwnershipChip({ threadId }: { threadId: string }) {
     <Popover.Root key={threadId}>
       <Popover.Trigger asChild>
         <button
-          ref={triggerRef}
           type="button"
           className="identity-ownership-button"
           aria-label={triggerLabel}
@@ -611,11 +601,13 @@ function identityFooter(me: WhoAmI | null): string {
   return "You are anonymous here.";
 }
 
-export function IdentityPicker() {
+export function IdentityPicker({ onIdentityChange }: { onIdentityChange?: (identity: WhoAmI) => void } = {}) {
   const rpc = useRpc<typeof rpcContract>();
   const selectorId = useId();
   const rpcRef = useRef(rpc);
   rpcRef.current = rpc;
+  const onIdentityChangeRef = useRef(onIdentityChange);
+  onIdentityChangeRef.current = onIdentityChange;
   const [me, setMe] = useState<WhoAmI | null>(null);
   const [choice, setChoice] = useState("");
   const [editing, setEditing] = useState(false);
@@ -624,6 +616,7 @@ export function IdentityPicker() {
   const refresh = useCallback(async () => {
     const result = await rpcRef.current.call("identity_whoami");
     setMe(result);
+    onIdentityChangeRef.current?.(result);
     return result;
   }, []);
   useEffect(() => {
@@ -677,6 +670,63 @@ export function IdentityPicker() {
     </div>}
     {error && <p role="alert" style={{ color: "var(--destructive, #b91c1c)", fontSize: 12 }}>{error}</p>}
   </div>;
+}
+
+function IdentityPromptOverlay() {
+  const rpc = useRpc<typeof rpcContract>();
+  const rpcRef = useRef(rpc);
+  rpcRef.current = rpc;
+  const [me, setMe] = useState<WhoAmI | null>(null);
+  const [open, setOpen] = useState(false);
+  const refresh = useCallback(() => {
+    void rpcRef.current.call("identity_whoami").then(setMe).catch(() => undefined);
+  }, []);
+  useEffect(() => {
+    refresh();
+    const timer = window.setInterval(refresh, REFRESH_MS);
+    const onVisible = () => { if (document.visibilityState === "visible") refresh(); };
+    document.addEventListener("visibilitychange", onVisible);
+    return () => { window.clearInterval(timer); document.removeEventListener("visibilitychange", onVisible); };
+  }, [refresh]);
+  const ready = me?.provenance === "unknown"
+    && me.picker.enabled
+    && me.picker.status === "ready"
+    && me.picker.people.length > 0;
+  useEffect(() => {
+    if (ready && claimIdentityPrompt()) setOpen(true);
+    if (me !== null && !ready) setOpen(false);
+  }, [me, ready]);
+  if (!ready) return null;
+  return (
+    <Dialog.Root open={open} onOpenChange={setOpen}>
+      <Dialog.Portal>
+        <Dialog.Overlay style={{ position: "fixed", inset: 0, background: "rgb(0 0 0 / 0.45)", zIndex: 79 }} />
+        <Dialog.Content
+          aria-describedby="identity-prompt-description"
+          style={{
+            boxSizing: "border-box", position: "fixed", left: "50%", top: "50%",
+            transform: "translate(-50%, -50%)", width: 380, maxWidth: "calc(100vw - 24px)",
+            maxHeight: "calc(100dvh - 24px)", overflowY: "auto", overflowWrap: "anywhere",
+            background: "var(--popover, var(--background))", color: "var(--popover-foreground, var(--foreground))",
+            border: "1px solid var(--border)", borderRadius: 10, padding: 16, zIndex: 80,
+            boxShadow: "0 18px 48px rgb(0 0 0 / 0.25)",
+          }}
+        >
+          <Dialog.Title style={{ fontSize: 16, fontWeight: 700, margin: 0 }}>Choose your identity</Dialog.Title>
+          <Dialog.Description id="identity-prompt-description" style={{ color: "var(--muted-foreground)", fontSize: 12, margin: "6px 0 0" }}>
+            Identity cannot tell who is using this browser.
+          </Dialog.Description>
+          <IdentityPicker onIdentityChange={setMe} />
+          <div style={{ display: "flex", justifyContent: "flex-end", marginTop: 12 }}>
+            <Dialog.Close className="identity-ownership-button" style={{
+              minHeight: 40, padding: "0 14px", borderRadius: 6,
+              border: "1px solid var(--border)", background: "transparent", color: "inherit", cursor: "pointer",
+            }}>Not now</Dialog.Close>
+          </div>
+        </Dialog.Content>
+      </Dialog.Portal>
+    </Dialog.Root>
+  );
 }
 
 function PersonRow({ entry, list }: { entry: PresentPerson; list?: MachineList | null }) {
@@ -1020,6 +1070,7 @@ export default definePluginApp((app) => {
     }),
   });
   app.slots.experimental_appOverlay({ id: "presence-coordinator", component: PresenceCoordinator });
+  app.slots.experimental_appOverlay({ id: "identity-prompt", component: IdentityPromptOverlay });
   app.composer.customize({ id: "typing-awareness", scopes: ["thread"], actions: [{ id: "typing-pulse", component: TypingPulse }] });
   app.slots.experimental_threadHeaderAction({
     id: "thread-ownership",

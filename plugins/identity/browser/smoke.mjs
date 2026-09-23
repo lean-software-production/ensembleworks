@@ -69,25 +69,30 @@ try {
   }
   for (const width of [320, 390]) {
     const page = await browser.newPage({ viewport: { width, height: 720 } });
-    await page.goto(server.resolvedUrls.local[0] + '?variant=picker');
-    const trigger = page.getByRole('button', { name: /Show thread details/ });
-    const dialog = page.getByRole('dialog', { name: 'Thread details' });
-    await expect(dialog).toBeVisible();
-    await expect(dialog.getByRole('combobox', { name: 'Your name' })).toBeVisible();
-    await expect(dialog).toContainText('This does not verify who you are.');
-    await expect(dialog.getByRole('button', { name: 'Use this name' })).toBeDisabled();
-    const bounds = await dialog.boundingBox();
+    await page.goto(server.resolvedUrls.local[0] + '?variant=picker&screen=elsewhere');
+    const prompt = page.getByRole('dialog', { name: 'Choose your identity' });
+    await expect(prompt).toBeVisible();
+    await expect(page.getByText('Another BB screen with no thread header')).toBeVisible();
+    await expect(prompt.getByRole('combobox', { name: 'Your name' })).toBeVisible();
+    await expect(prompt).toContainText('This does not verify who you are.');
+    await expect(prompt.getByRole('button', { name: 'Use this name' })).toBeDisabled();
+    const bounds = await prompt.boundingBox();
     expect(bounds.x).toBeGreaterThanOrEqual(8);
     expect(bounds.x + bounds.width).toBeLessThanOrEqual(width - 8);
-    expect(await dialog.evaluate(el => el.scrollWidth <= el.clientWidth)).toBe(true);
-    await page.getByRole('button', { name: 'Close thread details' }).click();
-    await expect(dialog).toHaveCount(0);
+    expect(await prompt.evaluate(el => el.scrollWidth <= el.clientWidth)).toBe(true);
+    await page.getByRole('button', { name: 'Not now' }).click();
+    await expect(prompt).toHaveCount(0);
     await page.reload();
+    await expect(page.getByText('Another BB screen with no thread header')).toBeVisible();
+    await expect(prompt).toHaveCount(0);
+    await page.goto(server.resolvedUrls.local[0] + '?variant=picker');
+    const trigger = page.getByRole('button', { name: /Show thread details/ });
+    const details = page.getByRole('dialog', { name: 'Thread details' });
     await expect(trigger).toBeVisible();
-    await expect(dialog).toHaveCount(0);
     await trigger.click();
-    await expect(dialog).toBeVisible();
-    console.log(`PASS ${width}px picker: anonymous auto-open, dismissal survives reload, manual reopen`);
+    await expect(details).toBeVisible();
+    await expect(details.getByRole('combobox', { name: 'Your name' })).toBeVisible();
+    console.log(`PASS ${width}px picker: global prompt without thread header, dismissal survives reload, manual thread reopen`);
     await page.close();
   }
   const page = await browser.newPage({ viewport: { width: 320, height: 720 } });

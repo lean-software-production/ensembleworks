@@ -15,6 +15,10 @@ click keeps focus at its destination, complete ownership and viewer details,
 and no horizontal overflow. Screenshots are saved to `/tmp/identity-header-screenshots` (override
 with `IDENTITY_SCREENSHOTS`).
 
+The picker check also mounts Identity's app-wide overlay on a fixture screen with no
+thread header. It verifies the prompt at 320px and 390px, dismissal across a reload,
+and the thread-details picker as a manual fallback.
+
 From this checkout, with workspace dependencies and Chromium installed:
 
 ```sh

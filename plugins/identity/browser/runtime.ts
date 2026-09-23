@@ -2,6 +2,7 @@
 import type { ComponentType } from "react";
 import type { MachineList, ThreadOwnership } from "../server.js";
 export let Header: ComponentType<{ threadId: string }>;
+export let IdentityPrompt: ComponentType<Record<string, never>>;
 export const ownership: ThreadOwnership = {
   threadId: "fixture", starter: { person: "erin", displayName: "Erin Example", github: "erin" },
   via: "browser", inheritedFrom: null,
@@ -37,19 +38,20 @@ export const useBbContext = unused;
 export const useComposerView = unused;
 export const useRealtime = () => undefined;
 export const useRealtimeConnectionState = unused;
-type Slot = { id: string; component: typeof Header };
+type Slot = { id: string; component: ComponentType<any> };
 const ignore = () => undefined;
 export function definePluginApp(setup: (app: {
   contentScripts: { register: typeof ignore };
   composer: { customize: typeof ignore };
-  slots: { experimental_appOverlay: typeof ignore; settingsSection: typeof ignore; experimental_threadHeaderAction: (slot: Slot) => void };
+  slots: { experimental_appOverlay: (slot: Slot) => void; settingsSection: typeof ignore; experimental_threadHeaderAction: (slot: Slot) => void };
 }) => void) {
   setup({ contentScripts: { register: ignore }, composer: { customize: ignore }, slots: {
-    experimental_appOverlay: ignore, settingsSection: ignore,
+    experimental_appOverlay: (slot) => { if (slot.id === "identity-prompt") IdentityPrompt = slot.component; }, settingsSection: ignore,
     experimental_threadHeaderAction: (slot) => { if (slot.id === "thread-ownership") Header = slot.component; },
   } });
 }
 const variant = new URLSearchParams(window.location.search).get("variant");
+export const showHeader = new URLSearchParams(window.location.search).get("screen") !== "elsewhere";
 if (variant === "unknown") { ownership.starter = null; ownership.via = "unknown"; ownership.host = null; }
 if (variant === "automation") { ownership.starter = null; ownership.via = "plugin"; }
 if (variant === "agent") { ownership.via = "agent"; ownership.host = { kind: "unclaimed", hostId: "h", hostName: "unclaimed-box", conflict: null }; }

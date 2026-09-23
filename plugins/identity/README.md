@@ -56,10 +56,10 @@ restoring `emit` would remove the live patch.
 browser origin (for example `https://bb.example.test`, or a local HTTP origin with its
 port) and enable `selfSelectedIdentity` to offer the picker in the compact thread
 popover and People settings. The picker is an ordinary labelled select with Switch and
-Forget controls. On a thread page, the ownership popover opens automatically the first
-time an unidentified tab sees a ready picker. Dismissing it suppresses further automatic
-opens for that tab's page session; the ownership bubble still opens it on demand. It fits
-320px and 390px viewports. All tabs on one origin share the
+Forget controls. An app-wide modal opens on any BB screen the first time an unidentified
+tab sees a ready picker. Dismissing it suppresses further automatic opens for that tab's
+page session; the ownership bubble still opens the picker on demand from a thread. It
+fits 320px and 390px viewports. All tabs on one origin share the
 cookie and refresh from server `whoami` state; the UI never treats its click as proof
 that the browser retained the cookie. A private window, cleared site data, or an
 ephemeral WebView needs a fresh choice.
