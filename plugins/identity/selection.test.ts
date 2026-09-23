@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { randomBytes } from "node:crypto";
-import { identityMutationAllowed, mintSelection, verifySelection, selectionCookie, selectionCookieName, readNamedCookie, SELECTION_COOKIE } from "./selection.js";
+import { identityMutationAllowed, mintSelection, SelectionCommitStore, verifySelection, selectionCookie, selectionCookieName, readNamedCookie, SELECTION_COOKIE } from "./selection.js";
 
 describe("browser selection", () => {
   const key = randomBytes(32);
@@ -36,8 +36,16 @@ describe("browser selection", () => {
     expect(identityMutationAllowed("application/json", undefined, origin)).toBe(true);
     expect(identityMutationAllowed("application/json; charset=utf-8", origin, origin)).toBe(true);
     expect(identityMutationAllowed("application/json", "https://evil.example", origin)).toBe(false);
-    expect(identityMutationAllowed("application/json", "https://native-webview.invalid", origin, origin)).toBe(true);
-    expect(identityMutationAllowed("application/json", "https://evil.example", origin, "https://evil.example")).toBe(false);
     expect(identityMutationAllowed("text/plain", undefined, origin)).toBe(false);
+  });
+
+  it("issues bounded, one-time, expiring commit capabilities", () => {
+    const commits = new SelectionCommitStore();
+    const select = commits.issue({ action: "select", personId: "matt" }, 1_000);
+    expect(commits.consume(select, 1_001)).toEqual({ action: "select", personId: "matt" });
+    expect(commits.consume(select, 1_002)).toBeNull();
+    const forget = commits.issue({ action: "forget" }, 2_000);
+    expect(commits.consume(forget, 62_000)).toBeNull();
+    expect(commits.consume("not-a-capability", 2_001)).toBeNull();
   });
 });

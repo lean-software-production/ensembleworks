@@ -630,14 +630,10 @@ export function IdentityPicker({ onIdentityChange }: { onIdentityChange?: (ident
     setBusy(true);
     setError(null);
     try {
-      const route = action === "select" ? "select-identity" : "forget-identity";
-      const response = await fetch(`/api/v1/plugins/identity/http/${route}`, {
-        method: "POST", credentials: "same-origin", headers: {
-          "content-type": "application/json",
-          "x-identity-browser-origin": window.location.origin,
-        },
-        body: JSON.stringify(action === "select" ? { personId: choice } : {}),
-      });
+      const prepared = await rpcRef.current.call("identity_prepare_selection",
+        action === "select" ? { action, personId: choice } : { action });
+      if (!prepared.ok) throw new Error(`Identity could not prepare this choice: ${prepared.reason}.`);
+      const response = await fetch(prepared.url, { method: "GET", credentials: "same-origin", cache: "no-store" });
       if (!response.ok) {
         const payload = await response.json().catch(() => null) as { reason?: unknown } | null;
         const reason = typeof payload?.reason === "string" ? `: ${payload.reason}` : "";

@@ -1,19 +1,43 @@
 import { createHash, createHmac, randomBytes, timingSafeEqual, type KeyObject } from "node:crypto";
 
 export const SELECTION_COOKIE = "ew-identity-selection-v1";
+export type SelectionCommit = { action: "select"; personId: string } | { action: "forget" };
+const COMMIT_TOKEN = /^[A-Za-z0-9_-]{43}$/;
+const COMMIT_TTL_MS = 60_000;
+const MAX_COMMITS = 256;
+
+export class SelectionCommitStore {
+  private readonly pending = new Map<string, SelectionCommit & { expiresAt: number }>();
+
+  issue(commit: SelectionCommit, now = Date.now()): string {
+    for (const [token, entry] of this.pending) if (entry.expiresAt <= now) this.pending.delete(token);
+    while (this.pending.size >= MAX_COMMITS) this.pending.delete(this.pending.keys().next().value!);
+    const token = randomBytes(32).toString("base64url");
+    this.pending.set(token, { ...commit, expiresAt: now + COMMIT_TTL_MS });
+    return token;
+  }
+
+  consume(token: string, now = Date.now()): SelectionCommit | null {
+    if (!COMMIT_TOKEN.test(token)) return null;
+    const entry = this.pending.get(token);
+    this.pending.delete(token);
+    if (!entry || entry.expiresAt <= now) return null;
+    return entry.action === "select"
+      ? { action: "select", personId: entry.personId }
+      : { action: "forget" };
+  }
+}
 
 export function identityMutationAllowed(
   contentType: string | undefined,
   origin: string | undefined,
   publicOrigin: string,
-  browserOrigin?: string,
 ): boolean {
   if (!/^application\/json(?:;|$)/i.test(contentType ?? "")) return false;
   // WKWebView may omit Origin for a same-origin fetch. A browser cross-origin
-  // JSON request still sends Origin and cannot add our custom origin header
-  // without a successful CORS preflight. Some native WebViews rewrite Origin,
-  // so accept the page-reported origin only when it exactly matches config.
-  return origin === undefined || origin === publicOrigin || browserOrigin === publicOrigin;
+  // JSON request still sends Origin (and requires a successful CORS preflight),
+  // so reject every present value except the configured public origin.
+  return origin === undefined || origin === publicOrigin;
 }
 export function selectionCookieName(origin: string): string {
   return `${SELECTION_COOKIE}-${createHash("sha256").update(origin).digest("hex").slice(0, 12)}`;

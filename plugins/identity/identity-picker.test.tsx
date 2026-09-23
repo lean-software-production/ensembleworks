@@ -10,10 +10,11 @@ afterEach(() => { cleanup(); vi.unstubAllGlobals(); });
 const picker = { enabled: true, status: "ready", people: [
   { person: "matt", displayName: "Matt", github: "matt" },
 ] };
-function mount(whoami: WhoAmI) {
+function mount(whoami: WhoAmI, prepare = () => ({ ok: true as const, url: "/commit-selection" })) {
   renderSlot(settings, {}, { rpc: {
     identity_roster: () => ({ me: null, meViaFallback: false, people: [], seenCaveat: "", unavailable: null }),
     identity_whoami: () => whoami,
+    identity_prepare_selection: prepare,
   } });
 }
 
@@ -37,16 +38,15 @@ describe("accessible browser picker", () => {
     mount({ email: null, person: null, provenance: "unknown", selection: { status: "stale" }, picker });
     expect(await screen.findByText(/no longer in the directory/)).toBeTruthy();
   });
-  it("sends the page origin explicitly for native WebViews that rewrite Origin", async () => {
+  it("uses an RPC-minted GET capability so native WebView Origin rewriting cannot block selection", async () => {
     const request = vi.fn().mockResolvedValue({ ok: true });
     vi.stubGlobal("fetch", request);
     mount({ email: null, person: null, provenance: "unknown", selection: null, picker });
     fireEvent.change(await screen.findByRole("combobox", { name: "Your name" }), { target: { value: "matt" } });
     fireEvent.click(screen.getByRole("button", { name: "Use this name" }));
     await waitFor(() => expect(request).toHaveBeenCalled());
-    expect(request.mock.calls[0]?.[1]?.headers).toMatchObject({
-      "content-type": "application/json",
-      "x-identity-browser-origin": window.location.origin,
+    expect(request).toHaveBeenCalledWith("/commit-selection", {
+      method: "GET", credentials: "same-origin", cache: "no-store",
     });
   });
 });

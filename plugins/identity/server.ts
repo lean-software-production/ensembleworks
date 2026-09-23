@@ -30,7 +30,7 @@ import {
   type EnforcementMode,
 } from "./audit.js";
 import { parseDirectory, resolveRequester, type Person, type ResolvedIdentity } from "./people.js";
-import { identityMutationAllowed, mintSelection, readNamedCookie, SELECTION_COOKIE, selectionCookie, selectionCookieName, verifySelection } from "./selection.js";
+import { identityMutationAllowed, mintSelection, readNamedCookie, SELECTION_COOKIE, SelectionCommitStore, selectionCookie, selectionCookieName, verifySelection } from "./selection.js";
 import { QueuedRequesterLedger, digestQueuedContent } from "./queued-requester.js";
 import { PersonColorStore, SeenPeople } from "./person-store.js";
 import { buildRoster, SEEN_UNKNOWN_CAVEAT } from "./roster.js";
@@ -79,6 +79,10 @@ const whoami = z.object({
     person: z.string(), displayName: z.string(),
   }).strict()) }),
 }).strict();
+const selectionPreparation = z.discriminatedUnion("ok", [
+  z.object({ ok: z.literal(true), url: z.string() }).strict(),
+  z.object({ ok: z.literal(false), reason: z.string() }).strict(),
+]);
 const threadId = z.string().min(1).max(200);
 const hostPinConflict = z.object({
   pinnedName: z.string(),
@@ -316,6 +320,13 @@ export const rpcContract = defineRpcContract({
   identity_whoami: {
     input: z.object({}).strict().nullish(),
     output: whoami,
+  },
+  identity_prepare_selection: {
+    input: z.discriminatedUnion("action", [
+      z.object({ action: z.literal("select"), personId: z.string().min(1).max(80) }).strict(),
+      z.object({ action: z.literal("forget") }).strict(),
+    ]),
+    output: selectionPreparation,
   },
   identity_thread_starter: {
     input: z.object({ threadId }).strict(),
@@ -769,6 +780,7 @@ export default async function plugin(bb: BbPluginApi) {
   };
 
   const store = new PresenceStore();
+  const selectionCommits = new SelectionCommitStore();
   const publish = (threadIds: Iterable<string>) => {
     bb.realtime.publish("presence-changed", { threadIds: [...threadIds] });
   };
@@ -780,8 +792,7 @@ export default async function plugin(bb: BbPluginApi) {
   }, { auth: "local" });
 
   const jsonMutation = (c: { req: { header: (name: string) => string | undefined } }) => {
-    return identityMutationAllowed(c.req.header("content-type"), c.req.header("origin"), selectionPublicOrigin,
-      c.req.header("x-identity-browser-origin"));
+    return identityMutationAllowed(c.req.header("content-type"), c.req.header("origin"), selectionPublicOrigin);
   };
   const logJsonMutationRejection = (c: { req: { header: (name: string) => string | undefined } }, action: "select" | "forget") => {
     const bounded = (value: string | undefined) => value?.slice(0, 256) ?? null;
@@ -819,6 +830,27 @@ export default async function plugin(bb: BbPluginApi) {
     emitAudit(auditLine, { v: AUDIT_SCHEMA_VERSION, kind: "identity.selection", at: Date.now(),
       action: "forget", provenance: currentIdentity().provenance, ...currentRequestFields() });
     return c.json({ ok: true, whoami: whoamiFor(null, null) });
+  }, { auth: "local" });
+  bb.http.route("GET", "/commit-identity", (c) => {
+    const commit = selectionCommits.consume(c.req.query("token") ?? "");
+    if (commit === null) return c.json({ ok: false, reason: "invalid-or-expired-capability" }, 400);
+    if (pickerStatus() !== "ready") return c.json({ ok: false, reason: pickerStatus() }, 409);
+    if (commit.action === "select" && normalizeEmail(c.req.header(ACCESS_EMAIL_HEADER))) {
+      return c.json({ ok: false, reason: "upstream-identity" }, 409);
+    }
+    if (commit.action === "select" && !people.some((person) => person.person === commit.personId)) {
+      return c.json({ ok: false, reason: "not-in-directory" }, 400);
+    }
+    const token = commit.action === "select"
+      ? mintSelection(commit.personId, selectionPublicOrigin, selectionKey!)
+      : null;
+    c.header("Set-Cookie", selectionCookie(token, selectionPublicOrigin.startsWith("https:"), selectionPublicOrigin));
+    c.header("Cache-Control", "no-store");
+    emitAudit(auditLine, { v: AUDIT_SCHEMA_VERSION, kind: "identity.selection", at: Date.now(),
+      action: commit.action, ...(commit.action === "select" ? { person: commit.personId } : {}),
+      provenance: commit.action === "select" ? "self-selected" : currentIdentity().provenance,
+      ...currentRequestFields() });
+    return c.json({ ok: true, whoami: whoamiFor(null, token) });
   }, { auth: "local" });
 
   // ── Attribution (step 3): observe and record who started each thread. ─────────────
@@ -1109,6 +1141,18 @@ export default async function plugin(bb: BbPluginApi) {
 
   bb.rpc.register(rpcContract, {
     identity_whoami: () => whoamiFor(requestContext.current()?.email ?? null),
+    identity_prepare_selection: (input) => {
+      if (pickerStatus() !== "ready") return { ok: false as const, reason: pickerStatus() };
+      if (input.action === "select" && normalizeEmail(requestContext.current()?.email)) {
+        return { ok: false as const, reason: "upstream-identity" };
+      }
+      if (input.action === "select" && !people.some((person) => person.person === input.personId)) {
+        return { ok: false as const, reason: "not-in-directory" };
+      }
+      const token = selectionCommits.issue(input);
+      return { ok: true as const,
+        url: `/api/v1/plugins/identity/http/commit-identity?token=${encodeURIComponent(token)}` };
+    },
     identity_thread_starter: async ({ threadId: wanted }) => publicStarter(await ledger.get(wanted)),
     identity_thread_ownership: async ({ threadIds }) => ({
       threads: await Promise.all(threadIds.map((wanted) => ownership(wanted))),

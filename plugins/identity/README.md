@@ -74,13 +74,12 @@ The cookie name contains a short hash of the configured origin, so two BB server
 on the same host at different ports do not overwrite each other's choice. The
 cookie is host-only, `HttpOnly`, `SameSite=Lax`, `Path=/`, with `Secure` for a
 configured HTTPS origin. No forwarded protocol or host header selects its security
-attributes. The server requires JSON content for selection and forget mutations, in
-addition to BB's `auth: local` route protection. A matching standard `Origin` is
-accepted, as is a matching `X-Identity-Browser-Origin` set from `window.location.origin`;
-an absent `Origin` is accepted because iOS WebViews can omit it on same-origin fetches.
-The explicit page-origin header handles native WebViews that rewrite `Origin`.
-Cross-origin browser JSON requests cannot add that header without a successful CORS
-preflight.
+attributes. Selection and forget first use an authenticated plugin RPC to mint a random,
+one-time capability that expires after 60 seconds. A same-origin GET consumes it and sets
+the cookie. This avoids native WebViews whose rewritten `Origin` BB's HTTP CSRF gate
+rejects before a plugin route can run. The capability is memory-only, bounded to 256
+pending entries, and never persisted. Legacy direct mutations still require JSON content
+and a matching or absent `Origin`, in addition to BB's `auth: local` route protection.
 Only relative same-origin browser requests are used. A different app/API origin is
 unsupported. A missing or malformed public origin keeps the picker unavailable.
 
