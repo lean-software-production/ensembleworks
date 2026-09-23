@@ -22,12 +22,14 @@ const presentPeople = [
   { person: "alex", displayName: "Alex", github: "alex", typing: false },
   { person: "sam", displayName: "Sam", github: "sam", typing: true },
 ];
-function mount(view = ownership, list = machines, people = presentPeople) {
+function mount(view = ownership, list = machines, people = presentPeople,
+  whoami = { email: null, person: null, provenance: "unknown", selection: null,
+    picker: { enabled: true, status: "ready", people: [starter, list.me!] } }) {
   return renderSlot(registration, { threadId: view.threadId, projectId: "project-1", isCompactViewport: true }, {
     rpc: {
       identity_thread_ownership: () => ({ threads: [view] }),
       identity_machines: () => list,
-      identity_whoami: () => ({ email: "alex@example.com", person: list.me }),
+      identity_whoami: () => whoami,
       presence_thread: () => ({ viewers: people.length, typing: people.filter((entry) => entry.typing).length, people }),
     },
   });

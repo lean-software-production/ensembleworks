@@ -117,6 +117,8 @@ describe("RequestAuditor", () => {
       path: "/api/v1/threads",
       access: true,
       person: "mrdavidlaing",
+      provenance: "upstream-header",
+      captureSource: "request",
     }]);
   });
 
@@ -159,8 +161,8 @@ describe("RequestAuditor", () => {
     expect(lines).toHaveLength(1);
     expect(lines[0]).toMatchObject({ v: AUDIT_SCHEMA_VERSION, kind: "request.rollup", at: 62_000, from: 1_000, total: 31 });
     expect(lines[0]?.buckets).toEqual([
-      { method: "GET", path: "/api/v1/threads", access: true, person: "mrdavidlaing", count: 30 },
-      { method: "GET", path: "/api/v1/hosts", access: false, person: null, count: 1 },
+      { method: "GET", path: "/api/v1/threads", access: true, person: "mrdavidlaing", provenance: "upstream-header", count: 30 },
+      { method: "GET", path: "/api/v1/hosts", access: false, person: null, provenance: "unknown", count: 1 },
     ]);
   });
 
@@ -203,6 +205,8 @@ describe("dispatchAuditLine", () => {
       email: "david@example.com",
       person: david,
       viaFallback: false,
+      provenance: "upstream-header" as const,
+      captureSource: "unknown" as const,
       origin: "app" as const,
       originPluginId: null,
       lineage: ["thr_parent"],
@@ -233,6 +237,8 @@ describe("dispatchAuditLine", () => {
       threadId: "thr_new",
       email: "david@example.com",
       person: "mrdavidlaing",
+      provenance: "upstream-header",
+      captureSource: "unknown",
       viaFallback: false,
       origin: "app",
       originPluginId: null,
@@ -257,6 +263,13 @@ describe("dispatchAuditLine", () => {
     const serialized = JSON.stringify(dispatchAuditLine(base));
     expect(serialized).not.toContain("input");
     expect(serialized).not.toContain("text");
+  });
+  it("redacts cookie material and message bodies even if supplied on a facts object", () => {
+    const line = dispatchAuditLine({ ...base, facts: { ...base.facts,
+      selection: "v1.secret-signature", content: "private prompt" } as typeof base.facts });
+    const serialized = JSON.stringify(line);
+    expect(serialized).not.toContain("secret-signature");
+    expect(serialized).not.toContain("private prompt");
   });
 });
 
@@ -288,6 +301,8 @@ describe("postDispatchAuditLine", () => {
       access: true,
       email: "david@example.com",
       person: "mrdavidlaing",
+      provenance: "upstream-header",
+      captureSource: "unknown",
     });
   });
 

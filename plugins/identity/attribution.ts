@@ -1,6 +1,7 @@
 import { z } from "zod";
 import { hostRefSchema, type HostRef } from "./host-ref.js";
 import { KV_TIMEOUT_MS, TIMED_OUT, withTimeout, type KvLike } from "./kv.js";
+import type { Provenance } from "./people.js";
 
 export type { KvLike } from "./kv.js";
 export { KV_TIMEOUT_MS } from "./kv.js";
@@ -46,6 +47,8 @@ export const starterRecordSchema = z.object({
    * never as a corrupt row.
    */
   host: hostRefSchema.nullish(),
+  /** Absent on access-origin and legacy rows, preserving their old wire shape. */
+  provenance: z.enum(["self-selected", "configured-fallback", "unknown"]).optional(),
 }).strict();
 export type StarterRecord = z.infer<typeof starterRecordSchema>;
 
@@ -102,6 +105,8 @@ export type AttributionFacts = {
    * because on a fallback-configured server every agent path resolves to that person.
    */
   viaFallback: boolean;
+  provenance?: Provenance;
+  captureSource?: "request" | "queue-ledger" | "queue-content-unknown" | "capture-missing" | "unknown";
   origin: DispatchOrigin;
   originPluginId: string | null;
   lineage: readonly string[];
@@ -136,7 +141,9 @@ export function decideAttribution(
   } as const;
 
   if (facts.person !== null) {
-    return { ...base, starter: facts.person, via: viaForOrigin(facts.origin), inheritedFrom: null };
+    return { ...base, starter: facts.person, via: viaForOrigin(facts.origin), inheritedFrom: null,
+      ...(facts.provenance && facts.provenance !== "upstream-header"
+        ? { provenance: facts.provenance as "self-selected" | "configured-fallback" | "unknown" } : {}) };
   }
   for (const threadId of facts.lineage) {
     const parent = inherited(threadId);
@@ -147,6 +154,7 @@ export function decideAttribution(
         email: facts.email ?? parent.email,
         via: "agent",
         inheritedFrom: threadId,
+        ...(parent.provenance ? { provenance: parent.provenance } : {}),
       };
     }
   }
@@ -161,11 +169,12 @@ export function decideAttribution(
  */
 export type DispatchContextLike = {
   thread: { id: string; parentThreadId: string | null; sourceThreadId: string | null };
-  origin: DispatchOrigin;
-  originPluginId: string | null;
-  startedOnBehalfOf: { senderThreadId: string } | null;
+  origin: DispatchOrigin | "mixed";
+  originPluginId: string | "mixed" | null;
+  startedOnBehalfOf?: { senderThreadId: string } | null;
   parentThreadId: string | null;
-  queuedMessage: { senderThreadId: string | null } | null;
+  queuedMessage?: { senderThreadId: string | null } | null;
+  queuedMessages?: readonly { id: string; senderThreadId: string | null }[];
   /** The machine the turn will run on; null when neither environment nor intent names one. */
   host: { id: string; name: string } | null;
 };
@@ -173,7 +182,8 @@ export type DispatchContextLike = {
 /** Turn one dispatch plus the requester's identity into the facts of an attribution. */
 export function factsFromDispatch(
   context: DispatchContextLike,
-  identity: { email: string | null; person: StarterSummary | null; viaFallback?: boolean },
+  identity: { email: string | null; person: StarterSummary | null; viaFallback?: boolean; provenance?: Provenance;
+    captureSource?: AttributionFacts["captureSource"] },
   now: number,
 ): AttributionFacts {
   return {
@@ -181,14 +191,17 @@ export function factsFromDispatch(
     email: identity.email,
     person: identity.person,
     viaFallback: identity.viaFallback ?? false,
-    origin: context.origin,
-    originPluginId: context.originPluginId,
+    provenance: identity.provenance ?? (identity.viaFallback ? "configured-fallback" : identity.email ? "upstream-header" : "unknown"),
+    captureSource: identity.captureSource ?? "unknown",
+    origin: context.origin === "mixed" ? null : context.origin,
+    originPluginId: context.originPluginId === "mixed" ? null : context.originPluginId,
     lineage: lineageOf({
       threadId: context.thread.id,
       // The hook context's own parent, falling back to the thread row's.
       parentThreadId: context.parentThreadId ?? context.thread.parentThreadId,
       sourceThreadId: context.thread.sourceThreadId,
-      senderThreadIds: [context.startedOnBehalfOf?.senderThreadId, context.queuedMessage?.senderThreadId],
+      senderThreadIds: [context.startedOnBehalfOf?.senderThreadId, context.queuedMessage?.senderThreadId,
+        ...(context.queuedMessages ?? []).map((row) => row.senderThreadId)],
     }),
     host: context.host === null ? null : { id: context.host.id, name: context.host.name },
     now,
@@ -447,7 +460,9 @@ export type DispatchDeps = {
   /** Overrides the hook's overall deadline. Tests only. */
   budgetMs?: number;
   /** The requester's identity, read from the async request context. May throw. */
-  identity: () => { email: string | null; person: StarterSummary | null; viaFallback?: boolean };
+  identity: (context: DispatchContextLike) => { email: string | null; person: StarterSummary | null; viaFallback?: boolean;
+    provenance?: Provenance; captureSource?: AttributionFacts["captureSource"] } | Promise<{ email: string | null;
+    person: StarterSummary | null; viaFallback?: boolean; provenance?: Provenance; captureSource?: AttributionFacts["captureSource"] }>;
   /**
    * The audit log (stream b), injected. Absent means no audit logging at all, which is
    * what `enforcement: off` gets. It must never throw — `emitAudit` swallows — but this
@@ -499,7 +514,7 @@ export async function attributeDispatch(
 
 async function decideDispatch(context: DispatchContextLike, deps: DispatchDeps): Promise<DispatchDecision> {
   try {
-    const facts = factsFromDispatch(context, deps.identity(), deps.now());
+    const facts = factsFromDispatch(context, await deps.identity(context), deps.now());
     // One parallel storage phase, so the slowest single call — not their sum — is what
     // the dispatch waits for: this thread's own record (which is what tells a start from
     // a follow-up), its lineage's records, and the host pins' first sight of the machine.

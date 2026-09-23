@@ -246,6 +246,31 @@ function hookDeps(options: { mode: EnforcementMode; identity: () => { email: str
 }
 
 describe("attributeDispatch with the guardrail wired in", () => {
+  it("selection A, selection B, and no selection have identical policy outcomes", async () => {
+    const guard = makeGuardrail({ mode: () => "enforce", classify, machines: () => machineNames });
+    const input = (person: StarterSummary | null) => ({
+      facts: { threadId: "thr_policy", email: null, person, provenance: person ? "self-selected" as const : "unknown" as const,
+        viaFallback: false, origin: "app" as const, originPluginId: null, lineage: [],
+        host: { id: "h2", name: "ew-lsp-001-mattwynne" }, now: 1000 },
+      existing: null,
+    });
+    const outcomes = await Promise.all([david, matt, null].map((person) => guard(input(person))));
+    expect(outcomes.map((item) => item.verdict)).toEqual([{ action: "proceed" }, { action: "proceed" }, { action: "proceed" }]);
+  });
+  it("a weak starter remains display history and cannot protect a thread", async () => {
+    const guard = makeGuardrail({ mode: () => "enforce", classify, machines: () => machineNames });
+    const existing = {
+      threadId: "thr_weak", starter: matt, email: null, via: "browser" as const,
+      origin: "app" as const, originPluginId: null, inheritedFrom: null, recordedAt: 1,
+      provenance: "self-selected" as const,
+    };
+    const outcome = await guard({ facts: {
+      threadId: "thr_weak", email: "david@example.com", person: david, provenance: "upstream-header",
+      viaFallback: false, origin: "app", originPluginId: null, lineage: [],
+      host: { id: "h2", name: "ew-lsp-001-mattwynne" }, now: 2,
+    }, existing });
+    expect(outcome.verdict).toEqual({ action: "proceed" });
+  });
   it("refuses David's start on Matt's machine, and records nothing for it", async () => {
     const ledger = new AttributionLedger(kv());
     const decision = await attributeDispatch(

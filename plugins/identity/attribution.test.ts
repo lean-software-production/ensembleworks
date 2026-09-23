@@ -12,6 +12,7 @@ import {
   attributeDispatch,
   HOOK_BUDGET_MS,
   SDK_HOOK_DECISION_CEILING_MS,
+  starterRecordSchema,
 } from "./attribution.js";
 
 const matt: StarterSummary = { person: "mattwynne", displayName: "Matt", github: "mattwynne" };
@@ -168,6 +169,15 @@ class FakeKv implements KvLike {
 }
 
 describe("AttributionLedger", () => {
+  it("keeps access rows readable by the previous strict schema; weak rows cannot claim legacy ownership", () => {
+    const oldSchema = starterRecordSchema.omit({ provenance: true }).strict();
+    const access = facts({ threadId: "thr_access", email: "matt@example.com", person: matt,
+      provenance: "upstream-header" });
+    const accessRow = decideAttribution(access, () => null);
+    expect(oldSchema.safeParse(accessRow).success).toBe(true);
+    const weak = decideAttribution({ ...access, email: null, provenance: "self-selected" }, () => null);
+    expect(oldSchema.safeParse(weak).success).toBe(false);
+  });
   let kv: FakeKv;
   let ledger: AttributionLedger;
 
@@ -263,6 +273,8 @@ describe("factsFromDispatch", () => {
       email: "david@example.com",
       person: david,
       viaFallback: false,
+      provenance: "upstream-header",
+      captureSource: "unknown",
       origin: "cli",
       originPluginId: null,
       lineage: ["thr_sender", "thr_queued_sender", "thr_hook_parent", "thr_fork_source"],

@@ -67,6 +67,20 @@ try {
     console.log(`PASS ${width}px: compact owner/viewer bubbles, combined details, viewport bounds, keyboard, focus, touch/click and dismissal`);
     await context.close();
   }
+  for (const width of [320, 390]) {
+    const page = await browser.newPage({ viewport: { width, height: 720 } });
+    await page.goto(server.resolvedUrls.local[0] + '?variant=picker');
+    await page.getByRole('button', { name: /Show thread details/ }).click();
+    const dialog = page.getByRole('dialog', { name: 'Thread details' });
+    await expect(dialog.getByRole('combobox', { name: 'Your name' })).toBeVisible();
+    await expect(dialog).toContainText('This does not verify who you are.');
+    await expect(dialog.getByRole('button', { name: 'Use this name' })).toBeDisabled();
+    const bounds = await dialog.boundingBox();
+    expect(bounds.x).toBeGreaterThanOrEqual(8);
+    expect(bounds.x + bounds.width).toBeLessThanOrEqual(width - 8);
+    expect(await dialog.evaluate(el => el.scrollWidth <= el.clientWidth)).toBe(true);
+    await page.close();
+  }
   const page = await browser.newPage({ viewport: { width: 320, height: 720 } });
   for (const [variant, text] of [
     ['unknown', 'Starter not recorded'],

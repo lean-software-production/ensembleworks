@@ -2,3 +2,34 @@
   outline: 2px solid var(--ring, #2563eb);
   outline-offset: 2px;
 }
+.identity-picker-actions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+}
+.identity-picker-actions select {
+  max-width: 100%;
+  min-width: 0;
+  flex: 1 1 140px;
+  min-height: 44px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: var(--background);
+  color: inherit;
+}
+.identity-picker-actions button {
+  min-height: 44px;
+  padding: 0 12px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: var(--background);
+  color: inherit;
+  cursor: pointer;
+}
+.identity-picker-actions button:focus-visible,
+.identity-picker-actions select:focus-visible {
+  outline: 2px solid var(--ring, #2563eb);
+  outline-offset: 2px;
+}

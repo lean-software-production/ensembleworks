@@ -19,7 +19,14 @@ const presentPeople = [
 const rpc = { call: async (method: string) => {
   if (method === "identity_thread_ownership") return { threads: [ownership] };
   if (method === "identity_machines") return machines;
-  if (method === "identity_whoami") return { email: "alex@example.com", person: machines.me };
+  if (method === "identity_whoami") return variant === "picker"
+    ? { email: null, person: null, provenance: "unknown", selection: null,
+      picker: { enabled: true, status: "ready", people: [
+        { person: "alex", displayName: "Alex", github: "alex" },
+        { person: "erin", displayName: "Erin Example", github: "erin" },
+      ] } }
+    : { email: "alex@example.com", person: machines.me, provenance: "upstream-header", selection: null,
+      picker: { enabled: false, status: "off", people: [] } };
   if (method === "presence_thread") return { viewers: presentPeople.length, typing: 1, people: presentPeople };
   throw new Error(`Unexpected fixture RPC: ${method}`);
 } };

@@ -157,7 +157,7 @@ describe("colorChangeAuditLine", () => {
   });
 
   it("follows the audit schema the other streams use", () => {
-    expect(line.v).toBe(1);
+    expect(line.v).toBe(2);
     expect(line.kind).toBe("person.color");
     expect(line.at).toBe(1_700_000_000_000);
     expect(line.req).toBe("req1");

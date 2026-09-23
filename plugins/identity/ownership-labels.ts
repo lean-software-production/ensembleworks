@@ -16,6 +16,7 @@ import type { EnforcementMode } from "./audit.js";
 
 export type OwnershipView = {
   starter: StarterSummary | null;
+  provenance?: "self-selected" | "configured-fallback" | "unknown";
   via: Via;
   inheritedFrom: string | null;
   /** The machine the thread runs on, already classified; null when it is not known. */
@@ -25,6 +26,8 @@ export type OwnershipView = {
 /** "David", "an agent for David", "an automation", "someone not recorded". */
 export function starterPhrase(view: OwnershipView): string {
   const name = view.starter?.displayName ?? null;
+  if (name !== null && view.provenance === "self-selected") return `${name} (chosen in a browser; attribution only)`;
+  if (name !== null && view.provenance === "configured-fallback") return `${name} (configured fallback)`;
   switch (view.via) {
     case "agent":
       return name === null ? "an agent" : `an agent for ${name}`;
@@ -140,6 +143,7 @@ export function headerChip(
     me?: StarterSummary | null;
     /** True when `me` came from fallbackEmail; the guardrail ignores such an identity. */
     meViaFallback?: boolean;
+    meProvenance?: "upstream-header" | "self-selected" | "configured-fallback" | "unknown";
   },
 ): OwnershipChip {
   const known = view.starter !== null || view.via === "plugin";
@@ -148,7 +152,7 @@ export function headerChip(
     enforcement: options.enforcement ?? "off",
     me: options.me ?? null,
     meViaFallback: options.meViaFallback === true,
-    starter: view.starter,
+    starter: view.provenance ? null : view.starter,
     host: view.host,
   });
   const audit = would === null ? "" : ` · ${would}`;
@@ -238,10 +242,19 @@ export type OwnershipBanner = { title: string; detail: string };
  */
 export function composerBanner(input: {
   me: StarterSummary | null;
+  provenance?: "upstream-header" | "self-selected" | "configured-fallback" | "unknown";
   machines: readonly HostClassification[];
   /** The mode in force, which changes what this banner may promise. */
   enforcement: EnforcementMode;
 }): OwnershipBanner {
+  if (input.me !== null && input.provenance === "self-selected") return {
+    title: `Starting as ${input.me.displayName} (chosen in this browser)`,
+    detail: "Attribution only. This choice does not change machine guardrails.",
+  };
+  if (input.me !== null && input.provenance === "configured-fallback") return {
+    title: `Starting as ${input.me.displayName} (configured fallback)`,
+    detail: "Attribution only. This default does not change machine guardrails.",
+  };
   if (input.me === null) {
     return {
       title: "Starting as an unrecognised sign-in",
