@@ -36,6 +36,8 @@ describe("browser selection", () => {
     expect(identityMutationAllowed("application/json", undefined, origin)).toBe(true);
     expect(identityMutationAllowed("application/json; charset=utf-8", origin, origin)).toBe(true);
     expect(identityMutationAllowed("application/json", "https://evil.example", origin)).toBe(false);
+    expect(identityMutationAllowed("application/json", "https://native-webview.invalid", origin, origin)).toBe(true);
+    expect(identityMutationAllowed("application/json", "https://evil.example", origin, "https://evil.example")).toBe(false);
     expect(identityMutationAllowed("text/plain", undefined, origin)).toBe(false);
   });
 });

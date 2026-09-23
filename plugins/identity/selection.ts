@@ -6,12 +6,14 @@ export function identityMutationAllowed(
   contentType: string | undefined,
   origin: string | undefined,
   publicOrigin: string,
+  browserOrigin?: string,
 ): boolean {
   if (!/^application\/json(?:;|$)/i.test(contentType ?? "")) return false;
   // WKWebView may omit Origin for a same-origin fetch. A browser cross-origin
-  // JSON request still sends Origin (and requires a successful CORS preflight),
-  // so reject every present value except the configured public origin.
-  return origin === undefined || origin === publicOrigin;
+  // JSON request still sends Origin and cannot add our custom origin header
+  // without a successful CORS preflight. Some native WebViews rewrite Origin,
+  // so accept the page-reported origin only when it exactly matches config.
+  return origin === undefined || origin === publicOrigin || browserOrigin === publicOrigin;
 }
 export function selectionCookieName(origin: string): string {
   return `${SELECTION_COOKIE}-${createHash("sha256").update(origin).digest("hex").slice(0, 12)}`;

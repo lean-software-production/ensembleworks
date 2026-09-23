@@ -1,12 +1,12 @@
 // @vitest-environment jsdom
-import { afterEach, describe, expect, it } from "vitest";
-import { cleanup, fireEvent, screen } from "@testing-library/react";
+import { afterEach, describe, expect, it, vi } from "vitest";
+import { cleanup, fireEvent, screen, waitFor } from "@testing-library/react";
 import { loadPluginApp, renderSlot } from "@get-bb/plugin-sdk/testing/app";
 import type { WhoAmI } from "./server.js";
 
 const app = await loadPluginApp(() => import("./app.js"));
 const settings = app.settingsSections.find((section) => section.id === "people")!;
-afterEach(cleanup);
+afterEach(() => { cleanup(); vi.unstubAllGlobals(); });
 const picker = { enabled: true, status: "ready", people: [
   { person: "matt", displayName: "Matt", github: "matt" },
 ] };
@@ -36,5 +36,17 @@ describe("accessible browser picker", () => {
   it("asks for reselection when a directory entry has gone", async () => {
     mount({ email: null, person: null, provenance: "unknown", selection: { status: "stale" }, picker });
     expect(await screen.findByText(/no longer in the directory/)).toBeTruthy();
+  });
+  it("sends the page origin explicitly for native WebViews that rewrite Origin", async () => {
+    const request = vi.fn().mockResolvedValue({ ok: true });
+    vi.stubGlobal("fetch", request);
+    mount({ email: null, person: null, provenance: "unknown", selection: null, picker });
+    fireEvent.change(await screen.findByRole("combobox", { name: "Your name" }), { target: { value: "matt" } });
+    fireEvent.click(screen.getByRole("button", { name: "Use this name" }));
+    await waitFor(() => expect(request).toHaveBeenCalled());
+    expect(request.mock.calls[0]?.[1]?.headers).toMatchObject({
+      "content-type": "application/json",
+      "x-identity-browser-origin": window.location.origin,
+    });
   });
 });

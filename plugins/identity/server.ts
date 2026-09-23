@@ -780,11 +780,24 @@ export default async function plugin(bb: BbPluginApi) {
   }, { auth: "local" });
 
   const jsonMutation = (c: { req: { header: (name: string) => string | undefined } }) => {
-    return identityMutationAllowed(c.req.header("content-type"), c.req.header("origin"), selectionPublicOrigin);
+    return identityMutationAllowed(c.req.header("content-type"), c.req.header("origin"), selectionPublicOrigin,
+      c.req.header("x-identity-browser-origin"));
+  };
+  const logJsonMutationRejection = (c: { req: { header: (name: string) => string | undefined } }, action: "select" | "forget") => {
+    const bounded = (value: string | undefined) => value?.slice(0, 256) ?? null;
+    bb.log.warn(`identity: browser ${action} rejected ${JSON.stringify({
+      origin: bounded(c.req.header("origin")),
+      browserOrigin: bounded(c.req.header("x-identity-browser-origin")),
+      contentType: bounded(c.req.header("content-type")),
+      secFetchSite: bounded(c.req.header("sec-fetch-site")),
+    })}`);
   };
   bb.http.route("POST", "/select-identity", async (c) => {
     if (pickerStatus() !== "ready") return c.json({ ok: false, reason: pickerStatus() }, 409);
-    if (!jsonMutation(c)) return c.json({ ok: false, reason: "origin-or-content-type" }, 403);
+    if (!jsonMutation(c)) {
+      logJsonMutationRejection(c, "select");
+      return c.json({ ok: false, reason: "origin-or-content-type" }, 403);
+    }
     if (normalizeEmail(c.req.header(ACCESS_EMAIL_HEADER))) return c.json({ ok: false, reason: "upstream-identity" }, 409);
     const parsed = z.object({ personId: z.string().min(1).max(80) }).strict().safeParse(await c.req.json().catch(() => null));
     if (!parsed.success) return c.json({ ok: false, reason: "invalid-input" }, 400);
@@ -797,7 +810,10 @@ export default async function plugin(bb: BbPluginApi) {
     return c.json({ ok: true, whoami: whoamiFor(null, token) });
   }, { auth: "local" });
   bb.http.route("POST", "/forget-identity", (c) => {
-    if (!jsonMutation(c)) return c.json({ ok: false, reason: "origin-or-content-type" }, 403);
+    if (!jsonMutation(c)) {
+      logJsonMutationRejection(c, "forget");
+      return c.json({ ok: false, reason: "origin-or-content-type" }, 403);
+    }
     c.header("Set-Cookie", selectionCookie(null, selectionPublicOrigin.startsWith("https:"), selectionPublicOrigin));
     c.header("Cache-Control", "no-store");
     emitAudit(auditLine, { v: AUDIT_SCHEMA_VERSION, kind: "identity.selection", at: Date.now(),

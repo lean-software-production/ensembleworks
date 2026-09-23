@@ -632,10 +632,17 @@ export function IdentityPicker({ onIdentityChange }: { onIdentityChange?: (ident
     try {
       const route = action === "select" ? "select-identity" : "forget-identity";
       const response = await fetch(`/api/v1/plugins/identity/http/${route}`, {
-        method: "POST", credentials: "same-origin", headers: { "content-type": "application/json" },
+        method: "POST", credentials: "same-origin", headers: {
+          "content-type": "application/json",
+          "x-identity-browser-origin": window.location.origin,
+        },
         body: JSON.stringify(action === "select" ? { personId: choice } : {}),
       });
-      if (!response.ok) throw new Error(`Identity could not ${action === "select" ? "select" : "forget"} this name (${response.status}).`);
+      if (!response.ok) {
+        const payload = await response.json().catch(() => null) as { reason?: unknown } | null;
+        const reason = typeof payload?.reason === "string" ? `: ${payload.reason}` : "";
+        throw new Error(`Identity could not ${action === "select" ? "select" : "forget"} this name (${response.status}${reason}).`);
+      }
       const current = await refresh();
       if (action === "select" && (current.provenance !== "self-selected" || current.person?.person !== choice)) {
         throw new Error("The browser did not retain this choice. Check whether site cookies are allowed.");

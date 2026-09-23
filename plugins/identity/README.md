@@ -75,10 +75,12 @@ on the same host at different ports do not overwrite each other's choice. The
 cookie is host-only, `HttpOnly`, `SameSite=Lax`, `Path=/`, with `Secure` for a
 configured HTTPS origin. No forwarded protocol or host header selects its security
 attributes. The server requires JSON content for selection and forget mutations, in
-addition to BB's `auth: local` route protection. A present `Origin` must match the
-configured public origin; an absent `Origin` is accepted because iOS WebViews can omit
-it on same-origin fetches. Cross-origin browser JSON requests still send `Origin` and
-require a successful CORS preflight.
+addition to BB's `auth: local` route protection. A matching standard `Origin` is
+accepted, as is a matching `X-Identity-Browser-Origin` set from `window.location.origin`;
+an absent `Origin` is accepted because iOS WebViews can omit it on same-origin fetches.
+The explicit page-origin header handles native WebViews that rewrite `Origin`.
+Cross-origin browser JSON requests cannot add that header without a successful CORS
+preflight.
 Only relative same-origin browser requests are used. A different app/API origin is
 unsupported. A missing or malformed public origin keeps the picker unavailable.
 
