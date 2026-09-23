@@ -45,6 +45,19 @@ const REFRESH_MS = 5_000;
 /** Ownership is durable, so it is polled far less often than presence. */
 const OWNERSHIP_REFRESH_MS = 60_000;
 const volatileIds = new Map<string, string>();
+const IDENTITY_PROMPT_SESSION_KEY = "bb.identity.picker.prompted.v1";
+
+function claimIdentityPrompt(): boolean {
+  try {
+    if (sessionStorage.getItem(IDENTITY_PROMPT_SESSION_KEY) !== null) return false;
+    sessionStorage.setItem(IDENTITY_PROMPT_SESSION_KEY, "1");
+    return true;
+  } catch {
+    if (volatileIds.has(IDENTITY_PROMPT_SESSION_KEY)) return false;
+    volatileIds.set(IDENTITY_PROMPT_SESSION_KEY, "1");
+    return true;
+  }
+}
 
 function stableId(storage: Storage, key: string): string {
   const next = crypto.randomUUID();
@@ -265,6 +278,7 @@ function ThreadOwnershipChip({ threadId }: { threadId: string }) {
     people: [],
   });
   const [me, setMe] = useState<WhoAmI | null>(null);
+  const triggerRef = useRef<HTMLButtonElement | null>(null);
   useEffect(() => {
     let live = true;
     void rpc.call("identity_thread_ownership", { threadIds: [threadId] }).then(({ threads }) => {
@@ -284,6 +298,15 @@ function ThreadOwnershipChip({ threadId }: { threadId: string }) {
     const timer = window.setInterval(refresh, OWNERSHIP_REFRESH_MS);
     return () => { live = false; window.clearInterval(timer); };
   }, [rpc]);
+  const anonymousPickerReady = me?.provenance === "unknown"
+    && me.picker.enabled
+    && me.picker.status === "ready"
+    && me.picker.people.length > 0;
+  useEffect(() => {
+    if (anonymousPickerReady && ownership !== null && triggerRef.current !== null && claimIdentityPrompt()) {
+      triggerRef.current.click();
+    }
+  }, [anonymousPickerReady, ownership]);
   const refreshPresence = useCallback(() => {
     void rpc.call("presence_thread", { threadId, excludeViewerId: ownViewerId })
       .then(({ viewers, typing, people }) => setPresence({ viewers, typing, people: people ?? [] }))
@@ -333,6 +356,7 @@ function ThreadOwnershipChip({ threadId }: { threadId: string }) {
     <Popover.Root key={threadId}>
       <Popover.Trigger asChild>
         <button
+          ref={triggerRef}
           type="button"
           className="identity-ownership-button"
           aria-label={triggerLabel}

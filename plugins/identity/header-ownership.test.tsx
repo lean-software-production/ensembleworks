@@ -23,7 +23,7 @@ const presentPeople = [
   { person: "sam", displayName: "Sam", github: "sam", typing: true },
 ];
 function mount(view = ownership, list = machines, people = presentPeople,
-  whoami = { email: null, person: null, provenance: "unknown", selection: null,
+  whoami = { email: "alex@example.test", person: list.me, provenance: "upstream-header", selection: null,
     picker: { enabled: true, status: "ready", people: [starter, list.me!] } }) {
   return renderSlot(registration, { threadId: view.threadId, projectId: "project-1", isCompactViewport: true }, {
     rpc: {

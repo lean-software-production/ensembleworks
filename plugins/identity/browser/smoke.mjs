@@ -70,8 +70,9 @@ try {
   for (const width of [320, 390]) {
     const page = await browser.newPage({ viewport: { width, height: 720 } });
     await page.goto(server.resolvedUrls.local[0] + '?variant=picker');
-    await page.getByRole('button', { name: /Show thread details/ }).click();
+    const trigger = page.getByRole('button', { name: /Show thread details/ });
     const dialog = page.getByRole('dialog', { name: 'Thread details' });
+    await expect(dialog).toBeVisible();
     await expect(dialog.getByRole('combobox', { name: 'Your name' })).toBeVisible();
     await expect(dialog).toContainText('This does not verify who you are.');
     await expect(dialog.getByRole('button', { name: 'Use this name' })).toBeDisabled();
@@ -79,6 +80,14 @@ try {
     expect(bounds.x).toBeGreaterThanOrEqual(8);
     expect(bounds.x + bounds.width).toBeLessThanOrEqual(width - 8);
     expect(await dialog.evaluate(el => el.scrollWidth <= el.clientWidth)).toBe(true);
+    await page.getByRole('button', { name: 'Close thread details' }).click();
+    await expect(dialog).toHaveCount(0);
+    await page.reload();
+    await expect(trigger).toBeVisible();
+    await expect(dialog).toHaveCount(0);
+    await trigger.click();
+    await expect(dialog).toBeVisible();
+    console.log(`PASS ${width}px picker: anonymous auto-open, dismissal survives reload, manual reopen`);
     await page.close();
   }
   const page = await browser.newPage({ viewport: { width: 320, height: 720 } });
