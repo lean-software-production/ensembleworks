@@ -1,5 +1,6 @@
 import { z } from "zod";
 import { normalizeEmail } from "./request-context.js";
+import type { SelectionVerification } from "./selection.js";
 
 /**
  * The people directory: who is who on this bb server, keyed by the emails Cloudflare
@@ -13,6 +14,44 @@ const personSchema = z.object({
 }).strict();
 
 export type Person = z.infer<typeof personSchema>;
+export type Provenance = "upstream-header" | "self-selected" | "configured-fallback" | "unknown";
+export type ResolvedIdentity = {
+  email: string | null;
+  person: Person | null;
+  provenance: Provenance;
+  viaFallback: boolean;
+  selection: { status: "valid" | "stale" | "expired" | "invalid" | "overridden" } | null;
+};
+
+export function resolveRequester(input: {
+  people: readonly Person[];
+  email: string | null | undefined;
+  selection: string | null;
+  fallbackEmail: string | null | undefined;
+  verify: (token: string) => SelectionVerification;
+}): ResolvedIdentity {
+  const upstream = normalizeEmail(input.email);
+  if (upstream !== null) return {
+    email: upstream, person: resolvePerson(input.people, upstream), provenance: "upstream-header", viaFallback: false,
+    selection: input.selection === null ? null : { status: "overridden" },
+  };
+  let selection: ResolvedIdentity["selection"] = null;
+  if (input.selection !== null) {
+    const verified = input.verify(input.selection);
+    if (verified.status === "valid") {
+      const person = input.people.find((entry) => entry.person === verified.personId) ?? null;
+      if (person !== null) return { email: null, person, provenance: "self-selected", viaFallback: false,
+        selection: { status: "valid" } };
+      selection = { status: "stale" };
+    } else selection = { status: verified.status };
+  }
+  // A presented but invalid choice fails open to anonymous attribution. It must not
+  // silently turn into a configured person, which would conceal an expired selection.
+  if (selection !== null) return { email: null, person: null, provenance: "unknown", viaFallback: false, selection };
+  const fallback = normalizeEmail(input.fallbackEmail);
+  return { email: fallback, person: resolvePerson(input.people, fallback),
+    provenance: fallback === null ? "unknown" : "configured-fallback", viaFallback: fallback !== null, selection: null };
+}
 
 export type DirectoryParse = { ok: true; people: Person[] } | { ok: false; error: string };
 

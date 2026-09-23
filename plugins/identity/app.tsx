@@ -1,5 +1,6 @@
 import "./identity.css";
-import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
+import { useCallback, useEffect, useId, useMemo, useRef, useState, type ReactNode } from "react";
+import * as Dialog from "@radix-ui/react-dialog";
 import * as Popover from "@radix-ui/react-popover";
 import {
   definePluginApp,
@@ -44,21 +45,50 @@ const HEARTBEAT_MS = 10_000;
 const REFRESH_MS = 5_000;
 /** Ownership is durable, so it is polled far less often than presence. */
 const OWNERSHIP_REFRESH_MS = 60_000;
+const volatileIds = new Map<string, string>();
+const IDENTITY_PROMPT_SESSION_KEY = "bb.identity.picker.prompted.v3";
+
+function claimIdentityPrompt(): boolean {
+  try {
+    if (sessionStorage.getItem(IDENTITY_PROMPT_SESSION_KEY) !== null) return false;
+    sessionStorage.setItem(IDENTITY_PROMPT_SESSION_KEY, "1");
+    return true;
+  } catch {
+    if (volatileIds.has(IDENTITY_PROMPT_SESSION_KEY)) return false;
+    volatileIds.set(IDENTITY_PROMPT_SESSION_KEY, "1");
+    return true;
+  }
+}
 
 function stableId(storage: Storage, key: string): string {
-  const current = storage.getItem(key);
-  if (current !== null) return current;
   const next = crypto.randomUUID();
-  storage.setItem(key, next);
+  try {
+    const current = storage.getItem(key);
+    if (current !== null) return current;
+    storage.setItem(key, next);
+  } catch { /* Private or ephemeral WebViews may deny storage. */ }
+  const existing = volatileIds.get(key);
+  if (existing) return existing;
+  volatileIds.set(key, next);
   return next;
 }
 
 function viewerId(): string {
-  return stableId(localStorage, "bb-presence-viewer-id");
+  try { return stableId(localStorage, "bb-presence-viewer-id"); }
+  catch { return volatileId("bb-presence-viewer-id"); }
 }
 
 function tabId(): string {
-  return stableId(sessionStorage, "bb-presence-tab-id");
+  try { return stableId(sessionStorage, "bb-presence-tab-id"); }
+  catch { return volatileId("bb-presence-tab-id"); }
+}
+
+function volatileId(key: string): string {
+  const existing = volatileIds.get(key);
+  if (existing) return existing;
+  const next = crypto.randomUUID();
+  volatileIds.set(key, next);
+  return next;
 }
 
 function PresenceCoordinator() {
@@ -275,10 +305,12 @@ function ThreadOwnershipChip({ threadId }: { threadId: string }) {
   }, [ownViewerId, rpc, threadId]);
   useEffect(() => {
     let live = true;
-    void rpc.call("identity_whoami").then((result) => {
+    const refresh = () => void rpc.call("identity_whoami").then((result) => {
       if (live) setMe(result);
     }).catch(() => undefined);
-    return () => { live = false; };
+    refresh();
+    const timer = window.setInterval(refresh, REFRESH_MS);
+    return () => { live = false; window.clearInterval(timer); };
   }, [rpc]);
   useEffect(() => {
     refreshPresence();
@@ -296,6 +328,7 @@ function ThreadOwnershipChip({ threadId }: { threadId: string }) {
     enforcement: list?.enforcement ?? "off",
     me: list?.me ?? null,
     meViaFallback: list?.meViaFallback === true,
+    meProvenance: list?.meProvenance,
   });
   const row = ownershipRowStatus(ownership);
   const { color } = resolvePersonColor(
@@ -418,6 +451,7 @@ function ThreadOwnershipChip({ threadId }: { threadId: string }) {
               </div>
             </>
           )}
+          <IdentityPicker />
         </Popover.Content>
       </Popover.Portal>
     </Popover.Root>
@@ -427,14 +461,20 @@ function ThreadOwnershipChip({ threadId }: { threadId: string }) {
 /** Who I am, which machines exist, and whether the guardrail is switched on. */
 function useMachineList(): MachineList | null {
   const rpc = useRpc<typeof rpcContract>();
+  const rpcRef = useRef(rpc);
+  rpcRef.current = rpc;
   const [list, setList] = useState<MachineList | null>(null);
   useEffect(() => {
     let live = true;
-    void rpc.call("identity_machines").then((result) => {
+    const refresh = () => void rpcRef.current.call("identity_machines").then((result) => {
       if (live) setList(result);
     }).catch(() => undefined);
-    return () => { live = false; };
-  }, [rpc]);
+    refresh();
+    const timer = window.setInterval(refresh, REFRESH_MS);
+    const onVisible = () => { if (document.visibilityState === "visible") refresh(); };
+    document.addEventListener("visibilitychange", onVisible);
+    return () => { live = false; window.clearInterval(timer); document.removeEventListener("visibilitychange", onVisible); };
+  }, []);
   return list;
 }
 
@@ -457,7 +497,8 @@ function BannerBody({ title, detail }: { title: string; detail: string }) {
 function StartingAsBanner() {
   const list = useMachineList();
   if (list === null) return null;
-  const banner = composerBanner({ me: list.me, machines: list.machines, enforcement: list.enforcement });
+  const banner = composerBanner({ me: list.me, provenance: list.meProvenance,
+    machines: list.machines, enforcement: list.enforcement });
   return (
     <BannerBody
       title={banner.title}
@@ -491,7 +532,7 @@ function ReadOnlyThreadBanner() {
   const banner = readOnlyBanner({
     me: list.me,
     meViaFallback: list.meViaFallback,
-    starter: ownership.starter,
+    starter: ownership.provenance ? null : ownership.starter,
     enforcement: list.enforcement,
   });
   if (banner === null) return null;
@@ -553,9 +594,142 @@ function anonymousViewerDetail(presence: { viewers: number; people: PresentPerso
 }
 
 function identityFooter(me: WhoAmI | null): string {
-  if (me?.person) return `You are ${me.person.displayName}.`;
-  if (me?.email) return `Signed in as ${me.email}, not in the Identity directory.`;
-  return "You are anonymous here. Names appear once Identity's directory is configured and this BB server sits behind Cloudflare Access.";
+  if (me?.provenance === "self-selected" && me.person) return `You are shown as ${me.person.displayName}, chosen in this browser for attribution only.`;
+  if (me?.provenance === "configured-fallback" && me.person) return `You are shown as ${me.person.displayName} by the configured fallback.`;
+  if (me?.person) return `Upstream header identifies ${me.person.displayName} (header not verified by Identity).`;
+  if (me?.email) return `Upstream header says ${me.email}; this address is not in the Identity directory.`;
+  return "You are anonymous here.";
+}
+
+export function IdentityPicker({ onIdentityChange }: { onIdentityChange?: (identity: WhoAmI) => void } = {}) {
+  const rpc = useRpc<typeof rpcContract>();
+  const selectorId = useId();
+  const rpcRef = useRef(rpc);
+  rpcRef.current = rpc;
+  const onIdentityChangeRef = useRef(onIdentityChange);
+  onIdentityChangeRef.current = onIdentityChange;
+  const [me, setMe] = useState<WhoAmI | null>(null);
+  const [choice, setChoice] = useState("");
+  const [editing, setEditing] = useState(false);
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const refresh = useCallback(async () => {
+    const result = await rpcRef.current.call("identity_whoami");
+    setMe(result);
+    onIdentityChangeRef.current?.(result);
+    return result;
+  }, []);
+  useEffect(() => {
+    void refresh().catch(() => undefined);
+    const timer = window.setInterval(() => void refresh().catch(() => undefined), REFRESH_MS);
+    const onVisible = () => { if (document.visibilityState === "visible") void refresh().catch(() => undefined); };
+    document.addEventListener("visibilitychange", onVisible);
+    return () => { window.clearInterval(timer); document.removeEventListener("visibilitychange", onVisible); };
+  }, [refresh]);
+  const mutate = async (action: "select" | "forget") => {
+    setBusy(true);
+    setError(null);
+    try {
+      const prepared = await rpcRef.current.call("identity_prepare_selection",
+        action === "select" ? { action, personId: choice } : { action });
+      if (!prepared.ok) throw new Error(`Identity could not prepare this choice: ${prepared.reason}.`);
+      const response = await fetch(prepared.url, { method: "GET", credentials: "same-origin", cache: "no-store" });
+      if (!response.ok) {
+        const payload = await response.json().catch(() => null) as { reason?: unknown } | null;
+        const reason = typeof payload?.reason === "string" ? `: ${payload.reason}` : "";
+        throw new Error(`Identity could not ${action === "select" ? "select" : "forget"} this name (${response.status}${reason}).`);
+      }
+      const current = await refresh();
+      if (action === "select" && (current.provenance !== "self-selected" || current.person?.person !== choice)) {
+        throw new Error("The browser did not retain this choice. Check whether site cookies are allowed.");
+      }
+      setEditing(false);
+    } catch (failure) { setError((failure as Error).message); }
+    finally { setBusy(false); }
+  };
+  if (me === null || me.picker.status === "off" || me.provenance === "upstream-header") return null;
+  if (!me.picker.enabled) return <p role="status" style={{ fontSize: 12 }}>Browser identity is unavailable: {me.picker.status}.</p>;
+  if (me.picker.people.length === 0) return <p role="status" style={{ fontSize: 12 }}>No names are configured in Identity yet.</p>;
+  const chosen = me.provenance === "self-selected" && me.person !== null;
+  return <div className="identity-picker" aria-label="Browser identity" style={{ marginTop: 12, paddingTop: 12,
+    borderTop: "1px solid var(--border)", minWidth: 0 }}>
+    <strong style={{ display: "block" }}>This browser</strong>
+    <p style={{ margin: "4px 0 8px", fontSize: 12 }}>{chosen
+      ? `Shown as ${me.person!.displayName} (chosen here; attribution only).`
+      : me.selection?.status === "stale"
+        ? "Your earlier choice is no longer in the directory. Choose again."
+        : "Choose a name for attribution in this browser. This does not verify who you are."}</p>
+    {chosen && !editing ? <div className="identity-picker-actions">
+      <button type="button" onClick={() => setEditing(true)}>Switch</button>
+      <button type="button" disabled={busy} onClick={() => void mutate("forget")}>Forget</button>
+    </div> : <div className="identity-picker-actions">
+      <label htmlFor={selectorId}>Your name</label>
+      <select id={selectorId} value={choice} onChange={(event) => setChoice(event.target.value)}>
+        <option value="">Choose a name</option>
+        {me.picker.people.map((person) => <option key={person.person} value={person.person}>{person.displayName}</option>)}
+      </select>
+      <button type="button" disabled={busy || !choice} onClick={() => void mutate("select")}>Use this name</button>
+      {chosen && <button type="button" onClick={() => setEditing(false)}>Cancel</button>}
+    </div>}
+    {error && <p role="alert" style={{ color: "var(--destructive, #b91c1c)", fontSize: 12 }}>{error}</p>}
+  </div>;
+}
+
+function IdentityPromptOverlay() {
+  const rpc = useRpc<typeof rpcContract>();
+  const rpcRef = useRef(rpc);
+  rpcRef.current = rpc;
+  const [me, setMe] = useState<WhoAmI | null>(null);
+  const [open, setOpen] = useState(false);
+  const refresh = useCallback(() => {
+    void rpcRef.current.call("identity_whoami").then(setMe).catch(() => undefined);
+  }, []);
+  useEffect(() => {
+    refresh();
+    const timer = window.setInterval(refresh, REFRESH_MS);
+    const onVisible = () => { if (document.visibilityState === "visible") refresh(); };
+    document.addEventListener("visibilitychange", onVisible);
+    return () => { window.clearInterval(timer); document.removeEventListener("visibilitychange", onVisible); };
+  }, [refresh]);
+  const ready = me?.provenance === "unknown"
+    && me.picker.enabled
+    && me.picker.status === "ready"
+    && me.picker.people.length > 0;
+  useEffect(() => {
+    if (ready && claimIdentityPrompt()) setOpen(true);
+    if (me !== null && !ready) setOpen(false);
+  }, [me, ready]);
+  if (!ready) return null;
+  return (
+    <Dialog.Root open={open} onOpenChange={setOpen}>
+      <Dialog.Portal>
+        <Dialog.Overlay style={{ position: "fixed", inset: 0, background: "rgb(0 0 0 / 0.45)", zIndex: 79 }} />
+        <Dialog.Content
+          aria-describedby="identity-prompt-description"
+          style={{
+            boxSizing: "border-box", position: "fixed", left: "50%", top: "50%",
+            transform: "translate(-50%, -50%)", width: 380, maxWidth: "calc(100vw - 24px)",
+            maxHeight: "calc(100dvh - 24px)", overflowY: "auto", overflowWrap: "anywhere",
+            background: "var(--popover, var(--background))", color: "var(--popover-foreground, var(--foreground))",
+            border: "1px solid var(--border)", borderRadius: 10, padding: 16, zIndex: 80,
+            boxShadow: "0 18px 48px rgb(0 0 0 / 0.25)",
+          }}
+        >
+          <Dialog.Title style={{ fontSize: 16, fontWeight: 700, margin: 0 }}>Choose your identity</Dialog.Title>
+          <Dialog.Description id="identity-prompt-description" style={{ color: "var(--muted-foreground)", fontSize: 12, margin: "6px 0 0" }}>
+            Identity cannot tell who is using this browser.
+          </Dialog.Description>
+          <IdentityPicker onIdentityChange={setMe} />
+          <div style={{ display: "flex", justifyContent: "flex-end", marginTop: 12 }}>
+            <Dialog.Close className="identity-ownership-button" style={{
+              minHeight: 40, padding: "0 14px", borderRadius: 6,
+              border: "1px solid var(--border)", background: "transparent", color: "inherit", cursor: "pointer",
+            }}>Not now</Dialog.Close>
+          </div>
+        </Dialog.Content>
+      </Dialog.Portal>
+    </Dialog.Root>
+  );
 }
 
 function PersonRow({ entry, list }: { entry: PresentPerson; list?: MachineList | null }) {
@@ -592,7 +766,12 @@ function PersonRow({ entry, list }: { entry: PresentPerson; list?: MachineList |
           style={{ borderRadius: "50%", flex: "0 0 auto" }}
         />
       )}
-      <span style={{ flex: "1 1 auto" }}>{entry.displayName}</span>
+      <span style={{ flex: "1 1 auto" }}>{entry.displayName}
+        {entry.provenance === "self-selected" ? " · chosen in a browser" :
+          entry.provenance === "configured-fallback" ? " · configured fallback" :
+            entry.provenance === "upstream-header" ? " · upstream header" :
+              entry.provenance === "mixed" ? " · mixed sources" : ""}
+      </span>
       {entry.typing ? (
         <span style={{ alignItems: "center", color: "var(--warning, var(--foreground))", display: "inline-flex", gap: 4 }}>
           <TypingIcon />
@@ -852,10 +1031,9 @@ function PeopleSettings() {
       <span style={{ color: "var(--muted-foreground)", fontSize: 12, paddingBottom: 8 }}>
         Everyone in Identity{"'"}s directory. A colour is dealt by roster position; anyone can choose a
         different one for anyone, and every change is written to Identity{"'"}s log.
-        {roster.me === null
-          ? " This sign-in is not in the directory, so a change will be logged with no name against it."
-          : ` You are signed in as ${roster.me.displayName}.`}
+        Changes are logged with the source of the current identity.
       </span>
+      <IdentityPicker />
       <span style={{ color: "var(--muted-foreground)", fontSize: 12, paddingBottom: 8 }}>
         {SEEN_UNKNOWN_CAVEAT}
       </span>
@@ -895,6 +1073,7 @@ export default definePluginApp((app) => {
     }),
   });
   app.slots.experimental_appOverlay({ id: "presence-coordinator", component: PresenceCoordinator });
+  app.slots.experimental_appOverlay({ id: "identity-prompt", component: IdentityPromptOverlay });
   app.composer.customize({ id: "typing-awareness", scopes: ["thread"], actions: [{ id: "typing-pulse", component: TypingPulse }] });
   app.slots.experimental_threadHeaderAction({
     id: "thread-ownership",

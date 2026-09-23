@@ -20,7 +20,7 @@ import type { AttributionFacts, DispatchOrigin, GuardOutcome, StarterSummary, Vi
  */
 
 /** Bumped whenever a line's shape changes, so a later format change is detectable. */
-export const AUDIT_SCHEMA_VERSION = 1;
+export const AUDIT_SCHEMA_VERSION = 2;
 
 /**
  * Every audit line starts with this token. `bb plugin logs identity` prefixes each line
@@ -149,12 +149,13 @@ export type AuditRequestFacts = {
   url: string | undefined;
   email: string | null;
   person: StarterSummary | null;
+  provenance?: string;
 };
 
 export const ROLLUP_MS = 60_000;
 export const MAX_ROLLUP_BUCKETS = 200;
 
-type Bucket = { method: string; path: string; access: boolean; person: string | null; count: number };
+type Bucket = { method: string; path: string; access: boolean; person: string | null; provenance: string; count: number };
 
 /**
  * The request stream (a), and its volume policy in force.
@@ -201,6 +202,8 @@ export class RequestAuditor {
         path,
         access: facts.email !== null,
         person: facts.person?.person ?? null,
+        provenance: facts.provenance ?? (facts.email ? "upstream-header" : "unknown"),
+        captureSource: "request",
       });
       return;
     }
@@ -208,7 +211,8 @@ export class RequestAuditor {
     this.#total += 1;
     const person = facts.person?.person ?? null;
     const access = facts.email !== null;
-    const key = `${method} ${path} ${access ? "1" : "0"} ${person ?? ""}`;
+    const provenance = facts.provenance ?? (access ? "upstream-header" : "unknown");
+    const key = `${method} ${path} ${access ? "1" : "0"} ${person ?? ""} ${provenance}`;
     const bucket = this.#buckets.get(key);
     if (bucket !== undefined) {
       bucket.count += 1;
@@ -218,7 +222,7 @@ export class RequestAuditor {
       this.#dropped += 1;
       return;
     }
-    this.#buckets.set(key, { method, path, access, person, count: 1 });
+    this.#buckets.set(key, { method, path, access, person, provenance, count: 1 });
   }
 
   /** Emit the current window's counters, if it saw anything. */
@@ -283,6 +287,8 @@ export function dispatchAuditLine(input: DispatchAuditInput): AuditLine {
     email: input.facts.email,
     person: input.facts.person?.person ?? null,
     viaFallback: input.facts.viaFallback,
+    provenance: input.facts.provenance ?? (input.facts.email ? "upstream-header" : "unknown"),
+    captureSource: input.facts.captureSource ?? "unknown",
     origin: input.facts.origin satisfies DispatchOrigin,
     originPluginId: input.facts.originPluginId,
     lineage: [...input.facts.lineage],
@@ -311,6 +317,11 @@ export type PostDispatchAuditInput = {
   senderThreadId: string | null;
   email: string | null;
   person: StarterSummary | null;
+  provenance?: string;
+  captureSource?: string;
+  triggerPerson?: StarterSummary | null;
+  triggerProvenance?: string | null;
+  contentUnchanged?: boolean | null;
 };
 
 /**
@@ -333,9 +344,14 @@ export function postDispatchAuditLine(input: PostDispatchAuditInput): AuditLine 
     entryId: input.entryId,
     threadId: input.threadId,
     senderThreadId: input.senderThreadId,
-    access: input.email !== null,
+    access: input.provenance ? input.provenance === "upstream-header" : input.email !== null,
     email: input.email,
     person: input.person?.person ?? null,
+    provenance: input.provenance ?? (input.email ? "upstream-header" : "unknown"),
+    captureSource: input.captureSource ?? "unknown",
+    ...(input.triggerPerson !== undefined ? { triggerPerson: input.triggerPerson?.person ?? null,
+      triggerProvenance: input.triggerProvenance ?? "unknown" } : {}),
+    ...(input.contentUnchanged !== undefined ? { contentUnchanged: input.contentUnchanged } : {}),
   };
 }
 
@@ -348,6 +364,7 @@ export type ColorChangeAuditInput = {
   /** Who made the change, from the request's own identity. Null when unidentified. */
   by: StarterSummary | null;
   byEmail: string | null;
+  byProvenance?: string;
   /** Whose colour was changed. */
   subject: string;
   from: string | null;
@@ -382,6 +399,7 @@ export function colorChangeAuditLine(input: ColorChangeAuditInput): AuditLine {
     mode: input.mode,
     by: input.by?.person ?? null,
     email: input.byEmail,
+    provenance: input.byProvenance ?? (input.byEmail ? "upstream-header" : "unknown"),
     subject: input.subject,
     from: input.from,
     to: input.to,
