@@ -184,7 +184,7 @@ delay or alter a dispatch. What refuses is the guardrail, below.
   `ownership-labels.test.ts` fails if that copy ever promises an enforcement that is not
   switched on — in either tense, so audit's "would be refused" may never read as "was".
 - **In `audit` mode the header chip also says what enforcement would have done**
-  ("Started by Matt · would be refused — Matt's thread (audit mode, so it went through)"),
+  ("Started by Matt · your next message would be refused — Matt's thread (audit mode lets it through)"),
   so the team can evaluate the guardrail by using BB rather than by reading logs.
 
 Read paths: `identity_thread_ownership` (RPC, batched) / `GET …/http/thread-ownership`,

@@ -118,7 +118,7 @@ export function wouldBeRefused(input: {
   // Question 1: would MY next message into this thread be refused? (rule B)
   const sending = ask(input.starter === null ? null : { starter: input.starter });
   if (sending.action === "reject" && sending.rule === "follow-up-by-non-starter" && input.starter !== null) {
-    return `would be refused — ${input.starter.displayName}'s thread (audit mode, so it went through)`;
+    return `your next message would be refused — ${input.starter.displayName}'s thread (audit mode lets it through)`;
   }
   // Question 2: would a start on this machine be refused? (rule A, which only ever applies
   // to a thread with no record — hence the explicit `null`. Asking it of the recorded
@@ -126,7 +126,7 @@ export function wouldBeRefused(input: {
   // claimed a refusal the guardrail would never have made.)
   const starting = ask(null);
   if (starting.action === "reject" && starting.rule === "start-on-another-persons-machine" && input.host !== null) {
-    return `this start would be refused — ${machineDescription(input.host)} (audit mode, so it went through)`;
+    return `a new thread from you here would be refused — ${machineDescription(input.host)} (audit mode lets it through)`;
   }
   return null;
 }
@@ -262,10 +262,10 @@ export function composerBanner(input: {
     return {
       title: "Starting as an unrecognised sign-in",
       detail: input.provenance === "configured-fallback"
-        ? "Threads you start show no starter until the fallback email is in Identity's directory."
+        ? "Threads you start get no starter of their own until the fallback email is in Identity's directory."
         : input.provenance === "unknown"
-          ? "Threads you start show no starter."
-          : "Threads you start show no starter until your email is in Identity's directory.",
+          ? "Threads you start get no starter of their own."
+          : "Threads you start get no starter of their own until your email is in Identity's directory.",
     };
   }
   const mine = input.machines

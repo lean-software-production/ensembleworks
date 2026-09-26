@@ -47,7 +47,7 @@ export function precedenceLadder(whoami: WhoAmI, context: { fallbackConfigured: 
       : context.fallbackConfigured ? "The fallback email did not apply to this request."
       : "No fallback email is set.",
     anonymous: decided === "anonymous"
-      ? "Threads you start show no starter, and the own-machine and own-thread rules never refuse you."
+      ? "Threads you start get no starter of their own (a child thread may inherit one), and the own-machine and own-thread rules never refuse you."
       : "Not reached.",
   };
 

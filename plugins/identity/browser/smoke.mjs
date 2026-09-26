@@ -39,7 +39,7 @@ try {
     await expect(trigger).toHaveAttribute('aria-expanded', 'true');
     await expect(dialog.locator('p')).toHaveText(await trigger.getAttribute('title'));
     await expect(dialog).toContainText('runs as ensembleworks-agent on shared-machine-');
-    await expect(dialog).toContainText('would be refused — Erin Example\'s thread (audit mode, so it went through)');
+    await expect(dialog).toContainText('your next message would be refused — Erin Example\'s thread (audit mode lets it through)');
     await expect(dialog).toContainText('Viewing now');
     await expect(dialog).toContainText('Alex');
     await expect(dialog).toContainText('Sam');

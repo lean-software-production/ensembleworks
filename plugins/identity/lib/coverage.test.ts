@@ -38,7 +38,7 @@ describe("COVERAGE_ROWS", () => {
       "Skips the dispatch hook; in audit and enforce modes Identity logs it afterwards, naming the sender when it can. A Send-now dispatch hook in BB core would move this to Checked.",
       "The automation rule applies to stamped automation spawns headed for a named machine; a spawn with no machine named is allowed.",
       "Arrives unstamped, so the automation rule cannot see it. Needs BB core to stamp threads.send.",
-      "Never refused unless BB stamps it as an automation: the person rules need an Access email. Attributed to the fallback email when one is set.",
+      "Never refused unless BB stamps it as an automation: the person rules need an Access email.",
       "Seen by the request stream in audit/enforce modes; never refused.",
       "Same hook as the composer.",
     ]);

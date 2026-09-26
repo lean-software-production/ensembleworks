@@ -71,7 +71,7 @@ describe("precedenceLadder", () => {
     expect(states(rungs)).toEqual(["access:skipped", "selection:skipped", "fallback:skipped", "anonymous:decided"]);
     expect(detail(rungs, "fallback")).toBe("No fallback email is set.");
     expect(detail(rungs, "anonymous"))
-      .toBe("Threads you start show no starter, and the own-machine and own-thread rules never refuse you.");
+      .toBe("Threads you start get no starter of their own (a child thread may inherit one), and the own-machine and own-thread rules never refuse you.");
   });
 
   it.each(["stale", "expired", "invalid"] as const)(

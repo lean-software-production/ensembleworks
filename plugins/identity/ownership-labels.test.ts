@@ -212,7 +212,7 @@ describe("composerBanner", () => {
   it("is neutral, not alarming, for an unrecognised sign-in", () => {
     expect(composerBanner({ me: null, enforcement: "off", machines: [teamMachine] })).toEqual({
       title: "Starting as an unrecognised sign-in",
-      detail: "Threads you start show no starter until your email is in Identity's directory.",
+      detail: "Threads you start get no starter of their own until your email is in Identity's directory.",
     });
   });
 
@@ -220,14 +220,14 @@ describe("composerBanner", () => {
     // A fallback email outside the directory is the fallback's gap, not "your email"; an
     // anonymous request (no email, or a stale, expired or invalid browser name) has none.
     expect(composerBanner({ me: null, provenance: "upstream-header", enforcement: "off", machines: [] }).detail)
-      .toBe("Threads you start show no starter until your email is in Identity's directory.");
+      .toBe("Threads you start get no starter of their own until your email is in Identity's directory.");
     expect(composerBanner({ me: null, provenance: "configured-fallback", enforcement: "enforce", machines: [] })).toEqual({
       title: "Starting as an unrecognised sign-in",
-      detail: "Threads you start show no starter until the fallback email is in Identity's directory.",
+      detail: "Threads you start get no starter of their own until the fallback email is in Identity's directory.",
     });
     expect(composerBanner({ me: null, provenance: "unknown", enforcement: "enforce", machines: [] })).toEqual({
       title: "Starting as an unrecognised sign-in",
-      detail: "Threads you start show no starter.",
+      detail: "Threads you start get no starter of their own.",
     });
   });
 
@@ -307,6 +307,15 @@ describe("the header chip in audit mode", () => {
     });
     expect(chip.text).toMatch(/would be refused/i);
     expect(chip.text).toContain("Matt's machine");
+  });
+
+  it("speaks of the viewer's own next message or new thread, never of one that happened", () => {
+    // The chip can be read without sending anything, and the recorded start may be someone
+    // else's: both clauses are counterfactuals about the viewer, not a logged decision.
+    expect(headerChip(view({ starter: matt, host: mattsMachine }), { ...options, enforcement: "audit", me: david }).text)
+      .toContain("your next message would be refused — Matt's thread (audit mode lets it through)");
+    expect(headerChip(view({ starter: david, host: mattsMachine }), { ...options, enforcement: "audit", me: david }).text)
+      .toContain("a new thread from you here would be refused — Matt's machine (audit mode lets it through)");
   });
 
   it("says nothing extra when nothing would have been refused", () => {

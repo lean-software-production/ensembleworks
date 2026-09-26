@@ -18,8 +18,7 @@ export const COVERAGE_ROWS: readonly CoverageRow[] = [
   { path: "Automation sending into an existing thread (threads.send)", status: "blind",
     note: "Arrives unstamped, so the automation rule cannot see it. Needs BB core to stamp threads.send." },
   { path: "Agents and the CLI sending a message (no Access header)", status: "checked",
-    note: "Never refused unless BB stamps it as an automation: the person rules need an Access email. "
-      + "Attributed to the fallback email when one is set." },
+    note: "Never refused unless BB stamps it as an automation: the person rules need an Access email." },
   { path: "Terminals, Stop, Archive, approvals, host routes, plugin RPCs", status: "logged-only",
     note: "Seen by the request stream in audit/enforce modes; never refused." },
   { path: "Raw API message sends with an Access header", status: "checked",
