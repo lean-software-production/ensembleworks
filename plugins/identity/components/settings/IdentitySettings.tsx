@@ -1,0 +1,132 @@
+import { useCallback, useEffect, useRef, useState } from "react";
+import { useRpc } from "@get-bb/plugin-sdk/app";
+import type { MachineList, RosterAnswer, rpcContract, SettingsOverview, WhoAmI } from "../../server.js";
+import type { SettingsTab } from "../../settings-admin.js";
+import { IdentityBar } from "./IdentityBar.js";
+import { PeopleTab } from "./PeopleTab.js";
+import { ProfilePanel } from "./ProfilePanel.js";
+import { ReadinessStrip } from "./ReadinessStrip.js";
+import { SettingsTabs, TAB_LABELS } from "./SettingsTabs.js";
+
+type ReadKey = "overview" | "roster" | "whoami" | "machines";
+
+export type SettingsData = {
+  overview: SettingsOverview | null; roster: RosterAnswer | null; whoami: WhoAmI | null; machines: MachineList | null;
+  errors: Partial<Record<ReadKey, string>>;
+  reload: () => void;
+};
+
+/** One sentence per read, so a failure names what is missing instead of blanking the page. */
+const READ_FAILURES: Record<ReadKey, string> = {
+  overview: "Identity could not read its settings",
+  roster: "Identity could not read the people list",
+  whoami: "Identity could not tell who you are",
+  machines: "Identity could not read the machine list",
+};
+
+/**
+ * The four reads the page is built from, fetched in parallel. Each failure is isolated —
+ * a failed overview still renders the people — and a reload discards any answer that
+ * arrives after a newer reload started.
+ */
+export function useSettingsData(): SettingsData {
+  const rpc = useRpc<typeof rpcContract>();
+  const rpcRef = useRef(rpc);
+  rpcRef.current = rpc;
+  const generation = useRef(0);
+  const [overview, setOverview] = useState<SettingsOverview | null>(null);
+  const [roster, setRoster] = useState<RosterAnswer | null>(null);
+  const [whoami, setWhoami] = useState<WhoAmI | null>(null);
+  const [machines, setMachines] = useState<MachineList | null>(null);
+  const [errors, setErrors] = useState<Partial<Record<ReadKey, string>>>({});
+
+  const reload = useCallback(() => {
+    const mine = ++generation.current;
+    const read = <T,>(key: ReadKey, call: () => Promise<T>, store: (value: T) => void) => {
+      void call().then((value) => {
+        if (generation.current !== mine) return;
+        store(value);
+        setErrors((current) => { const { [key]: _gone, ...rest } = current; return rest; });
+      }, (failure: unknown) => {
+        if (generation.current !== mine) return;
+        setErrors((current) => ({ ...current, [key]: `${READ_FAILURES[key]}: ${String(failure)}` }));
+      });
+    };
+    read("overview", () => rpcRef.current.call("identity_settings_overview"), setOverview);
+    read("roster", () => rpcRef.current.call("identity_roster"), setRoster);
+    read("whoami", () => rpcRef.current.call("identity_whoami"), setWhoami);
+    read("machines", () => rpcRef.current.call("identity_machines"), setMachines);
+  }, []);
+
+  useEffect(reload, [reload]);
+  return { overview, roster, whoami, machines, errors, reload };
+}
+
+/** What each tab not built yet will show, under its real title. */
+const PLACEHOLDERS: Record<Exclude<SettingsTab, "people">, string> = {
+  machines: "Every machine bb knows, whose it is and why — a name suffix, a pin or the team list — with pin conflicts to resolve.",
+  browser: "Which name this browser shows, where it sits on the precedence ladder, and the picker's origin and signing key.",
+  rules: "What the guardrail does in each mode, a simulator over the real rules, and which actions it can see.",
+  health: "The self-test, the picker chain, ledger fill, configuration checks and a redacted diagnostics bundle.",
+};
+
+function Placeholder({ tab }: { tab: Exclude<SettingsTab, "people"> }) {
+  return (
+    <div className="identity-settings-stack">
+      <h3 className="identity-settings-heading">{TAB_LABELS[tab]}</h3>
+      <p className="identity-settings-muted">{PLACEHOLDERS[tab]}</p>
+    </div>
+  );
+}
+
+/** The "People & machines" settings section: who you are, how ready Identity is, and the tabs. */
+export function IdentitySettings() {
+  const data = useSettingsData();
+  const { overview, roster, whoami, errors } = data;
+  const [tab, setTab] = useState<SettingsTab>("people");
+  // null: the profile panel follows `firstRun`; "opened" from readiness; "dismissed" once applied.
+  const [profile, setProfile] = useState<"opened" | "dismissed" | null>(null);
+
+  // As before: nothing until the first answer, so the page does not flash empty.
+  const settled = overview !== null || roster !== null || errors.overview !== undefined || errors.roster !== undefined;
+  if (!settled) return null;
+
+  const showProfile = overview !== null
+    && (profile === "opened" || (profile === null && overview.firstRun));
+  const failures = (Object.keys(READ_FAILURES) as ReadKey[])
+    .map((key) => errors[key])
+    .filter((sentence): sentence is string => sentence !== undefined);
+
+  return (
+    <div className="identity-settings">
+      <IdentityBar whoami={whoami} />
+      {failures.map((sentence) => <p key={sentence} className="identity-settings-muted">{sentence}</p>)}
+      {overview !== null && (
+        <ReadinessStrip
+          items={overview.readiness}
+          onActivate={(target) => { if (target === "profile") setProfile("opened"); else setTab(target); }}
+        />
+      )}
+      {showProfile && (
+        <ProfilePanel
+          overview={overview}
+          whoami={whoami}
+          closable={profile === "opened"}
+          onApplied={() => { setProfile("dismissed"); data.reload(); }}
+          onClose={() => setProfile("dismissed")}
+        />
+      )}
+      <SettingsTabs
+        selected={tab}
+        onSelect={setTab}
+        panels={{
+          people: <PeopleTab data={data} />,
+          machines: <Placeholder tab="machines" />,
+          browser: <Placeholder tab="browser" />,
+          rules: <Placeholder tab="rules" />,
+          health: <Placeholder tab="health" />,
+        }}
+      />
+    </div>
+  );
+}
