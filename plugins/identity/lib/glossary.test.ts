@@ -93,6 +93,13 @@ describe("the glossary", () => {
     expect(text("logged-changes")).toContain("Choosing a browser name logs the name chosen; forgetting one logs no name. Neither says who did it.");
   });
 
+  it("says a generated-form change has no settings.change line, not no log line at all", () => {
+    // In Audit and Enforce the form's HTTP request still reaches RequestAuditor (server.ts),
+    // which writes a `request` line for a mutation (audit.ts); only settings.change is missing.
+    expect(text("logged-changes")).not.toContain("without a log line");
+    expect(text("logged-changes")).toContain("without a settings.change line");
+  });
+
   it("does not promise the log always knows who made a change", () => {
     // adminActor() takes currentIdentity(), which can be anonymous; audit.ts then writes
     // by: null, email: null, provenance: "unknown".

@@ -308,7 +308,7 @@ and it is where the settings below are meant to be changed. From the top:
 - **The identity bar** — who this browser is (`You: Alex Rivera · from your Access email ·
   counts for Attribution and the guardrail`; an Access email the directory lacks counts for
   Attribution only), and a second line, `Changes here are logged.`, whose popover says
-  which changes write a log line and which do not.
+  which changes write a change line and which (the generated form, the CLI) do not.
 - **The readiness strip** — six items (profile, people, machines, browser names,
   guardrail, check), each an icon plus text; activating one opens the tab that fixes it.
 - **The server profile question** — on a fresh server (nobody in the directory and every

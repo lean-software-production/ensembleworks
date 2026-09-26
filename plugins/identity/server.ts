@@ -733,9 +733,9 @@ export default async function plugin(bb: BbPluginApi) {
       label: "Enforcement",
       options: [...ENFORCEMENT_MODES],
       description:
-        "Off (record only), Audit (log what Enforce would refuse) or Enforce (refuse it). Change it in "
-        + "People & machines, where turning on Enforce is confirmed and every change is logged; a change made "
-        + "here is not.",
+        "Off (record only), Audit (log what Enforce would refuse) or Enforce (refuse it). Use People "
+        + "& machines, where turning on Enforce is confirmed and a change writes a settings.change line; a "
+        + "change made here is not confirmed and writes none.",
       default: "off",
     },
     fallbackEmail: {

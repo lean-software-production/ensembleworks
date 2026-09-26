@@ -450,6 +450,14 @@ describe("generated Configuration form copy", () => {
     expect(enforcement).toMatch(/made here is not/);
   });
 
+  // The form's HTTP request can still get a `request` line in Audit and Enforce (audit.ts
+  // RequestAuditor); what it never gets is a settings.change line.
+  it("says a change made in the generated form has no settings.change line, not no log at all", async () => {
+    const enforcement = (await descriptions())("enforcement");
+    expect(enforcement).not.toMatch(/every change is logged; a change made here is not\.$/);
+    expect(enforcement).toMatch(/a change writes a settings\.change line; a change made here is not confirmed and writes none/);
+  });
+
   it("keeps every generated-form description short and true", async () => {
     const describe = await descriptions();
     for (const key of ["directory", "teamMachines", "sharedMachineUser", "enforcement", "fallbackEmail",

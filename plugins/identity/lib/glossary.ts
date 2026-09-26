@@ -106,7 +106,7 @@ export const GLOSSARY: Record<GlossaryId, GlossaryEntry> = {
     body: [
       "Settings, colour and machine changes made here write a line to BB's log with the requester's identity, which may be unknown. Risky ones ask first.",
       "Choosing a browser name logs the name chosen; forgetting one logs no name. Neither says who did it.",
-      "BB's generated Configuration form and `bb plugin config` change the same settings without asking and without a log line.",
+      "BB's generated Configuration form and `bb plugin config` change the same settings without asking and without a settings.change line.",
     ],
   },
 };
