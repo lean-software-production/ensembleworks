@@ -516,6 +516,15 @@ describe("redactDiagnostics", () => {
     }
   });
 
+  it("keeps well-formed account and host names", () => {
+    const stored = healthy({ teamMachines: ["ew-lsp-001-main", "build.box-2"] });
+    const out = JSON.parse(redactDiagnostics({
+      ...stored, generatedAt: 0, sharedMachineUser: "ensembleworks-agent", lint: lintConfig(stored),
+      ledgers: { starters: { count: 0, max: 2000 }, queued: { count: 0, max: 1000 } },
+    }));
+    expect(out).toMatchObject({ sharedMachineUser: "ensembleworks-agent", teamMachines: ["ew-lsp-001-main", "build.box-2"] });
+  });
+
   it("redacts an email the self-test probe saw unexpectedly", () => {
     const failed = healthy({ selfTest: {
       ok: false, detail: `the probe's request context had email ${JSON.stringify("alex@example.com")}`,

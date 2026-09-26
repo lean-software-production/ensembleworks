@@ -86,8 +86,11 @@ unsupported. A missing or malformed public origin keeps the picker unavailable.
 
 Resolution order is strict: a present upstream email header, even one absent from
 the directory, wins; then a valid selected person still in the directory; then the
-configured `fallbackEmail`; then unknown. Invalid, stale, expired or tampered choices
-resolve as anonymous instead of silently selecting a different person. Directory
+configured `fallbackEmail`; then unknown. While the picker is ready (browser names on,
+with a valid origin, signing key and cookie bridge), an invalid, stale,
+expired or tampered choice resolves as anonymous: it never falls through to
+`fallbackEmail` and never silently selects a different person. (With the picker off or
+not ready, the cookie is ignored altogether, as if the browser had presented none.) Directory
 display-name and colour changes take effect on the next resolution. The header is
 unverified by this plugin; the signed cookie only proves that this server issued a
 choice, not that the chooser is that person.
@@ -194,7 +197,7 @@ One three-way setting, `enforcement`:
 
 | Mode | What happens |
 |---|---|
-| `off` (default) | Record who started what, label it in the UI, refuse nothing, log nothing. |
+| `off` (default) | Record who started what, label it in the UI, refuse nothing, and write no request, dispatch or post-dispatch audit lines. The change lines below (settings, pins, colours, browser-name choices) are still written. |
 | `audit` | Take the **same** decision `enforce` would, write it to the log as a would-refuse, and let the message through. |
 | `enforce` | Act on that decision. |
 
@@ -204,7 +207,8 @@ known person's message into a thread a different known person started; **C** an 
 (`origin: plugin`, `originPluginId: automations`) headed for a machine that is not a team
 machine. A dispatch Identity cannot tie to a person is **always allowed, in every mode** —
 that is the normal shape of every agent path (see the design note's S9) — and an identity
-that came from `fallbackEmail` counts as untied.
+that came from a browser name or from `fallbackEmail` counts as untied: only an Access
+identity can ever be refused.
 
 `audit` and `enforce` run the *same* `decideGuardrail` call; only the returned action
 differs. A test drives the same facts through both modes and asserts the verdicts are
@@ -252,6 +256,12 @@ every HTTP request, and each carrying `v` (schema version) and `kind`:
   is observed in the originating request context for ordinary submissions; later
   drains use the row ledger. Send-now is post-hoc only. These events report identity;
   they cannot act on it.
+
+Four more kinds record changes rather than traffic, and are written in **every** mode,
+`off` included: `settings.change` and `host.pin` (the People & machines section's writes,
+below), `person.color` (a colour set or cleared) and `identity.selection` (a browser
+choosing or forgetting a name). A setting changed directly — through BB's generated
+Configuration form or `bb plugin config identity set` — writes no line at all.
 
 **Emails appear in these lines by design** — "which actions carried identity, and whose" is
 the question being answered. Message bodies and thread content never do; identity facts
@@ -319,10 +329,16 @@ and it is where the settings below are meant to be changed. From the top:
 
 ### What each write does
 
-Every write goes through `settings.experimental_set` (pins through the host-pin store),
-and each one that changes something writes exactly one audit line through `bb.log`
-naming who asked (person, email, provenance) and what changed, from → to. These lines are
-written whatever `enforcement` is.
+Settings writes from this section go through `settings.experimental_set`, pins through
+the host-pin store and colours through the colour store. Each of the section's write RPCs
+and colour/pin actions that changes something writes exactly one audit line through
+`bb.log` naming who asked (person, email, provenance) and what changed, from → to. These
+lines are written whatever `enforcement` is.
+
+That promise covers only the section. BB's generated Configuration form (still listed
+beside the section) and `bb plugin config identity set` write the settings directly; Identity
+applies such a change at once but cannot tell who made it, so it writes **no**
+`settings.change` line for it and none of the confirmations below apply.
 
 | Action | RPC | Audit line | Safeguard |
 |---|---|---|---|
@@ -335,7 +351,7 @@ written whatever `enforcement` is.
 | Keep / re-pin / unpin a machine | `identity_resolve_pin` | `host.pin` | Confirmed; re-pin spells out the rule A consequence, unpin that the owner is re-derived from the name |
 | A person's colour | `identity_set_person_color` / `identity_clear_person_color` | `person.color` | None — cosmetic, as before |
 | Re-run the self-test | `identity_rerun_self_test` | — | Read-only |
-| Copy diagnostics | `identity_diagnostics` | — | Read-only; emails shortened, names and the key left out, a public origin that fails validation shown as `invalid` |
+| Copy diagnostics | `identity_diagnostics` | — | Read-only; every stored setting that fails its own validation (public origin, fallback email, shared machine user, each team machine) is shown as `invalid`, then every email left in the bundle is shortened and every configured display name masked; the key is left out |
 
 Every confirm dialog opens with **Cancel** focused, names its consequence, and returns
 focus to whatever opened it. The section reads through `identity_settings_overview`,
@@ -346,7 +362,9 @@ which returns the signing key's status only, and the directory as a count and an
 The section can change things, but it verifies no one: any caller may write, exactly as
 BB's generated settings form and the colour picker already allow. That is the trade the
 rest of Identity makes — a guardrail against mistakes, not a lock — and the audit line is
-what makes a write accountable. Precedence stays fixed (Access header → valid browser
+what makes a section write accountable. A change made through the generated form or the
+CLI carries no such line (see *What each write does*), so while that form stays visible
+the log is not a complete record of who changed a setting. Precedence stays fixed (Access header → valid browser
 name → `fallbackEmail` → anonymous; a stale, expired or invalid name is anonymous and
 never falls through to the fallback), and only an Access identity can ever be refused.
 
@@ -395,9 +413,11 @@ directory marks the plugin *needs configuration* and presence stays anonymous.
 ### `fallbackEmail`
 
 Optional, default empty. Used as the requester's email when a request carries
-no Access header, for a BB server that is not behind Cloudflare Access (e.g. a
-laptop). On such a server every header-less caller is attributed to this email,
-including agents and the CLI. Leave it empty on a shared server.
+neither an Access header nor a valid browser name, for a BB server that is not behind
+Cloudflare Access (e.g. a laptop). Such callers, agents and the CLI included, are then
+attributed to this email. With browser names on, a browser presenting a stale, expired
+or invalid name stays anonymous — it never falls through to the fallback. The guardrail
+never refuses on a fallback identity. Leave it empty on a shared server.
 
 ### `teamMachines`
 
@@ -411,8 +431,10 @@ the header chip. Display only — Identity never sets or checks it.
 
 ### Setting them
 
-Prefer the People & machines section above: it confirms the risky changes and logs every
-one. The CLI still works, and is the only way to set `directory`:
+Prefer the People & machines section above: it confirms the risky changes and writes an
+audit line for each. The CLI still works, and is the only way to set `directory`, but a
+CLI (or generated Configuration form) change skips those confirmations and writes no
+audit line:
 
 ```
 bb plugin config identity set directory '<json>'

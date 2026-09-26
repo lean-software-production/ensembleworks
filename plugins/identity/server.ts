@@ -741,7 +741,8 @@ export default async function plugin(bb: BbPluginApi) {
         + "A dispatch Identity cannot tie to a person is ALWAYS allowed in every mode — that is the normal "
         + "shape of every agent path — and an identity supplied by Fallback email counts as untied. "
         + "audit and enforce both log their verdicts; off logs no verdicts, but settings, pin and colour "
-        + "changes are logged in every mode. Emails appear in those log lines by design.",
+        + "changes are logged in every mode when made through the People & machines section — a change made "
+        + "in this form or with bb plugin config is applied but not logged. Emails appear in those log lines by design.",
       default: "off",
     },
     fallbackEmail: {

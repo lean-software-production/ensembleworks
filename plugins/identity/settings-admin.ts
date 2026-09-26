@@ -15,7 +15,8 @@ export type SettingsTab = (typeof SETTINGS_TABS)[number];
 export const PICKER_STATUSES = ["off", "origin-not-configured", "signing-key-unavailable",
   "cookie-bridge-unavailable", "ready"] as const;
 export type PickerStatus = (typeof PICKER_STATUSES)[number];
-export type SigningKeyStatus = "valid" | "invalid" | "missing";
+export const SIGNING_KEY_STATUSES = ["valid", "invalid", "missing"] as const;
+export type SigningKeyStatus = (typeof SIGNING_KEY_STATUSES)[number];
 
 const LOCAL_HOSTS = ["localhost", "127.0.0.1", "[::1]"];
 
@@ -326,10 +327,48 @@ export type DiagnosticsInput = AdminFacts & {
   lint: readonly LintIssue[];
 };
 
-/** A support bundle safe to paste anywhere: no clear email, no display name, no key. */
+/** What a stored value that fails its own validation becomes in the support bundle. */
+const INVALID = "invalid";
+/** What a configured display name becomes wherever it appears in the support bundle. */
+const REDACTED_NAME = "[redacted]";
+/** A host name as bb lists one: no spaces and no "@", so it holds no email and no full name. */
+const HOST_NAME = /^[A-Za-z0-9][A-Za-z0-9._-]{0,252}$/;
+
+function oneOf<T extends string | boolean>(value: unknown, allowed: readonly T[]): T | typeof INVALID {
+  return (allowed as readonly unknown[]).includes(value) ? value as T : INVALID;
+}
+
+/**
+ * The last line of defence: every string in the bundle with each email redacted and each
+ * configured display name (longest first, so a full name wins over a part of it) masked.
+ * Keys are the bundle's own and never scrubbed.
+ */
+function scrubBundle(value: unknown, names: readonly string[]): unknown {
+  if (typeof value === "string") {
+    let text = value.replace(EMBEDDED_EMAIL, redactEmail);
+    for (const name of names) text = text.split(name).join(REDACTED_NAME);
+    return text;
+  }
+  if (Array.isArray(value)) return value.map((item) => scrubBundle(item, names));
+  if (value !== null && typeof value === "object") {
+    return Object.fromEntries(Object.entries(value).map(([key, item]) => [key, scrubBundle(item, names)]));
+  }
+  return value;
+}
+
+/**
+ * A support bundle safe to paste anywhere: no clear email, no display name, no key. Every
+ * stored free-text setting is copied only once it passes its own validation (the generated
+ * Configuration form skips validation), and is otherwise replaced with "invalid"; then the
+ * whole bundle is scrubbed of emails and configured display names.
+ */
 export function redactDiagnostics(input: DiagnosticsInput): string {
   const count = (kind: HostClassification["kind"]) => input.machines.filter((machine) => machine.kind === kind).length;
-  return JSON.stringify({
+  const names = [...new Set(input.people.map((person) => person.displayName).filter((name) => name.length > 0))]
+    .sort((a, b) => b.length - a.length);
+  const fallbackEmail = input.fallbackEmail === "" ? ""
+    : emailSchema.safeParse(input.fallbackEmail).success ? redactEmail(input.fallbackEmail) : INVALID;
+  return JSON.stringify(scrubBundle({
     generatedAt: new Date(input.generatedAt).toISOString(),
     plugin: "identity",
     schema: 1,
@@ -340,25 +379,26 @@ export function redactDiagnostics(input: DiagnosticsInput): string {
       cookie: { ...input.selfTest.cookie, detail: input.selfTest.cookie.detail.replace(EMBEDDED_EMAIL, redactEmail) },
     },
     picker: {
-      status: input.pickerStatus,
-      enabled: input.selfSelectedIdentity,
+      status: oneOf(input.pickerStatus, PICKER_STATUSES),
+      enabled: input.selfSelectedIdentity === true,
       // The stored value is free text (the generated Configuration form skips validation),
       // so only a validated origin is copied; anything else could carry an email or a name.
       origin: input.selectionPublicOrigin === "" ? ""
         : validateSelectionOrigin(input.selectionPublicOrigin) ?? "invalid",
-      signingKey: input.signingKey,
+      signingKey: oneOf(input.signingKey, SIGNING_KEY_STATUSES),
     },
-    enforcement: input.enforcement,
-    sharedMachineUser: input.sharedMachineUser,
-    fallbackEmail: redactEmail(input.fallbackEmail),
-    accessSeen: input.accessSeen,
+    enforcement: oneOf(input.enforcement, ENFORCEMENT_MODES),
+    sharedMachineUser: ACCOUNT_NAME.test(input.sharedMachineUser) && input.sharedMachineUser.length <= 64
+      ? input.sharedMachineUser : INVALID,
+    fallbackEmail,
+    accessSeen: input.accessSeen === true,
     directory: {
       ok: input.directoryError === null,
       error: input.directoryError === null ? null : diagnosticsDirectoryError(input.directoryError),
       people: input.people.length,
       emails: input.people.reduce((total, person) => total + person.emails.length, 0),
     },
-    teamMachines: input.teamMachines,
+    teamMachines: input.teamMachines.map((name) => HOST_NAME.test(name) ? name : INVALID),
     machines: {
       total: input.machines.length,
       person: count("person"),
@@ -369,7 +409,7 @@ export function redactDiagnostics(input: DiagnosticsInput): string {
     },
     ledgers: input.ledgers,
     lint: input.lint.map(({ id, severity }) => ({ id, severity })),
-  }, null, 2);
+  }, names), null, 2);
 }
 
 export const AUDIT_JQ_COMMAND =

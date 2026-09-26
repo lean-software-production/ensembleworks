@@ -167,6 +167,7 @@ function Diagnostics() {
       <h4 id={`${base}-diagnostics`} className="identity-settings-heading">Diagnostics</h4>
       <p className="identity-settings-muted">
         Emails are shortened, people{"'"}s names and the signing key are left out. Host names are included.
+        {" "}A stored setting that fails its own validation shows as {"\u201c"}invalid{"\u201d"}.
       </p>
       <div className="identity-settings-actions">
         <button type="button" className="identity-settings-button" onClick={collect}>Copy diagnostics</button>

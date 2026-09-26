@@ -380,6 +380,47 @@ describe("identity_diagnostics", () => {
     expect(text).not.toContain("Alex Rivera");
     expect(text).not.toContain("alex@example.com");
   });
+
+  // The generated Configuration form stores free text unvalidated, so every such setting
+  // can carry an email or a display name; none may reach the bundle, whichever field.
+  const malformed = {
+    teamMachines: "ew-lsp-001-main\nAlex Rivera <alex@example.com>\nRobin\nrobin@example.net",
+    sharedMachineUser: "Alex Rivera <alex@example.com>",
+    fallbackEmail: "alex@example.com, Alex Rivera",
+    selectionPublicOrigin: "https://Alex Rivera@alex@example.com",
+    enforcement: "Alex Rivera <alex@example.com>",
+    selfSelectedIdentity: "Alex Rivera alex@example.com" as unknown as boolean,
+  };
+
+  it("keeps every malformed free-text setting's email and display name out of the bundle", async () => {
+    const directory = JSON.stringify([
+      { person: "alex", github: "alexgh", displayName: "Alex Rivera", emails: ["alex@example.com"] },
+      { person: "robin", github: "robingh", displayName: "Robin", emails: ["robin@example.net"] },
+    ]);
+    hosts = [{ id: "h1", name: "ew-lsp-001-main" }, { id: "h9", name: "Robin alex@example.com" }];
+    await load({ ...malformed, directory });
+    probe = async () => { throw new Error("probe saw Alex Rivera <alex@example.com> and Robin"); };
+    await call("identity_rerun_self_test");
+    const { text } = await call<{ text: string }>("identity_diagnostics");
+    for (const leak of ["alex@example.com", "robin@example.net", "Alex Rivera", "Robin"]) expect(text).not.toContain(leak);
+    expect(JSON.parse(text)).toMatchObject({
+      sharedMachineUser: "invalid",
+      fallbackEmail: "invalid",
+      picker: { origin: "invalid", enabled: false },
+      enforcement: "off",
+      // "Robin" is a well-formed host name, but also a configured display name.
+      teamMachines: ["ew-lsp-001-main", "invalid", "[redacted]", "invalid"],
+      selfTest: { ok: false, detail: "the self-test probe failed: probe saw [redacted] <a***@example.com> and [redacted]" },
+    });
+  });
+
+  it("keeps the malformed settings out when the directory is malformed too", async () => {
+    await load({ ...malformed, directory: "Alex Rivera <alex@example.com>" });
+    const { text } = await call<{ text: string }>("identity_diagnostics");
+    for (const leak of ["alex@example.com", "robin@example.net", "Alex Rivera"]) expect(text).not.toContain(leak);
+    expect(JSON.parse(text)).toMatchObject({ sharedMachineUser: "invalid", fallbackEmail: "invalid",
+      teamMachines: ["ew-lsp-001-main", "invalid", "Robin", "invalid"] });
+  });
 });
 
 describe("generated Configuration form copy", () => {
