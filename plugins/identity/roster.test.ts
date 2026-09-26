@@ -139,6 +139,9 @@ describe("seenPhrase", () => {
     expect(caveat).not.toMatch(/\bnever\b/i);
     // It must name the limit instead: retained records, and "since Identity started".
     expect(SEEN_UNKNOWN_CAVEAT).toMatch(/retain/i);
+    // A sighting outlives the 2000 retained records (SeenPeople), so the limit is not those alone.
+    expect(SEEN_UNKNOWN_CAVEAT).toMatch(/since Seen tracking began/);
+    expect(SEEN_UNKNOWN_CAVEAT).not.toMatch(/2000 most recent/);
   });
 });
 

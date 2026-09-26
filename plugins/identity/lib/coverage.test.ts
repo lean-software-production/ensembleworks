@@ -8,9 +8,9 @@ describe("COVERAGE_ROWS", () => {
       ["Send now (queued message)", "seen-after"],
       ["Automation spawning a thread (threads.spawn)", "checked"],
       ["Automation sending into an existing thread (threads.send)", "blind"],
-      ["Agents and the CLI (no Access header)", "checked"],
+      ["Agents and the CLI sending a message (no Access header)", "checked"],
       ["Terminals, Stop, Archive, approvals, host routes, plugin RPCs", "logged-only"],
-      ["Raw API calls with an Access header", "checked"],
+      ["Raw API message sends with an Access header", "checked"],
     ]);
   });
 

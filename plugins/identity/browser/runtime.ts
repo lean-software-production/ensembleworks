@@ -60,7 +60,7 @@ const overview: SettingsOverview = {
 const colors = ["#3f7d33", "#96379a", "#2f6bb8"];
 const roster: RosterAnswer = {
   me: alex, meViaFallback: false, unavailable: null,
-  seenCaveat: "Identity can only answer from the attribution records it retains.",
+  seenCaveat: "Identity answers from the thread records it retains and the sightings it has kept since Seen tracking began.",
   people: directory.map((person, index) => ({ ...person, color: colors[index]!, dealt: colors[index]!, overridden: false,
     ink: "#ffffff", seen: index !== 1, seenAt: index !== 1 ? Date.now() - 3_600_000 : null, clashesWith: [],
     machines: hosts.flatMap((host) => host.kind === "person" && host.person.person === person.person ? [host.hostName] : []) })),

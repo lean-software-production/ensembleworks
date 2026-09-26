@@ -436,7 +436,9 @@ describe("generated Configuration form copy", () => {
   it("says when Fallback email applies and that a stale browser name stays anonymous", async () => {
     const fallback = (await descriptions())("fallbackEmail");
     expect(fallback).not.toMatch(/Every header-less caller|every caller without/i);
-    expect(fallback).toMatch(/no Access email and no valid browser name/);
+    // A stale name is not a valid one, and it stays anonymous (resolveRequester), so "no valid" overclaims.
+    expect(fallback).toMatch(/no Access email and no browser name/);
+    expect(fallback).not.toMatch(/no valid browser name/);
     expect(fallback).toMatch(/stale, expired or invalid browser name stays anonymous/);
   });
 

@@ -92,8 +92,8 @@ export const GLOSSARY: Record<GlossaryId, GlossaryEntry> = {
   "machine-owner": {
     title: "Whose machine it is",
     body: [
-      "A machine whose name ends in -<name>, where <name> is someone's id or GitHub handle, is theirs. Identity pins it on first sight, so a rename doesn't change the owner; a disagreeing rename shows as a conflict.",
-      "Team-list machines are the team's, even with a person's name. Anything else is unclaimed: any person may start there. In Enforce a BB-stamped automation may not; Audit logs it and lets it through.",
+      "Team-list machines are the team's, even with a person's name. Otherwise, a machine ending in -<name> (someone's id or GitHub handle) is theirs. Identity pins it on first sight, so a rename doesn't change the owner; a disagreeing one shows as a conflict.",
+      "Anything else is unclaimed: any person may start there. In Enforce a BB-stamped automation may not; Audit logs it and lets it through.",
     ],
     more: "machines",
   },

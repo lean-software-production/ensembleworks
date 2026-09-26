@@ -164,13 +164,14 @@ back as `null`. Attribution is a guardrail aid, not an audit log.
 Identity **shows** who owns what. The ownership UI only labels: nothing in it can reject,
 delay or alter a dispatch. What refuses is the guardrail, below.
 
-- **Machines are labelled `person`, `team` or `unclaimed`.** A machine named
-  `<box>-<person>` whose last segment matches a directory `person` or `github` belongs to
-  that person; a machine listed in `teamMachines` is the team's; anything else is
-  **unclaimed** — never silently folded into "team". A host is **pinned** to its person by
-  host id on first sight, and a later rename that disagrees with the pin is *not* followed:
-  the pin stands and the disagreement is reported (`GET …/http/host-pins`, and in the
-  header chip).
+- **Machines are labelled `person`, `team` or `unclaimed`.** The `teamMachines` list is
+  checked first: a machine on it is the team's, whatever its name or pin, and reports no
+  conflict. Otherwise a machine named `<box>-<person>` whose last segment matches a
+  directory `person` or `github` belongs to that person; anything else is **unclaimed** —
+  never silently folded into "team". A host is **pinned** to its person by host id on first
+  sight, and off the team list a later rename that disagrees with the pin is *not*
+  followed: the pin stands and the disagreement is reported (`GET …/http/host-pins`, and
+  in the header chip).
 - **Thread rows** show who started the thread ("Started by David · team machine"), except
   while someone is viewing or typing — **presence wins** that glyph.
 - **The thread header** reads "Started by David · runs as ensembleworks-agent on
@@ -423,7 +424,7 @@ directory marks the plugin *needs configuration* and presence stays anonymous.
 ### `fallbackEmail`
 
 Optional, default empty. Used as the requester's email when a request carries
-neither an Access header nor a valid browser name, for a BB server that is not behind
+neither an Access header nor a browser name, for a BB server that is not behind
 Cloudflare Access (e.g. a laptop). Such callers, agents and the CLI included, are then
 attributed to this email. With browser names on, a browser presenting a stale, expired
 or invalid name stays anonymous — it never falls through to the fallback. The person rules

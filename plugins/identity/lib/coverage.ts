@@ -17,11 +17,11 @@ export const COVERAGE_ROWS: readonly CoverageRow[] = [
       + "a spawn with no machine named is allowed." },
   { path: "Automation sending into an existing thread (threads.send)", status: "blind",
     note: "Arrives unstamped, so the automation rule cannot see it. Needs BB core to stamp threads.send." },
-  { path: "Agents and the CLI (no Access header)", status: "checked",
+  { path: "Agents and the CLI sending a message (no Access header)", status: "checked",
     note: "Never refused unless BB stamps it as an automation: the person rules need an Access email. "
       + "Attributed to the fallback email when one is set." },
   { path: "Terminals, Stop, Archive, approvals, host routes, plugin RPCs", status: "logged-only",
     note: "Seen by the request stream in audit/enforce modes; never refused." },
-  { path: "Raw API calls with an Access header", status: "checked",
+  { path: "Raw API message sends with an Access header", status: "checked",
     note: "Same hook as the composer." },
 ];

@@ -340,7 +340,7 @@ describe("People & machines settings section", () => {
     stubPopoverDom();
     fireEvent.click(screen.getAllByRole("button", { name: "Seen — a thread is attributed to them" })[0]!);
     const seen = await screen.findByRole("dialog", { name: "Seen" });
-    expect(seen.textContent).toContain("the 2000 most recent threads");
+    expect(seen.textContent).toContain("the sightings it has kept since Seen tracking began");
     fireEvent.keyDown(seen, { key: "Escape" });
 
     fireEvent.click(buttons[1]!);

@@ -41,6 +41,11 @@ describe("the glossary", () => {
     }
   });
 
+  it("puts the team list ahead of a pin when it says whose a machine is", () => {
+    // classifyHost returns team before it consults the pin, so the pin promise holds only off the list.
+    expect(text("machine-owner")).toMatch(/^Team-list machines are the team's, even with a person's name\. Otherwise/);
+  });
+
   it("describes the own-thread rule by the recorded starter, inherited ones included", () => {
     // A child thread inherits a lineage thread's recorded starter only when its own request
     // resolves no person (decideAttribution), and rule B judges that record, not how the

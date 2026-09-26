@@ -742,7 +742,7 @@ export default async function plugin(bb: BbPluginApi) {
       type: "string",
       label: "Fallback email",
       description:
-        "Only for a server one person uses. Requests with no Access email and no valid browser name are "
+        "Only for a server one person uses. Requests with no Access email and no browser name are "
         + "attributed to it; a stale, expired or invalid browser name stays anonymous. The guardrail ignores it. "
         + "Leave empty on a shared server.",
       default: "",
