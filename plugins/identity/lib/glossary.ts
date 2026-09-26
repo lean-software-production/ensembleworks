@@ -51,7 +51,7 @@ export const GLOSSARY: Record<GlossaryId, GlossaryEntry> = {
   "rule-own-machine": {
     title: "Own-machine rule",
     body: [
-      "Someone identified by their Access email may not start a thread on another person's machine. Team and unclaimed machines are open to everyone.",
+      "Someone identified by their Access email may not start a thread on another person's machine. Team and unclaimed machines are open to every person; an automation still needs a team machine (the automation rule).",
       "In the log: start-on-another-persons-machine.",
     ],
     more: "rules",
@@ -59,7 +59,7 @@ export const GLOSSARY: Record<GlossaryId, GlossaryEntry> = {
   "rule-own-thread": {
     title: "Own-thread rule",
     body: [
-      "Someone identified by their Access email may not send into a thread another person started that way. Threads started any other way are open to anyone.",
+      "Someone identified by their Access email may not send into a thread whose recorded starter is another person identified the same way. That includes a thread an agent started from theirs, which inherits its starter. A thread with no recorded starter, or one recorded from a browser name or the fallback email, is open to anyone.",
       "In the log: follow-up-by-non-starter.",
     ],
     more: "rules",
@@ -93,7 +93,7 @@ export const GLOSSARY: Record<GlossaryId, GlossaryEntry> = {
     title: "Whose machine it is",
     body: [
       "A machine whose name ends in -<name>, where <name> is someone's id or GitHub handle, is theirs. Identity pins it on first sight, so a rename doesn't change the owner; a rename that disagrees shows as a conflict.",
-      "Team-list machines are the team's, even with a person's name. Anything else is unclaimed: anyone may start threads there.",
+      "Team-list machines are the team's, even with a person's name. Anything else is unclaimed: any person may start threads there, but an automation may not.",
     ],
     more: "machines",
   },

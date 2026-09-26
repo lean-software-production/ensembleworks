@@ -31,4 +31,21 @@ describe("the glossary", () => {
     expect(text("composer-check")).toContain("doesn't tell Identity which machine");
     expect(text("composer-check")).toContain("In Audit it is logged and goes ahead");
   });
+
+  it("keeps automations out of the machines people may use freely", () => {
+    // Rule C refuses a stamped automation on an unclaimed machine, so "open to everyone" lies.
+    for (const id of ["rule-own-machine", "machine-owner"] as const) {
+      expect(text(id), id).not.toMatch(/open to everyone|anyone may start/);
+      expect(text(id), id).toMatch(/an automation (still needs a team machine|may not)/);
+    }
+  });
+
+  it("describes the own-thread rule by the recorded starter, inherited ones included", () => {
+    // An agent's child thread inherits its parent's starter (decideAttribution), and rule B
+    // judges that record, not how the thread was started.
+    expect(text("rule-own-thread")).not.toContain("started any other way");
+    expect(text("rule-own-thread")).toContain("recorded starter");
+    expect(text("rule-own-thread")).toContain("inherits its starter");
+    expect(text("rule-own-thread")).toContain("recorded from a browser name or the fallback email");
+  });
 });
