@@ -28,6 +28,8 @@ export const hostPinSchema = z.object({
   /** The host name that produced the pin, kept so a rename can be reported. */
   name: z.string(),
   pinnedAt: z.number(),
+  /** A host name an operator chose to keep the pin under: no conflict while it still applies. */
+  keptName: z.string().optional(),
 }).strict();
 export type HostPin = z.infer<typeof hostPinSchema>;
 
@@ -115,7 +117,7 @@ export function classifyHost(
   const derived = personFromHostName(host.name, context.people);
   const pin = context.pin;
   if (pin !== null) {
-    const disagrees = (derived?.person ?? null) !== pin.person;
+    const disagrees = (derived?.person ?? null) !== pin.person && pin.keptName !== host.name;
     return {
       kind: "person",
       ...base,
@@ -211,7 +213,7 @@ export class HostPins {
     }
     if (existing !== null) {
       const derived = personFromHostName(host.name, this.#people);
-      if ((derived?.person ?? null) !== existing.person) {
+      if ((derived?.person ?? null) !== existing.person && existing.keptName !== host.name) {
         this.#conflicts.set(host.id, {
           pinnedName: existing.name,
           pinnedPerson: existing.person,
@@ -222,6 +224,44 @@ export class HostPins {
       }
     }
     return existing;
+  }
+
+  /** An operator accepts the pin under the host's current name. Needs an existing pin. */
+  async keep(host: HostRef): Promise<HostPin | null> {
+    const existing = await this.get(host.id);
+    if (existing === null) return null;
+    return this.#write({ ...existing, keptName: host.name });
+  }
+
+  /** An operator moves the pin to a directory person, under the host's current name. */
+  async repin(host: HostRef, person: string, now = Date.now()): Promise<HostPin | null> {
+    if (!this.#people.some((entry) => entry.person === person)) return null;
+    return this.#write({ hostId: host.id, person, name: host.name, pinnedAt: now });
+  }
+
+  /** An operator forgets the pin; the next `observe` re-derives it from the name. */
+  async unpin(hostId: string): Promise<boolean> {
+    try {
+      const deleted = await withTimeout(this.#kv.delete(PIN_PREFIX + hostId), this.#timeoutMs);
+      if (deleted === TIMED_OUT) return false;
+    } catch {
+      return false;
+    }
+    this.#cache.set(hostId, null);
+    this.#conflicts.delete(hostId);
+    return true;
+  }
+
+  async #write(pin: HostPin): Promise<HostPin | null> {
+    try {
+      const written = await withTimeout(this.#kv.set(PIN_PREFIX + pin.hostId, pin), this.#timeoutMs);
+      if (written === TIMED_OUT) return null;
+    } catch {
+      return null;
+    }
+    this.#cache.set(pin.hostId, pin);
+    this.#conflicts.delete(pin.hostId);
+    return pin;
   }
 
   conflicts(): HostPinConflict[] {

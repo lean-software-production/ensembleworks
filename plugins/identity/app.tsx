@@ -1,5 +1,5 @@
 import "./identity.css";
-import { useCallback, useEffect, useId, useMemo, useRef, useState, type ReactNode } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import * as Dialog from "@radix-ui/react-dialog";
 import * as Popover from "@radix-ui/react-popover";
 import {
@@ -12,17 +12,14 @@ import {
   useRpc,
 } from "@get-bb/plugin-sdk/app";
 import type {
-  ColorWriteAnswer,
   MachineList,
   PresenceLocation,
   PresentPerson,
-  RosterAnswer,
   rpcContract,
   ThreadOwnership,
   WhoAmI,
 } from "./server.js";
 import { initials, presenceLabel } from "./presence-labels.js";
-import { seenPhrase, SEEN_UNKNOWN_CAVEAT } from "./roster.js";
 import {
   composerBanner,
   headerChip,
@@ -30,16 +27,18 @@ import {
   readOnlyBanner,
 } from "./ownership-labels.js";
 import {
-  colorInputValue,
   readableInk,
   resolvePersonColor,
-  shouldCommitColor,
 } from "./person-colors.js";
 import {
   mountThreadStatusFallback,
   replaceThreadStatuses,
   type ThreadStatus,
 } from "./sidebar-fallback.js";
+import { IdentityPicker } from "./components/IdentityPicker.js";
+import { IdentitySettings } from "./components/settings/IdentitySettings.js";
+
+export { IdentityPicker };
 
 const HEARTBEAT_MS = 10_000;
 const REFRESH_MS = 5_000;
@@ -601,79 +600,6 @@ function identityFooter(me: WhoAmI | null): string {
   return "You are anonymous here.";
 }
 
-export function IdentityPicker({ onIdentityChange }: { onIdentityChange?: (identity: WhoAmI) => void } = {}) {
-  const rpc = useRpc<typeof rpcContract>();
-  const selectorId = useId();
-  const rpcRef = useRef(rpc);
-  rpcRef.current = rpc;
-  const onIdentityChangeRef = useRef(onIdentityChange);
-  onIdentityChangeRef.current = onIdentityChange;
-  const [me, setMe] = useState<WhoAmI | null>(null);
-  const [choice, setChoice] = useState("");
-  const [editing, setEditing] = useState(false);
-  const [busy, setBusy] = useState(false);
-  const [error, setError] = useState<string | null>(null);
-  const refresh = useCallback(async () => {
-    const result = await rpcRef.current.call("identity_whoami");
-    setMe(result);
-    onIdentityChangeRef.current?.(result);
-    return result;
-  }, []);
-  useEffect(() => {
-    void refresh().catch(() => undefined);
-    const timer = window.setInterval(() => void refresh().catch(() => undefined), REFRESH_MS);
-    const onVisible = () => { if (document.visibilityState === "visible") void refresh().catch(() => undefined); };
-    document.addEventListener("visibilitychange", onVisible);
-    return () => { window.clearInterval(timer); document.removeEventListener("visibilitychange", onVisible); };
-  }, [refresh]);
-  const mutate = async (action: "select" | "forget") => {
-    setBusy(true);
-    setError(null);
-    try {
-      const prepared = await rpcRef.current.call("identity_prepare_selection",
-        action === "select" ? { action, personId: choice } : { action });
-      if (!prepared.ok) throw new Error(`Identity could not prepare this choice: ${prepared.reason}.`);
-      const response = await fetch(prepared.url, { method: "GET", credentials: "same-origin", cache: "no-store" });
-      if (!response.ok) {
-        const payload = await response.json().catch(() => null) as { reason?: unknown } | null;
-        const reason = typeof payload?.reason === "string" ? `: ${payload.reason}` : "";
-        throw new Error(`Identity could not ${action === "select" ? "select" : "forget"} this name (${response.status}${reason}).`);
-      }
-      const current = await refresh();
-      if (action === "select" && (current.provenance !== "self-selected" || current.person?.person !== choice)) {
-        throw new Error("The browser did not retain this choice. Check whether site cookies are allowed.");
-      }
-      setEditing(false);
-    } catch (failure) { setError((failure as Error).message); }
-    finally { setBusy(false); }
-  };
-  if (me === null || me.picker.status === "off" || me.provenance === "upstream-header") return null;
-  if (!me.picker.enabled) return <p role="status" style={{ fontSize: 12 }}>Browser identity is unavailable: {me.picker.status}.</p>;
-  if (me.picker.people.length === 0) return <p role="status" style={{ fontSize: 12 }}>No names are configured in Identity yet.</p>;
-  const chosen = me.provenance === "self-selected" && me.person !== null;
-  return <div className="identity-picker" aria-label="Browser identity" style={{ marginTop: 12, paddingTop: 12,
-    borderTop: "1px solid var(--border)", minWidth: 0 }}>
-    <strong style={{ display: "block" }}>This browser</strong>
-    <p style={{ margin: "4px 0 8px", fontSize: 12 }}>{chosen
-      ? `Shown as ${me.person!.displayName} (chosen here; attribution only).`
-      : me.selection?.status === "stale"
-        ? "Your earlier choice is no longer in the directory. Choose again."
-        : "Choose a name for attribution in this browser. This does not verify who you are."}</p>
-    {chosen && !editing ? <div className="identity-picker-actions">
-      <button type="button" onClick={() => setEditing(true)}>Switch</button>
-      <button type="button" disabled={busy} onClick={() => void mutate("forget")}>Forget</button>
-    </div> : <div className="identity-picker-actions">
-      <label htmlFor={selectorId}>Your name</label>
-      <select id={selectorId} value={choice} onChange={(event) => setChoice(event.target.value)}>
-        <option value="">Choose a name</option>
-        {me.picker.people.map((person) => <option key={person.person} value={person.person}>{person.displayName}</option>)}
-      </select>
-      <button type="button" disabled={busy || !choice} onClick={() => void mutate("select")}>Use this name</button>
-      {chosen && <button type="button" onClick={() => setEditing(false)}>Cancel</button>}
-    </div>}
-    {error && <p role="alert" style={{ color: "var(--destructive, #b91c1c)", fontSize: 12 }}>{error}</p>}
-  </div>;
-}
 
 function IdentityPromptOverlay() {
   const rpc = useRpc<typeof rpcContract>();
@@ -828,242 +754,6 @@ function TypingIcon() {
   );
 }
 
-
-/**
- * The people page: who is registered on this server, and the colour associated with each
- * of them.
- *
- * Follows this file's existing conventions — inline styles against BB's CSS variables, no
- * component library, every RPC failure degrading to "show nothing" rather than throwing.
- *
- * Anyone may change anyone's colour. That is the owner's decision and it matches the
- * plugin's trust model (a guardrail against mistakes; the Access email header is never
- * verified), plus a teammate who never opens this page still needs a colour someone can
- * fix for them. What makes it safe is visibility, not permission: every change writes an
- * audit line naming who changed whose, from and to.
- */
-
-/** A small, fixed set of well-separated colours, so the common case is one click. */
-const SWATCHES = [
-  "#b4322e", "#b9651b", "#9a7b10", "#3f7d33", "#1f7a6b",
-  "#2f6bb8", "#5b4bc4", "#96379a", "#b02e6e", "#5b6570",
-] as const;
-
-function RosterPersonRow({
-  row,
-  busy,
-  onChoose,
-  onReset,
-}: {
-  row: RosterAnswer["people"][number];
-  busy: boolean;
-  onChoose: (color: string) => void;
-  onReset: () => void;
-}) {
-  const inputId = `identity-color-${row.person}`;
-  return (
-    <div
-      style={{
-        alignItems: "flex-start",
-        borderTop: "1px solid var(--border)",
-        display: "flex",
-        gap: 12,
-        opacity: busy ? 0.6 : 1,
-        padding: "12px 0",
-      }}
-    >
-      <span
-        aria-hidden="true"
-        style={{
-          alignItems: "center",
-          background: row.color,
-          borderRadius: 999,
-          // The ink is chosen FROM the fill, so a pale choice is still readable. See
-          // person-colors.ts for why the ink adapts rather than the choice being clamped.
-          color: row.ink,
-          display: "inline-flex",
-          flex: "0 0 auto",
-          fontSize: 12,
-          fontWeight: 700,
-          height: 32,
-          justifyContent: "center",
-          width: 32,
-        }}
-      >
-        {initials(row.displayName)}
-      </span>
-
-      <div style={{ display: "flex", flexDirection: "column", flex: 1, gap: 4, minWidth: 0 }}>
-        <div style={{ alignItems: "baseline", display: "flex", flexWrap: "wrap", gap: 8 }}>
-          <span style={{ fontWeight: 600 }}>{row.displayName}</span>
-          <span style={{ color: "var(--muted-foreground)", fontSize: 12 }}>{row.person}</span>
-          <span style={{ color: "var(--muted-foreground)", fontSize: 12 }}>@{row.github}</span>
-        </div>
-        <span style={{ color: "var(--muted-foreground)", fontSize: 12, wordBreak: "break-all" }}>
-          {row.emails.join(", ")}
-        </span>
-        <span style={{ color: "var(--muted-foreground)", fontSize: 12 }}>
-          {row.machines.length > 0
-            ? `Machines: ${row.machines.join(", ")}`
-            : "No machines of their own are known"}
-        </span>
-        {/* The caveat is stated ONCE, under the heading. Repeating it on every row —
-            which is what the first version did, and what looking at the rendered page
-            showed — buried the rows it was supposed to qualify under three copies of the
-            same sentence. It stays reachable per-row as the title. */}
-        <span style={{ color: "var(--muted-foreground)", fontSize: 12 }} title={SEEN_UNKNOWN_CAVEAT}>
-          {seenPhrase(row.seen)}
-        </span>
-
-        {row.clashesWith.length > 0 && (
-          <span style={{ color: "var(--warning, #b45309)", fontSize: 12 }}>
-            ⚠ This colour reads the same as {row.clashesWith.join(", ")}
-            {"'"}s. Still applied — pick another if you want them to look different.
-          </span>
-        )}
-
-        <div style={{ alignItems: "center", display: "flex", flexWrap: "wrap", gap: 6, marginTop: 4 }}>
-          {SWATCHES.map((swatch) => (
-            <button
-              key={swatch}
-              type="button"
-              disabled={busy}
-              onClick={() => onChoose(swatch)}
-              aria-label={`Give ${row.displayName} the colour ${swatch}`}
-              aria-pressed={row.color === swatch}
-              title={swatch}
-              style={{
-                background: swatch,
-                border: row.color === swatch ? "2px solid var(--foreground)" : "1px solid var(--border)",
-                borderRadius: 999,
-                cursor: busy ? "default" : "pointer",
-                height: 20,
-                padding: 0,
-                width: 20,
-              }}
-            />
-          ))}
-          <label htmlFor={inputId} style={{ color: "var(--muted-foreground)", fontSize: 12, marginLeft: 4 }}>
-            Custom
-          </label>
-          <input
-            id={inputId}
-            type="color"
-            disabled={busy}
-            // ALWAYS #rrggbb — see colorInputValue. A dealt colour is an hsl() string,
-            // which this element cannot hold; handing it one made the browser coerce the
-            // value and write the coerced colour back as a "choice" nobody made.
-            value={colorInputValue(row)}
-            onChange={(event) => {
-              // A native picker fires input and change in one tick; a pick that changes
-              // nothing is not a pick.
-              if (!shouldCommitColor(row, event.target.value)) return;
-              onChoose(event.target.value);
-            }}
-            style={{ background: "none", border: "none", height: 24, padding: 0, width: 32 }}
-          />
-          <span style={{ color: "var(--muted-foreground)", fontSize: 12 }}>
-            {row.overridden ? "chosen" : "dealt"}
-          </span>
-          {row.overridden && (
-            <button
-              type="button"
-              disabled={busy}
-              onClick={onReset}
-              style={{
-                background: "none",
-                border: "1px solid var(--border)",
-                borderRadius: 6,
-                color: "var(--foreground)",
-                cursor: busy ? "default" : "pointer",
-                fontSize: 12,
-                padding: "2px 8px",
-              }}
-            >
-              Reset to dealt
-            </button>
-          )}
-        </div>
-      </div>
-    </div>
-  );
-}
-
-function PeopleSettings() {
-  const rpc = useRpc<typeof rpcContract>();
-  const [roster, setRoster] = useState<RosterAnswer | null>(null);
-  const [error, setError] = useState<string | null>(null);
-  const [busy, setBusy] = useState<string | null>(null);
-
-  const load = useCallback(() => {
-    void rpc.call("identity_roster").then((result) => {
-      setRoster(result);
-      setError(null);
-    }).catch((failure: unknown) => setError(`Identity could not read the people list: ${String(failure)}`));
-  }, [rpc]);
-
-  useEffect(load, [load]);
-
-  /**
-   * One handler for both writes. A refusal comes back as an ANSWER (`ok: false`) rather
-   * than a thrown error, so it is shown as a sentence instead of disappearing.
-   */
-  const write = useCallback((person: string, color: string | null) => {
-    setBusy(person);
-    const call = color === null
-      ? rpc.call("identity_clear_person_color", { person })
-      : rpc.call("identity_set_person_color", { person, color });
-    void call.then((written: ColorWriteAnswer) => {
-      setError(written.ok ? null : `Could not change ${person}'s colour: ${written.reason}`);
-      load();
-    }).catch((failure: unknown) => {
-      setError(`Could not change ${person}'s colour: ${String(failure)}`);
-    }).finally(() => setBusy(null));
-  }, [load, rpc]);
-
-  if (error !== null && roster === null) {
-    return <span style={{ color: "var(--muted-foreground)", fontSize: 12 }}>{error}</span>;
-  }
-  if (roster === null) return null;
-
-  return (
-    <div style={{ display: "flex", flexDirection: "column", fontSize: 13, gap: 0 }}>
-      <span style={{ color: "var(--muted-foreground)", fontSize: 12, paddingBottom: 8 }}>
-        Everyone in Identity{"'"}s directory. A colour is dealt by roster position; anyone can choose a
-        different one for anyone, and every change is written to Identity{"'"}s log.
-        Changes are logged with the source of the current identity.
-      </span>
-      <IdentityPicker />
-      <span style={{ color: "var(--muted-foreground)", fontSize: 12, paddingBottom: 8 }}>
-        {SEEN_UNKNOWN_CAVEAT}
-      </span>
-      {roster.unavailable !== null && (
-        <span style={{ color: "var(--muted-foreground)", fontSize: 12, paddingBottom: 8 }}>
-          Machines are not listed: {roster.unavailable}.
-        </span>
-      )}
-      {error !== null && (
-        <span style={{ color: "var(--destructive, #b91c1c)", fontSize: 12, paddingBottom: 8 }}>{error}</span>
-      )}
-      {roster.people.length === 0
-        ? (
-          <span style={{ color: "var(--muted-foreground)", fontSize: 12 }}>
-            Nobody is registered yet. Identity reads its people from the {'"'}directory{'"'} setting above.
-          </span>
-        )
-        : roster.people.map((row) => (
-          <RosterPersonRow
-            key={row.person}
-            row={row}
-            busy={busy === row.person}
-            onChoose={(color) => write(row.person, color)}
-            onReset={() => write(row.person, null)}
-          />
-        ))}
-    </div>
-  );
-}
-
 export default definePluginApp((app) => {
   app.contentScripts.register({
     id: "thread-presence-status",
@@ -1092,8 +782,8 @@ export default definePluginApp((app) => {
   });
   app.slots.settingsSection({
     id: "people",
-    title: "People",
-    description: "Who is registered on this server, and the colour associated with each of them.",
-    component: PeopleSettings,
+    title: "People & machines",
+    description: "Who and what Identity recognises, why, and what it does about it.",
+    component: IdentitySettings,
   });
 });

@@ -368,6 +368,20 @@ export class AttributionLedger {
    *
    * Never throws: an unreadable index or record is simply a person this cannot vouch for.
    */
+  /**
+   * How many records the index holds, for the settings section's ledger fill. ONE index
+   * read, never a read per record. Null when the index cannot be read in time.
+   */
+  async count(): Promise<number | null> {
+    try {
+      const stored = await withTimeout(this.#kv.get<unknown>(INDEX_KEY), this.#timeoutMs);
+      if (stored === TIMED_OUT) return null;
+      return Array.isArray(stored) ? stored.filter((id) => typeof id === "string").length : 0;
+    } catch {
+      return null;
+    }
+  }
+
   async starterSweep(): Promise<string[]> {
     let ids: string[] = [];
     try {

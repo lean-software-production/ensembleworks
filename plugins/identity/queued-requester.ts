@@ -92,6 +92,16 @@ export class QueuedRequesterLedger {
     }
   }
 
+  /** How many rows the index holds: ONE index read. Null when it cannot be read in time. */
+  async count(): Promise<number | null> {
+    try {
+      const index = await withTimeout(this.#kv.get<unknown>(INDEX), KV_TIMEOUT_MS);
+      if (index === TIMED_OUT) return null;
+      return Array.isArray(index) ? index.filter((id) => typeof id === "string").length : 0;
+    } catch {
+      return null;
+    }
+  }
   async lookup(id: string): Promise<QueuedRequester | null> {
     if (this.#tombstones.has(id)) return null;
     const first = this.#first.get(id);
