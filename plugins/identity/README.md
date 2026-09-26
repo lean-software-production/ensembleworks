@@ -168,11 +168,13 @@ delay or alter a dispatch. What refuses is the guardrail, below.
 - **Machines are labelled `person`, `team` or `unclaimed`,** checked in this order: the
   team list, the pin, the name. A machine on `teamMachines` is the team's, whatever its
   name or pin, and reports no conflict. Otherwise a machine **pinned** to a person (by host
-  id) is theirs: a later rename that disagrees is *not* followed but reported
-  (`GET …/http/host-pins`, and in the header chip), and a pin to someone since removed from
-  the directory still names them. Otherwise a machine named `<box>-<person>` whose last
-  segment matches a directory `person` or `github` is that person's, and is pinned to them
-  on first sight. Anything else is **unclaimed** — never silently folded into "team".
+  id) is theirs, and a pin to someone since removed from the directory still names them. A
+  later rename that disagrees is *not* followed but reported (`GET …/http/host-pins`, and
+  in the header chip) until someone chooses **Keep pin**, which accepts that name without
+  changing the owner; a rename to any other disagreeing name is reported again. Otherwise a
+  machine named `<box>-<person>` whose last segment matches a directory `person` or
+  `github` is that person's, and is pinned to them on first sight. Anything else is
+  **unclaimed** — never silently folded into "team".
 - **Thread rows** show who started the thread ("Started by David · team machine"), except
   while someone is viewing or typing — **presence wins** that glyph.
 - **The thread header** reads "Started by David · runs as ensembleworks-agent on

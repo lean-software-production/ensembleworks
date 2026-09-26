@@ -51,6 +51,12 @@ describe("the glossary", () => {
       /^Team-list machines are the team's, whatever their name or pin\. Otherwise a pinned machine stays its owner's, through renames and after they leave the directory;.* Otherwise a name ending in -<name>/);
   });
 
+  it("says Keep pin silences a disagreeing name, so not every one is flagged", () => {
+    // classifyHost and HostPins.observe report no conflict while the name equals the pin's
+    // keptName, which keep() sets to the current name; any other disagreeing name is flagged.
+    expect(text("machine-owner")).toContain("a disagreeing name is flagged until Keep pin accepts it");
+  });
+
   it("describes the own-thread rule by the recorded starter, inherited ones included", () => {
     // A child thread inherits a lineage thread's recorded starter only when its own request
     // resolves no person (decideAttribution), and rule B judges that record, not how the
