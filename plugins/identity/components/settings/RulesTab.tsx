@@ -28,12 +28,12 @@ const WHO: Record<SimWho, string> = {
 };
 const WHAT: Record<SimWhat, string> = {
   start: "Start a new thread",
-  "follow-up-own": "Send into a thread they started",
-  "follow-up-others": "Send into a thread someone else started",
+  "follow-up-own": "Send into a thread Alex started",
+  "follow-up-others": "Send into a thread Sam started",
 };
 const MACHINE: Record<SimMachine, string> = {
-  own: "Their own machine",
-  "another-persons": "Another person's machine",
+  own: "Alex's machine",
+  "another-persons": "Sam's machine",
   team: "A team machine",
   unclaimed: "An unclaimed machine",
 };
@@ -229,7 +229,7 @@ function Simulator() {
         </p>
       )}
       <p className="identity-settings-muted">
-        Runs Identity{"'"}s real guardrail in your browser. Alex is asking; Sam is someone else.
+        Runs Identity{"'"}s real guardrail in your browser. Alex and Sam are example people.
       </p>
     </section>
   );

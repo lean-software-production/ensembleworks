@@ -240,7 +240,7 @@ describe("Rules tab — simulator and coverage", () => {
     expect(within(enforceCell).getByRole("button", { name: "Own-machine rule" })).toBeTruthy();
     expect(panel.textContent).toContain("The message they would see:");
     expect(panel.textContent).toContain("(Refused by Identity's machine-ownership guardrail.)");
-    expect(panel.textContent).toContain("Runs Identity's real guardrail in your browser. Alex is asking; Sam is someone else.");
+    expect(panel.textContent).toContain("Runs Identity's real guardrail in your browser. Alex and Sam are example people.");
     expect(table.querySelector("details")).toBeNull();
 
     fireEvent.change(select("Machine"), { target: { value: "team" } });
@@ -251,6 +251,19 @@ describe("Rules tab — simulator and coverage", () => {
     fireEvent.change(select("Who"), { target: { value: "browser-name" } });
     fireEvent.change(select("Machine"), { target: { value: "another-persons" } });
     expect(cells()[2]).not.toContain("Refused");
+  });
+
+  it("names the example machines and threads by owner, since Who need not be a person", async () => {
+    // simulationFacts gives an automation, the fallback email or nobody no requester; Alex
+    // and Sam are only the example owners and recorded starters.
+    mount();
+    const panel = await openTab("Rules");
+    const options = (name: string) => Array.from(
+      (within(panel).getByRole("combobox", { name }) as HTMLSelectElement).options, (option) => option.textContent ?? "");
+    await within(panel).findByRole("table", { name: "Outcome in each mode" });
+    expect(options("What")).toEqual(["Start a new thread", "Send into a thread Alex started", "Send into a thread Sam started"]);
+    expect(options("Machine")).toEqual(["Alex's machine", "Sam's machine", "A team machine", "An unclaimed machine"]);
+    expect(panel.textContent).not.toMatch(/Alex is asking|Their own machine|thread they started/);
   });
 
   it("lists the seven coverage rows in a disclosure, each status as icon and text", async () => {

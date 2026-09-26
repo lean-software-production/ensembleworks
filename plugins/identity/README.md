@@ -27,8 +27,9 @@ typing pulses carry a person when one is known, and stay anonymous otherwise.
   With nobody named they keep the anonymous wording ("2 other viewers").
 - Counts are of distinct people: one person in two browsers counts once. Your
   own browser is excluded.
-- The popover footer states the source of the name, including whether it was chosen
-  in this browser or came from an unverified upstream header.
+- The popover footer says where your name came from — your Access email, a name
+  chosen in this browser, or the fallback email — or that you are anonymous or not in
+  the directory.
 - `identity_whoami` (RPC) and `GET /api/v1/plugins/identity/http/whoami` return
   `{ email, person, provenance, selection, picker }` for the caller.
 
@@ -183,7 +184,8 @@ delay or alter a dispatch. What refuses is the guardrail, below.
   it says about what happens *after* you press send follows the `enforcement` setting, and
   `ownership-labels.test.ts` fails if that copy ever promises an enforcement that is not
   switched on — in either tense, so audit's "would be refused" may never read as "was".
-- **In `audit` mode the header chip also says what enforcement would have done**
+- **In `audit` mode the header chip also says what Enforce would do to your next message
+  here, or to a new thread you start on this machine**
   ("Started by Matt · your next message would be refused — Matt's thread (audit mode lets it through)"),
   so the team can evaluate the guardrail by using BB rather than by reading logs.
 
@@ -207,8 +209,8 @@ one whose Access email matches the directory: **A** a known person's request int
 with no record — a new thread, or a follow-up after a Send now start — on another *person's*
 machine (team and unclaimed machines are always fine); **B** a known person's follow-up
 into a thread whose recorded starter is someone else, including a starter a child thread
-inherited from its lineage (a thread recorded from a browser name or `fallbackEmail` has no
-starter to protect); **C** an automation
+inherited from its lineage (a thread recorded from a browser name or `fallbackEmail` keeps
+its recorded starter, but the guardrail ignores it, so follow-ups stay open to anyone); **C** an automation
 (`origin: plugin`, `originPluginId: automations`) headed for a machine that is not a team
 machine. A dispatch Identity cannot tie to a person is **never refused by rules A or B, in
 any mode** — that is the normal shape of every agent path (see the design note's S9) — and

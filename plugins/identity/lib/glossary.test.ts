@@ -109,6 +109,13 @@ describe("the glossary", () => {
     expect(text("attribution-only")).toContain("one begun with Send now has no record");
   });
 
+  it("says a browser name or the fallback email records the starter, not every sender", () => {
+    // Off writes no dispatch or post-dispatch line (server.ts), and the attribution ledger
+    // keeps a thread's starter, not the sender of each follow-up.
+    expect(text("attribution-only")).not.toContain("who sent a message");
+    expect(text("attribution-only")).toContain("records who started a thread");
+  });
+
   it("never exempts a browser name, the fallback email or no identity from the whole guardrail", () => {
     // guardrail.ts rule C refuses a stamped automation with no requester at all, and
     // server.ts hands the fallback identity to header-less callers, automations included.
