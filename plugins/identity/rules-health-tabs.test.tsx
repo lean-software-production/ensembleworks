@@ -296,7 +296,17 @@ describe("Health tab", () => {
     expect(shown[2]).toContain("patch unavailable");
   });
 
-  it("passes every leg for a passing self-test, the cookie leg from its own result", async () => {
+  it("passes every leg for a passing self-test", async () => {
+    mount({ identity_settings_overview: () => overview({ selfTest: passing }) });
+    const panel = await openTab("Health");
+    const shown = await legs(panel);
+    expect(shown).toHaveLength(3);
+    expect(shown.every((leg) => leg.includes("Passed"))).toBe(true);
+    expect(shown.some((leg) => leg.includes("Failed") || leg.includes("Not run yet"))).toBe(false);
+    expect(shown[2]).toContain("named cookie reached request context");
+  });
+
+  it("fails only the cookie leg when just the cookie bridge failed, from its own result", async () => {
     const cookieDown = { ...passing, cookie: { ok: false, detail: "cookie did not arrive" } };
     mount({ identity_settings_overview: () => overview({ selfTest: cookieDown }) });
     const panel = await openTab("Health");
@@ -395,6 +405,49 @@ describe("Health tab", () => {
     fireEvent.click(button);
     expect(await within(panel).findByText(/Identity could not build the diagnostics/)).toBeTruthy();
     expect(within(panel).queryByText("Copied.")).toBeNull();
+  });
+
+  it("ignores an older diagnostics request that settles after a newer one failed", async () => {
+    const writeText = vi.fn(() => Promise.resolve());
+    vi.stubGlobal("navigator", { ...navigator, clipboard: { writeText } });
+    const pending: { resolve: (value: unknown) => void; reject: (reason: unknown) => void }[] = [];
+    const diagnostics = vi.fn(() => new Promise((resolve, reject) => { pending.push({ resolve, reject }); }));
+    mount({ identity_diagnostics: diagnostics });
+    const panel = await openTab("Health");
+    const button = await within(panel).findByRole("button", { name: "Copy diagnostics" });
+    fireEvent.click(button);
+    await waitFor(() => expect(diagnostics).toHaveBeenCalledTimes(1));
+    fireEvent.click(button);
+    await waitFor(() => expect(diagnostics).toHaveBeenCalledTimes(2));
+    pending[1]!.reject(new Error("offline"));
+    expect(await within(panel).findByText(/Identity could not build the diagnostics/)).toBeTruthy();
+    pending[0]!.resolve({ text: "{\"plugin\":\"stale\"}" });
+    await new Promise((settle) => setTimeout(settle, 20));
+    expect(writeText).not.toHaveBeenCalled();
+    expect(within(panel).queryByText("Copied.")).toBeNull();
+    expect(within(panel).getByText(/Identity could not build the diagnostics/)).toBeTruthy();
+  });
+
+  it("copies only the newest diagnostics when an older request settles last", async () => {
+    const writeText = vi.fn(() => Promise.resolve());
+    vi.stubGlobal("navigator", { ...navigator, clipboard: { writeText } });
+    const pending: { resolve: (value: unknown) => void; reject: (reason: unknown) => void }[] = [];
+    const diagnostics = vi.fn(() => new Promise((resolve, reject) => { pending.push({ resolve, reject }); }));
+    mount({ identity_diagnostics: diagnostics });
+    const panel = await openTab("Health");
+    const button = await within(panel).findByRole("button", { name: "Copy diagnostics" });
+    fireEvent.click(button);
+    await waitFor(() => expect(diagnostics).toHaveBeenCalledTimes(1));
+    fireEvent.click(button);
+    await waitFor(() => expect(diagnostics).toHaveBeenCalledTimes(2));
+    pending[1]!.resolve({ text: "{\"plugin\":\"newest\"}" });
+    expect(await within(panel).findByText("Copied.")).toBeTruthy();
+    pending[0]!.reject(new Error("offline"));
+    await new Promise((settle) => setTimeout(settle, 20));
+    expect(writeText).toHaveBeenCalledTimes(1);
+    expect(writeText).toHaveBeenCalledWith("{\"plugin\":\"newest\"}");
+    expect(within(panel).getByText("Copied.")).toBeTruthy();
+    expect(within(panel).queryByText(/Identity could not build the diagnostics/)).toBeNull();
   });
 
   it("shows the diagnostics to copy by hand when the clipboard refuses", async () => {

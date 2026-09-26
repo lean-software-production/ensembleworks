@@ -1,4 +1,4 @@
-import { useId, useState } from "react";
+import { useId, useRef, useState } from "react";
 import { useRpc } from "@get-bb/plugin-sdk/app";
 import type { rpcContract, SettingsOverview } from "../../server.js";
 import type { LintSeverity, ReadinessStatus } from "../../settings-admin.js";
@@ -144,16 +144,23 @@ function Diagnostics() {
   const { state, copy, reset } = useCopy();
   const [text, setText] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
+  // Bumped by every request, so an older bundle that arrives late is dropped rather than copied.
+  const latest = useRef(0);
   // Read only on request: the bundle is built fresh each time it is copied, so an
   // earlier "Copied." or hand-copy text never stands in for this request's outcome.
   const collect = () => {
+    const mine = ++latest.current;
     setError(null);
     setText(null);
     reset();
     void rpc.call("identity_diagnostics", {}).then((answer) => {
+      if (mine !== latest.current) return;
       setText(answer.text);
       copy(answer.text);
-    }).catch((failure: unknown) => setError(`Identity could not build the diagnostics: ${String(failure)}`));
+    }, (failure: unknown) => {
+      if (mine !== latest.current) return;
+      setError(`Identity could not build the diagnostics: ${String(failure)}`);
+    });
   };
   return (
     <section className="identity-settings-stack" aria-labelledby={`${base}-diagnostics`}>
