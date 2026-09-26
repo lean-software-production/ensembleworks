@@ -1256,15 +1256,24 @@ export default async function plugin(bb: BbPluginApi) {
     if (!response.ok) throw new Error(`probe route answered ${response.status}`);
     return await response.json();
   };
-  const runSelfTest = async (attemptsLeft: number): Promise<void> => {
+  /**
+   * Bumped by an operator's re-run and by dispose: a run from an older generation (the
+   * boot run whose probe is still in flight) drops its result and schedules no retry, so
+   * the re-run stays the one run and its result is the one that stands.
+   */
+  let selfTestGeneration = 0;
+  const runSelfTest = async (attemptsLeft: number, generation = selfTestGeneration): Promise<void> => {
+    let result: SelfTestResult;
     try {
-      selfTest = await selfTestRequestContext(requestContext, { probe });
+      result = await selfTestRequestContext(requestContext, { probe });
     } catch (error) {
-      selfTest = { ok: false, detail: `the self-test could not run: ${(error as Error).message}`,
+      result = { ok: false, detail: `the self-test could not run: ${(error as Error).message}`,
         cookie: { ok: false, detail: "probe unavailable" } };
     }
+    if (generation !== selfTestGeneration) return;
+    selfTest = result;
     if (!selfTest.ok && attemptsLeft > 0) {
-      selfTestTimer = setTimeout(() => void runSelfTest(attemptsLeft - 1), 1_000);
+      selfTestTimer = setTimeout(() => void runSelfTest(attemptsLeft - 1, generation), 1_000);
       return;
     }
     if (selfTest.ok) {
@@ -1281,9 +1290,11 @@ export default async function plugin(bb: BbPluginApi) {
   /** An operator's re-run, shared by every caller that asks while it is in flight. */
   let selfTestRun: Promise<SelfTestResult> | null = null;
   const rerunSelfTest = (): Promise<SelfTestResult> => {
+    if (selfTestRun !== null) return selfTestRun;
     if (selfTestTimer !== undefined) clearTimeout(selfTestTimer);
     selfTestTimer = undefined;
-    selfTestRun ??= runSelfTest(0).then(() => selfTest!).finally(() => { selfTestRun = null; });
+    selfTestGeneration += 1;
+    selfTestRun = runSelfTest(0).then(() => selfTest!).finally(() => { selfTestRun = null; });
     return selfTestRun;
   };
 
@@ -1329,8 +1340,18 @@ export default async function plugin(bb: BbPluginApi) {
     starters: { count: await ledger.count(), max: MAX_STARTER_RECORDS },
     queued: { count: await queuedRequesters.count(), max: MAX_QUEUED_REQUESTERS },
   });
-  /** Re-read and re-apply at once, rather than trusting `onChange` to have run by now. */
-  const reapply = async () => applySettings(await settings.get(), false);
+  /**
+   * Re-read and re-apply at once, rather than trusting `onChange` to have run by now. It
+   * runs after a write has already landed, so a failed read is reported, never thrown:
+   * the write stands, and `onChange` still applies it.
+   */
+  const reapply = async () => {
+    try {
+      applySettings(await settings.get(), false);
+    } catch (error) {
+      bb.log.warn(`identity: a settings write landed but re-reading the settings failed: ${(error as Error).message}`);
+    }
+  };
 
   bb.rpc.register(rpcContract, {
     identity_whoami: () => whoamiFor(requestContext.current()?.email ?? null),
@@ -1424,26 +1445,31 @@ export default async function plugin(bb: BbPluginApi) {
         if (to !== undefined && to !== current[key]) changes.push({ key, from: current[key], to });
       }
       if (changes.length === 0) return { ok: true as const, changed: [] };
+      // Who asked, captured before the write: a new fallback email or picker setting
+      // would otherwise re-resolve the caller as someone they were not.
+      const actor = adminActor();
       try {
         await settings.experimental_set(Object.fromEntries(changes.map(({ key, to }) => [key, to])));
       } catch (error) {
         bb.log.warn(`identity: a settings write failed: ${(error as Error).message}`);
         return { ok: false as const, reason: "write-failed" };
       }
+      emitAudit(auditLine, settingsChangeAuditLine({ ...actor, mode: verdict.values.enforcement ?? actor.mode, changes }));
       await reapply();
-      emitAudit(auditLine, settingsChangeAuditLine({ ...adminActor(), changes }));
       return { ok: true as const, changed: changes.map(({ key }) => key) };
     },
     identity_rotate_signing_key: async () => {
+      // Captured first: the rotation expires the very selection that names the caller.
+      const actor = adminActor();
       try {
         await settings.experimental_set({ selectionSigningKey: randomBytes(32).toString("base64url") });
       } catch (error) {
         bb.log.warn(`identity: rotating the signing key failed: ${(error as Error).message}`);
         return { ok: false as const, reason: "write-failed" };
       }
-      await reapply();
-      emitAudit(auditLine, settingsChangeAuditLine({ ...adminActor(),
+      emitAudit(auditLine, settingsChangeAuditLine({ ...actor,
         changes: [{ key: "selectionSigningKey", from: "[secret]", to: "[rotated]" }] }));
+      await reapply();
       return { ok: true as const };
     },
     identity_resolve_pin: async ({ hostId, action, person: wanted }) => {
@@ -1508,6 +1534,7 @@ export default async function plugin(bb: BbPluginApi) {
     // otherwise lose the counters gathered since the last one.
     requestAuditor.flush();
     if (selfTestTimer !== undefined) clearTimeout(selfTestTimer);
+    selfTestGeneration += 1;
     // Deliberately NOT unpatching the request context: bb disposes the old generation
     // after the new one has loaded, so restoring `emit` here would remove the live
     // patch (S7, lesson 1).

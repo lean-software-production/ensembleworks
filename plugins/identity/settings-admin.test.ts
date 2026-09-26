@@ -473,6 +473,22 @@ describe("redactDiagnostics", () => {
       ok: false, error: 'directory email "s***@example.org" belongs to both "sam" and "twin"', people: 0, emails: 0,
     });
   });
+
+  it("redacts an email the self-test probe saw unexpectedly", () => {
+    const failed = healthy({ selfTest: {
+      ok: false, detail: `the probe's request context had email ${JSON.stringify("alex@example.com")}`,
+      cookie: { ok: false, detail: "cookie probe failed: alex@example.com" },
+    } });
+    const out = redactDiagnostics({
+      ...failed, generatedAt: 0, sharedMachineUser: "u", lint: lintConfig(failed),
+      ledgers: { starters: { count: 0, max: 2000 }, queued: { count: 0, max: 1000 } },
+    });
+    expect(out).not.toContain("alex@example.com");
+    expect(JSON.parse(out).selfTest).toEqual({
+      ok: false, detail: 'the probe\'s request context had email "a***@example.com"',
+      cookie: { ok: false, detail: "cookie probe failed: a***@example.com" },
+    });
+  });
 });
 
 describe("profileRecommendation", () => {

@@ -307,7 +307,12 @@ export function redactDiagnostics(input: DiagnosticsInput): string {
     generatedAt: new Date(input.generatedAt).toISOString(),
     plugin: "identity",
     schema: 1,
-    selfTest: input.selfTest,
+    // A failed probe quotes the email it saw, so the free-text details are redacted too.
+    selfTest: input.selfTest === null ? null : {
+      ...input.selfTest,
+      detail: input.selfTest.detail.replace(EMBEDDED_EMAIL, redactEmail),
+      cookie: { ...input.selfTest.cookie, detail: input.selfTest.cookie.detail.replace(EMBEDDED_EMAIL, redactEmail) },
+    },
     picker: {
       status: input.pickerStatus,
       enabled: input.selfSelectedIdentity,
