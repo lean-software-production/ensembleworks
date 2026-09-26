@@ -303,6 +303,10 @@ describe("first-run server profile", () => {
   const fresh = () => overview({ people: [], machines: [], teamMachines: [], enforcement: "off", accessSeen: false },
     { firstRun: true, settings: { ...settings, teamMachines: "", enforcement: "off", signingKey: "missing" } });
   const current = { ...settings, teamMachines: "", enforcement: "off" as const };
+  const confirmApply = async (title: string) => {
+    const dialog = await screen.findByRole("dialog", { name: title });
+    fireEvent.click(within(dialog).getByRole("button", { name: "Apply profile" }));
+  };
 
   it("is not asked once the server is set up", async () => {
     mount();
@@ -334,6 +338,7 @@ describe("first-run server profile", () => {
     for (const note of recommended.notes) expect(screen.getByText(note)).toBeTruthy();
     expect(update).not.toHaveBeenCalled();
     fireEvent.click(apply);
+    await confirmApply("Apply the Direct, without Access profile?");
     await waitFor(() => expect(update).toHaveBeenCalledTimes(1));
     expect(view.rpcCalls.find((call) => call.method === "identity_update_settings")?.input).toEqual(recommended.patch);
     await waitFor(() => expect(screen.queryByRole("radiogroup", { name: question })).toBeNull());
@@ -351,6 +356,7 @@ describe("first-run server profile", () => {
     fireEvent.click(screen.getByRole("checkbox", { name: "Only one person uses this server" }));
     expect(apply.hasAttribute("disabled")).toBe(false);
     fireEvent.click(apply);
+    await confirmApply("Apply the Only me profile?");
     await waitFor(() => expect(update).toHaveBeenCalledTimes(1));
     expect(view.rpcCalls.find((call) => call.method === "identity_update_settings")?.input).toEqual(
       profileRecommendation("solo", current, { myEmail: "alex@example.test", browserOrigin: window.location.origin }).patch);
@@ -361,8 +367,48 @@ describe("first-run server profile", () => {
       identity_update_settings: () => ({ ok: false, reason: "write-failed" }) });
     fireEvent.click(await screen.findByRole("radio", { name: /^Cloudflare Access/ }));
     fireEvent.click(screen.getByRole("button", { name: "Apply" }));
+    await confirmApply("Apply the Cloudflare Access profile?");
     expect(await screen.findByText(/BB did not save the settings/)).toBeTruthy();
     expect(screen.getByRole("radiogroup", { name: question })).toBeTruthy();
+  });
+
+  it("confirms before writing, naming what changes; Cancel writes nothing and returns focus to Apply", async () => {
+    const update = vi.fn(() => ({ ok: true, changed: ["fallbackEmail"] }));
+    mount({ identity_settings_overview: fresh, identity_update_settings: update });
+    fireEvent.click(await screen.findByRole("radio", { name: "Only me" }));
+    fireEvent.click(screen.getByRole("checkbox", { name: "Only one person uses this server" }));
+    const apply = screen.getByRole("button", { name: "Apply" });
+    apply.focus();
+    fireEvent.click(apply);
+    const dialog = await screen.findByRole("dialog", { name: "Apply the Only me profile?" });
+    expect(within(dialog).getByText(/Fallback email: \(empty\) → alex@example\.test/)).toBeTruthy();
+    expect(within(dialog).getByText(/agents included, will be attributed to alex@example\.test/)).toBeTruthy();
+    await waitFor(() => expect(document.activeElement).toBe(within(dialog).getByRole("button", { name: "Cancel" })));
+    expect(update).not.toHaveBeenCalled();
+    fireEvent.click(within(dialog).getByRole("button", { name: "Cancel" }));
+    await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
+    await waitFor(() => expect(document.activeElement).toBe(apply));
+    expect(update).not.toHaveBeenCalled();
+    expect(screen.getByRole("radiogroup", { name: question })).toBeTruthy();
+  });
+
+  it("names that turning the guardrail off means nothing is refused", async () => {
+    mount({ identity_settings_overview: () => overview({}, { firstRun: true }) });
+    fireEvent.click(await screen.findByRole("radio", { name: "Direct, without Access" }));
+    fireEvent.click(screen.getByRole("button", { name: "Apply" }));
+    const dialog = await screen.findByRole("dialog", { name: "Apply the Direct, without Access profile?" });
+    expect(within(dialog).getByText(/The guardrail turns off: nothing will be refused/)).toBeTruthy();
+  });
+
+  it("prefills the Only me email when who-you-are arrives after the settings", async () => {
+    let arrive: (whoami: WhoAmI) => void = () => {};
+    const late = new Promise<WhoAmI>((resolve) => { arrive = resolve; });
+    mount({ identity_settings_overview: fresh, identity_whoami: () => late });
+    fireEvent.click(await screen.findByRole("radio", { name: "Only me" }));
+    const email = screen.getByRole("textbox", { name: "Your email" }) as HTMLInputElement;
+    expect(email.value).toBe("");
+    await act(async () => { arrive(headerAlex); await late; });
+    await waitFor(() => expect(email.value).toBe("alex@example.test"));
   });
 
   it("opens from the Profile readiness item with a Close button", async () => {

@@ -7,6 +7,7 @@ import {
   type ServerProfile,
   type WritableSettings,
 } from "../../settings-admin.js";
+import { ConfirmDialog } from "./ConfirmDialog.js";
 
 const PROFILE_LABELS: Record<ServerProfile, string> = {
   access: "Cloudflare Access",
@@ -29,10 +30,12 @@ export function refusalSentence(reason: string): string {
   return SETTINGS_REFUSALS[reason] ?? `Identity refused the change (${reason}); nothing changed.`;
 }
 
+const shown = (value: string) => (value === "" ? "(empty)" : value);
+
 /**
  * The first-run question: how do people reach this server? Choosing a profile only
- * previews what would change; nothing is written until Apply, and Apply sends exactly
- * the patch the preview shows.
+ * previews what would change; nothing is written until Apply is confirmed, and the
+ * write sends exactly the patch the preview shows.
  */
 export function ProfilePanel({ overview, whoami, closable, onApplied, onClose }: {
   overview: SettingsOverview;
@@ -44,7 +47,10 @@ export function ProfilePanel({ overview, whoami, closable, onApplied, onClose }:
   const rpc = useRpc<typeof rpcContract>();
   const base = useId();
   const [choice, setChoice] = useState<ServerProfile | null>(null);
-  const [email, setEmail] = useState(whoami?.email ?? "");
+  // null until typed in, so the field follows whoami when that read lands after the overview.
+  const [typedEmail, setEmail] = useState<string | null>(null);
+  const email = typedEmail ?? whoami?.email ?? "";
+  const [confirming, setConfirming] = useState(false);
   const [soleUser, setSoleUser] = useState(false);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -62,8 +68,12 @@ export function ProfilePanel({ overview, whoami, closable, onApplied, onClose }:
       if (!answer.ok) { setError(refusalSentence(answer.reason)); return; }
       onApplied();
     }).catch((failure: unknown) => setError(`Identity could not save the settings: ${String(failure)}`))
-      .finally(() => setBusy(false));
+      .finally(() => { setBusy(false); setConfirming(false); });
   };
+  const fallback = recommendation?.changes.find((change) => change.setting === "fallbackEmail" && change.recommended !== "")
+    ?.recommended ?? null;
+  const guardrailOff = recommendation !== null
+    && recommendation.changes.some((change) => change.setting === "enforcement" && change.recommended === "off");
 
   return (
     <section className="identity-settings-card identity-settings-profile" aria-labelledby={`${base}-question`}>
@@ -104,8 +114,8 @@ export function ProfilePanel({ overview, whoami, closable, onApplied, onClose }:
                   {recommendation.changes.map((change) => (
                     <tr key={change.setting}>
                       <td data-label="Setting">{change.label}</td>
-                      <td data-label="Now">{change.now}</td>
-                      <td data-label="Recommended">{change.recommended}</td>
+                      <td data-label="Now">{shown(change.now)}</td>
+                      <td data-label="Recommended">{shown(change.recommended)}</td>
                     </tr>
                   ))}
                 </tbody>
@@ -116,11 +126,39 @@ export function ProfilePanel({ overview, whoami, closable, onApplied, onClose }:
       )}
       {error !== null && <p className="identity-settings-error">{error}</p>}
       <div className="identity-settings-actions">
-        <button type="button" className="identity-settings-button" data-variant="primary" disabled={!ready} onClick={apply}>
+        <button type="button" className="identity-settings-button" data-variant="primary" disabled={!ready}
+          onClick={() => { setError(null); setConfirming(true); }}>
           Apply
         </button>
         {closable && <button type="button" className="identity-settings-button" onClick={onClose}>Close</button>}
       </div>
+      {choice !== null && recommendation !== null && (
+        <ConfirmDialog
+          open={confirming}
+          title={`Apply the ${PROFILE_LABELS[choice]} profile?`}
+          confirmLabel="Apply profile"
+          busy={busy}
+          onConfirm={apply}
+          onCancel={() => { if (!busy) setConfirming(false); }}
+          consequence={
+            <>
+              {recommendation.changes.length === 0
+                ? <p>Every setting already matches; applying writes the same values again.</p>
+                : (
+                  <ul>
+                    {recommendation.changes.map((change) => (
+                      <li key={change.setting}>{change.label}: {shown(change.now)} → {shown(change.recommended)}</li>
+                    ))}
+                  </ul>
+                )}
+              {guardrailOff && <p>The guardrail turns off: nothing will be refused or audited.</p>}
+              {fallback !== null && (
+                <p>Every request without an Access email or a browser name, agents included, will be attributed to {fallback}.</p>
+              )}
+            </>
+          }
+        />
+      )}
     </section>
   );
 }
