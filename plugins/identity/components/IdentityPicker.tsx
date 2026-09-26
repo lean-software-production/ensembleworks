@@ -8,10 +8,12 @@ const REFRESH_MS = 5_000;
  * The browser-name picker, moved out of app.tsx so both the app overlays and the settings
  * page can mount it without an import cycle. Behaviour and accessible names are unchanged.
  */
-export function IdentityPicker({ onIdentityChange, refreshKey }: {
+export function IdentityPicker({ onIdentityChange, refreshKey, heading = true }: {
   onIdentityChange?: (identity: WhoAmI) => void;
   /** A change asks for an immediate refresh — the settings page bumps it after a write, e.g. a new profile. */
   refreshKey?: number;
+  /** False where the page already heads it "This browser" (the settings tab). */
+  heading?: boolean;
 } = {}) {
   const rpc = useRpc<typeof rpcContract>();
   const selectorId = useId();
@@ -76,7 +78,7 @@ export function IdentityPicker({ onIdentityChange, refreshKey }: {
   const chosen = me.provenance === "self-selected" && me.person !== null;
   return <div className="identity-picker" aria-label="Browser identity" style={{ marginTop: 12, paddingTop: 12,
     borderTop: "1px solid var(--border)", minWidth: 0 }}>
-    <strong style={{ display: "block" }}>This browser</strong>
+    {heading && <strong style={{ display: "block" }}>This browser</strong>}
     <p style={{ margin: "4px 0 8px", fontSize: 12 }}>{chosen
       ? `Shown as ${me.person!.displayName} (chosen here; attribution only).`
       : me.selection?.status === "stale"

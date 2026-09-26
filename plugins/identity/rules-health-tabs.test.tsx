@@ -107,10 +107,9 @@ describe("Rules tab — enforcement", () => {
     expect(audit().checked).toBe(true);
     const described = (radio: HTMLInputElement) =>
       document.getElementById(radio.getAttribute("aria-describedby")!)!.textContent;
-    expect(described(off())).toBe("Record and label only; never refuse.");
-    expect(described(audit())).toBe("Take the same decision Enforce would and write it to the log — let everything through.");
-    expect(described(enforce())).toBe("Refuse a known person's start on someone else's machine, their message into "
-      + "someone else's thread, and an automation spawning a thread on a named machine that is not a team machine.");
+    expect(described(off())).toBe("Label threads; check nothing.");
+    expect(described(audit())).toBe("Log what Enforce would refuse; let everything through.");
+    expect(described(enforce())).toBe("Refuse it, with a message saying why.");
   });
 
   it("saves Off and Audit immediately, without a dialog", async () => {
@@ -144,7 +143,7 @@ describe("Rules tab — enforcement", () => {
 
   it("confirms Enforce naming who would be refused, gated on the acknowledgement", async () => {
     const update = vi.fn(() => ({ ok: true, changed: ["enforcement"] }));
-    const risk = "An automation starting a thread on a named machine would be refused: no team machine is configured (rule C).";
+    const risk = "An automation starting a thread on a named machine would be refused by the automation rule: no team machine is configured.";
     mount({ identity_settings_overview: () => overview({}, { enforceRisks: [risk] }), identity_update_settings: update });
     const panel = await openTab("Rules");
     const { enforce } = await modes(panel);
@@ -153,7 +152,7 @@ describe("Rules tab — enforcement", () => {
     await waitFor(() => expect(document.activeElement).toBe(within(dialog).getByRole("button", { name: "Cancel" })));
     const items = within(within(dialog).getByRole("list")).getAllByRole("listitem").map((item) => item.textContent);
     expect(items).toEqual([risk]);
-    expect(dialog.textContent).toContain("Rule B (someone else's thread) cannot be predicted — check the audit log.");
+    expect(dialog.textContent).toContain("Refusals under the own-thread rule can't be predicted — check the audit log.");
     const confirm = within(dialog).getByRole("button", { name: /enforce/i }) as HTMLButtonElement;
     expect(confirm.disabled).toBe(true);
     fireEvent.click(within(dialog).getByRole("checkbox", { name: "I have read the audit log and understand who would be refused" }));
@@ -170,7 +169,7 @@ describe("Rules tab — enforcement", () => {
     fireEvent.click(enforce());
     const dialog = await screen.findByRole("dialog");
     expect(dialog.textContent).toContain("Identity cannot predict anyone being refused from machine state alone.");
-    expect(dialog.textContent).toContain("Rule B (someone else's thread) cannot be predicted — check the audit log.");
+    expect(dialog.textContent).toContain("Refusals under the own-thread rule can't be predicted — check the audit log.");
   });
 
   it("Escape leaves the previous mode checked and focused, without writing", async () => {
@@ -203,9 +202,10 @@ describe("Rules tab — audit evidence", () => {
       return found!;
     });
     expect(code.textContent).toBe(AUDIT_JQ_COMMAND);
-    expect(panel.textContent).toContain("Identity keeps no log in the UI — by decision. To see what the guardrail "
-      + "would refuse, run:");
-    expect(panel.textContent).toContain("Needs BB core: a plugin log query");
+    expect(panel.textContent).toContain("Identity shows no log here. To see what the guardrail would refuse, run:");
+    // The coverage map below still says what needs BB core; the evidence section no longer does.
+    const evidence = within(panel).getByRole("heading", { name: "Audit evidence" }).closest("section")!;
+    expect(evidence.textContent).not.toContain("Needs BB core");
     fireEvent.click(within(panel).getByRole("button", { name: "Copy command" }));
     await waitFor(() => expect(writeText).toHaveBeenCalledWith(AUDIT_JQ_COMMAND));
     expect(await within(panel).findByText("Copied.")).toBeTruthy();
@@ -235,9 +235,13 @@ describe("Rules tab — simulator and coverage", () => {
     expect(off).toContain("Allowed");
     expect(audit).toContain("would refuse");
     expect(enforce).toContain("Refused");
-    expect(enforce).toContain("Rule A");
-    expect(enforce).toContain("(Refused by Identity's machine-ownership guardrail.)");
-    expect(within(table).getAllByText(/Rule A/)[0]!.closest("details")).toBeTruthy();
+    expect(enforce).toContain("Own-machine rule");
+    const enforceCell = within(table).getAllByRole("cell")[2]!;
+    expect(within(enforceCell).getByRole("button", { name: "Own-machine rule" })).toBeTruthy();
+    expect(panel.textContent).toContain("The message they would see:");
+    expect(panel.textContent).toContain("(Refused by Identity's machine-ownership guardrail.)");
+    expect(panel.textContent).toContain("Runs Identity's real guardrail in your browser. Alex is asking; Sam is someone else.");
+    expect(table.querySelector("details")).toBeNull();
 
     fireEvent.change(select("Machine"), { target: { value: "team" } });
     [off, audit, enforce] = cells();
@@ -247,8 +251,6 @@ describe("Rules tab — simulator and coverage", () => {
     fireEvent.change(select("Who"), { target: { value: "browser-name" } });
     fireEvent.change(select("Machine"), { target: { value: "another-persons" } });
     expect(cells()[2]).not.toContain("Refused");
-    expect(panel.textContent).toContain("Runs Identity's real guardrail decision in your browser. Browser names and "
-      + "the fallback email are never refused.");
   });
 
   it("lists the seven coverage rows in a disclosure, each status as icon and text", async () => {

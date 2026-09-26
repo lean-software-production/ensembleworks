@@ -161,8 +161,8 @@ back as `null`. Attribution is a guardrail aid, not an audit log.
 
 ## Ownership UI
 
-Identity **shows** who owns what. It labels; it restricts nothing, and nothing here can
-reject, delay or alter a dispatch.
+Identity **shows** who owns what. The ownership UI only labels: nothing in it can reject,
+delay or alter a dispatch. What refuses is the guardrail, below.
 
 - **Machines are labelled `person`, `team` or `unclaimed`.** A machine named
   `<box>-<person>` whose last segment matches a directory `person` or `github` belongs to
@@ -211,7 +211,9 @@ an identity that came from a browser name or from `fallbackEmail` counts as unti
 Access identity can be refused as a person. Rule C needs no person, and sees only what bb
 stamps: a `threads.spawn` from the automations plugin that names a machine. An automation
 posting into an existing thread (`threads.send`) arrives unstamped, and a spawn that names
-no machine is not judged, so rule C allows both.
+no machine is not judged, so rule C allows both. The settings section calls them the
+own-machine (A), own-thread (B) and automation (C) rules; log lines carry the rule id from
+`guardrail.ts`.
 
 `audit` and `enforce` run the *same* `decideGuardrail` call; only the returned action
 differs. A test drives the same facts through both modes and asserts the verdicts are
@@ -384,7 +386,8 @@ bb plugin logs identity | jq -cR 'fromjson? | .message? | strings | select(start
 
 ### What still needs BB core
 
-The section labels these "Needs BB core" where it mentions them; none is attempted here:
+The coverage map in the Rules tab names the one that matters day to day (stamping
+`threads.send`); none is attempted here:
 grouping or hiding BB's generated settings form (it still lists every setting beside the
 section), setting provenance or locks, a host owner field, a plugin log query (and so any
 in-UI would-refuse evidence), a Send-now dispatch hook, stamping `threads.send` so rule C
@@ -437,8 +440,8 @@ the header chip. Display only — Identity never sets or checks it.
 ### Setting them
 
 Prefer the People & machines section above: it confirms the risky changes and writes an
-audit line for each. The CLI still works, and is the only way to set `directory`, but a
-CLI (or generated Configuration form) change skips those confirmations and writes no
+audit line for each. The CLI and the generated Configuration form still work (they are the
+only ways to set `directory`), but they skip those confirmations and write no
 `settings.change` line:
 
 ```

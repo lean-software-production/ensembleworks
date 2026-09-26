@@ -184,8 +184,8 @@ export function lintConfig(facts: AdminFacts): LintIssue[] {
   }
   if (facts.enforcement !== "off" && facts.teamMachines.length === 0) {
     issue("enforcement-no-team-machines", "warning",
-      "No team machine is configured, so an automation starting a thread on a named machine would be refused (rule C). "
-        + "Automations posting into an existing thread arrive unstamped and are not checked.",
+      "No team machine is configured, so an automation starting a thread on a named machine would be refused "
+        + "by the automation rule. Automations posting into an existing thread arrive unstamped and are not checked.",
       "Add the team machine in the Machines tab.");
   }
   const conflicts = facts.machines.filter((machine) => machine.conflict !== null).length;
@@ -276,9 +276,9 @@ export function readiness(facts: AdminFacts, lint: readonly LintIssue[]): Readin
 export function enforceRisks(facts: Pick<AdminFacts, "people" | "teamMachines" | "machines">): string[] {
   const risks: string[] = [];
   if (facts.teamMachines.length === 0) {
-    risks.push("An automation starting a thread on a named machine would be refused: no team machine is configured (rule C). "
-      + "Automations posting into an existing thread arrive unstamped, and a start with no machine named is not judged, "
-      + "so neither is refused.");
+    risks.push("An automation starting a thread on a named machine would be refused by the automation rule: "
+      + "no team machine is configured. Automations posting into an existing thread arrive unstamped, "
+      + "and a start with no machine named is not judged, so neither is refused.");
   }
   // A team machine named for a person is no risk: teamMachines wins, so it is classified team.
   for (const machine of facts.machines) {
@@ -287,7 +287,8 @@ export function enforceRisks(facts: Pick<AdminFacts, "people" | "teamMachines" |
     const lead = `${machine.conflict.currentName} is pinned to ${machine.person.displayName}, but its name now says`;
     risks.push(derived === null
       ? `${lead} nobody.`
-      : `${lead} ${derived.displayName}: ${derived.displayName} starting a thread there would be refused (rule A).`);
+      : `${lead} ${derived.displayName}: ${derived.displayName} starting a thread there would be refused `
+        + "by the own-machine rule.");
   }
   return risks;
 }

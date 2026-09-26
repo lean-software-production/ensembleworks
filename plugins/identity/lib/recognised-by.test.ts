@@ -23,14 +23,14 @@ describe("recognisedBy", () => {
   it("lists every Access email as counting for attribution and the guardrail", () => {
     const rows = recognisedBy(alex, { machines: [], teamMachines: [], pickerOn: false });
     expect(rows).toEqual([
-      { signal: "alex@example.test", from: "Access email", countsFor: "attribution and the guardrail" },
-      { signal: "a.rivera@example.test", from: "Access email", countsFor: "attribution and the guardrail" },
+      { signal: "alex@example.test", from: "Access email", countsFor: "attribution and the guardrail", term: "guardrail" },
+      { signal: "a.rivera@example.test", from: "Access email", countsFor: "attribution and the guardrail", term: "guardrail" },
     ]);
   });
 
   it("adds a browser-name row only when the picker is on", () => {
     const on = recognisedBy(alex, { machines: [], teamMachines: [], pickerOn: true });
-    expect(on).toContainEqual({ signal: "Browser name", from: "This browser's picker", countsFor: "attribution only" });
+    expect(on).toContainEqual({ signal: "Browser name", from: "This browser's picker", countsFor: "attribution only", term: "attribution-only" });
     const off = recognisedBy(alex, { machines: [], teamMachines: [], pickerOn: false });
     expect(off.some((row) => row.signal === "Browser name")).toBe(false);
   });
@@ -38,8 +38,8 @@ describe("recognisedBy", () => {
   it("names this person's machines, telling a pin from a name suffix", () => {
     const rows = recognisedBy(alex, { machines, teamMachines: ["ew-main"], pickerOn: false });
     expect(rows.slice(2)).toEqual([
-      { signal: "ew-lab-002-alex", from: "name suffix", countsFor: "machine owner (rule A)" },
-      { signal: "renamed-box", from: "pin", countsFor: "machine owner (rule A)" },
+      { signal: "ew-lab-002-alex", from: "name suffix", countsFor: "machine owner", term: "machine-owner" },
+      { signal: "renamed-box", from: "pin", countsFor: "machine owner", term: "machine-owner" },
     ]);
   });
 
@@ -48,7 +48,7 @@ describe("recognisedBy", () => {
       machines: [{ kind: "person", hostId: "h", hostName: "Box-ALEXR", person: summary, conflict: null }],
       teamMachines: [], pickerOn: false,
     });
-    expect(rows.at(-1)).toEqual({ signal: "Box-ALEXR", from: "name suffix", countsFor: "machine owner (rule A)" });
+    expect(rows.at(-1)).toEqual({ signal: "Box-ALEXR", from: "name suffix", countsFor: "machine owner", term: "machine-owner" });
   });
 
   it("never lists a team machine as a person's, even when it is named for them", () => {

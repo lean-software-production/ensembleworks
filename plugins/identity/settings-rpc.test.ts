@@ -436,7 +436,7 @@ describe("generated Configuration form copy", () => {
   it("says when Fallback email applies and that a stale browser name stays anonymous", async () => {
     const fallback = (await descriptions())("fallbackEmail");
     expect(fallback).not.toMatch(/Every header-less caller|every caller without/i);
-    expect(fallback).toMatch(/no Cloudflare Access header and no valid browser name/);
+    expect(fallback).toMatch(/no Access email and no valid browser name/);
     expect(fallback).toMatch(/stale, expired or invalid browser name stays anonymous/);
   });
 
@@ -444,7 +444,29 @@ describe("generated Configuration form copy", () => {
   it("says Off still writes change audit lines", async () => {
     const enforcement = (await descriptions())("enforcement");
     expect(enforcement).not.toMatch(/off logs nothing/);
-    expect(enforcement).toMatch(/off logs no verdicts/);
-    expect(enforcement).toMatch(/settings, pin and colour changes are logged in every mode/);
+    expect(enforcement).toMatch(/People & machines/);
+    expect(enforcement).toMatch(/made here is not/);
+  });
+
+  it("keeps every generated-form description short and true", async () => {
+    const describe = await descriptions();
+    for (const key of ["directory", "teamMachines", "sharedMachineUser", "enforcement", "fallbackEmail",
+      "selfSelectedIdentity", "selectionPublicOrigin", "selectionSigningKey"]) {
+      expect(describe(key).split(/\s+/).filter(Boolean).length, key).toBeLessThanOrEqual(40);
+      expect(describe(key), key).not.toMatch(/\b(above|below)\b/);
+    }
+    expect(describe("teamMachines")).not.toMatch(/restricts nothing/);
+    expect(describe("teamMachines")).toMatch(/automations may start threads only on them/);
+  });
+
+  // Only stamped automations are judged, only Enforce refuses, and only turning on Enforce asks first.
+  it("claims no more than the guardrail does", async () => {
+    const describe = await descriptions();
+    expect(describe("teamMachines")).toMatch(/with no machine named/);
+    expect(describe("teamMachines")).toMatch(/Enforce refuses a stamped automation/);
+    expect(describe("enforcement")).not.toMatch(/where the change is confirmed/);
+    expect(describe("enforcement")).toMatch(/turning on Enforce is confirmed/);
+    expect(describe("fallbackEmail")).not.toMatch(/Never refused/);
+    expect(describe("fallbackEmail")).toMatch(/The guardrail ignores it/);
   });
 });

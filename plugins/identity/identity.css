@@ -294,20 +294,6 @@
 .identity-settings-modes { display: flex; flex-direction: column; gap: 6px; }
 .identity-settings-mode { align-items: flex-start; padding: 8px 10px; }
 .identity-settings-mode input { flex: 0 0 auto; width: 18px; height: 18px; margin: 1px 0 0; }
-/* What only BB core can provide: dashed, with its own glyph, never mistaken for a status. */
-.identity-settings-core {
-  align-self: flex-start;
-  display: inline-flex;
-  align-items: center;
-  gap: 6px;
-  max-width: 100%;
-  padding: 2px 8px;
-  border: 1px dashed var(--core, #7c3aed);
-  border-radius: 999px;
-  color: var(--core, #7c3aed);
-  font-size: 12px;
-}
-.identity-settings-core::before { content: "⬡"; }
 .identity-settings select {
   min-height: 40px;
   max-width: 100%;

@@ -2,10 +2,11 @@ import { useId, useRef, useState } from "react";
 import { useRpc } from "@get-bb/plugin-sdk/app";
 import type { rpcContract } from "../../server.js";
 import { ENFORCEMENT_MODES, type EnforcementMode } from "../../audit.js";
-import type { GuardrailRule } from "../../guardrail.js";
 import { AUDIT_JQ_COMMAND, type ReadinessStatus } from "../../settings-admin.js";
 import { COVERAGE_ROWS, type CoverageStatus } from "../../lib/coverage.js";
+import { RULE_NAMES, RULE_TERMS } from "../../lib/glossary.js";
 import { simulate, type SimMachine, type SimOutcome, type SimWhat, type SimWho } from "../../lib/simulator.js";
+import { Explain } from "../Explain.js";
 import { ConfirmDialog } from "./ConfirmDialog.js";
 import { refusalSentence } from "./ProfilePanel.js";
 import { StatusBadge } from "./StatusBadge.js";
@@ -13,13 +14,9 @@ import { useCopy } from "./useCopy.js";
 import type { SettingsData } from "./IdentitySettings.js";
 
 const MODES: Record<EnforcementMode, { label: string; sentence: string }> = {
-  off: { label: "Off", sentence: "Record and label only; never refuse." },
-  audit: { label: "Audit", sentence: "Take the same decision Enforce would and write it to the log — let everything through." },
-  enforce: {
-    label: "Enforce",
-    sentence: "Refuse a known person's start on someone else's machine, their message into someone else's thread, "
-      + "and an automation spawning a thread on a named machine that is not a team machine.",
-  },
+  off: { label: "Off", sentence: "Label threads; check nothing." },
+  audit: { label: "Audit", sentence: "Log what Enforce would refuse; let everything through." },
+  enforce: { label: "Enforce", sentence: "Refuse it, with a message saying why." },
 };
 
 const WHO: Record<SimWho, string> = {
@@ -41,11 +38,6 @@ const MACHINE: Record<SimMachine, string> = {
   unclaimed: "An unclaimed machine",
 };
 
-const RULES: Record<GuardrailRule, string> = {
-  "start-on-another-persons-machine": "Rule A: a start on another person's machine",
-  "follow-up-by-non-starter": "Rule B: a message into someone else's thread",
-  "automation-off-team-machine": "Rule C: an automation off a team machine",
-};
 const RESULTS: Record<SimOutcome["result"], { status: ReadinessStatus; text: string }> = {
   allowed: { status: "ok", text: "Allowed" },
   "logged-would-refuse": { status: "attention", text: "Allowed, logged as would refuse" },
@@ -68,7 +60,8 @@ export function RulesTab({ data }: { data: SettingsData }) {
     <div className="identity-settings-stack">
       <h3 className="identity-settings-heading">Rules</h3>
       <p className="identity-settings-muted">
-        What the guardrail does in each mode, how to see what it would refuse, and which paths it can see at all.
+        Identity is a <Explain term="guardrail">guardrail against mistakes</Explain>,{" "}
+        <Explain term="blind-spots">not a lock</Explain>.
       </p>
       <Enforcement data={data} />
       <AuditEvidence command={data.overview?.auditCommand ?? AUDIT_JQ_COMMAND} />
@@ -138,6 +131,11 @@ function Enforcement({ data }: { data: SettingsData }) {
           </label>
         ))}
       </div>
+      <p className="identity-settings-muted">
+        The rules: <Explain term="rule-own-machine">own machine</Explain>
+        {" · "}<Explain term="rule-own-thread">own thread</Explain>
+        {" · "}<Explain term="rule-automation">automations</Explain>
+      </p>
       {error !== null && <p className="identity-settings-error">{error}</p>}
       <ConfirmDialog
         open={confirming}
@@ -154,7 +152,7 @@ function Enforcement({ data }: { data: SettingsData }) {
             {risks.length > 0
               ? <ul>{risks.map((risk) => <li key={risk}>{risk}</li>)}</ul>
               : <p>Identity cannot predict anyone being refused from machine state alone.</p>}
-            <p>Rule B (someone else{"'"}s thread) cannot be predicted — check the audit log.</p>
+            <p>Refusals under the own-thread rule can{"'"}t be predicted — check the audit log.</p>
           </>
         }
       />
@@ -166,12 +164,9 @@ function AuditEvidence({ command }: { command: string }) {
   const base = useId();
   const { state, copy } = useCopy();
   return (
-    <section className="identity-settings-stack identity-settings-core-zone" aria-labelledby={`${base}-evidence`}>
+    <section className="identity-settings-stack" aria-labelledby={`${base}-evidence`}>
       <h4 id={`${base}-evidence`} className="identity-settings-heading">Audit evidence</h4>
-      <span className="identity-settings-core">Needs BB core: a plugin log query</span>
-      <p className="identity-settings-muted">
-        Identity keeps no log in the UI — by decision. To see what the guardrail would refuse, run:
-      </p>
+      <p className="identity-settings-muted">Identity shows no log here. To see what the guardrail would refuse, run:</p>
       <pre className="identity-settings-pre"><code>{command}</code></pre>
       <div className="identity-settings-actions">
         <button type="button" className="identity-settings-button" onClick={() => copy(command)}>Copy command</button>
@@ -190,6 +185,7 @@ function Simulator() {
   const [what, setWhat] = useState<SimWhat>("start");
   const [machine, setMachine] = useState<SimMachine>("another-persons");
   const outcomes = simulate({ who, what, machine });
+  const message = outcomes.find((outcome) => outcome.message !== null)?.message ?? null;
   const select = <T extends string>(id: string, label: string, value: T, options: Record<T, string>, set: (next: T) => void) => (
     <div className="identity-settings-field">
       <label htmlFor={`${base}-${id}`}>{label}</label>
@@ -218,10 +214,7 @@ function Simulator() {
                 <div className="identity-settings-stack">
                   <StatusBadge status={RESULTS[outcome.result].status} text={RESULTS[outcome.result].text} />
                   {outcome.rule !== null && (
-                    <details>
-                      <summary>{RULES[outcome.rule]}</summary>
-                      <p className="identity-settings-muted">{outcome.message}</p>
-                    </details>
+                    <Explain term={RULE_TERMS[outcome.rule]}>{capitalise(RULE_NAMES[outcome.rule])}</Explain>
                   )}
                 </div>
               </td>
@@ -229,20 +222,20 @@ function Simulator() {
           </tr>
         </tbody>
       </table>
+      {message !== null && <p className="identity-settings-muted">The message they would see: “{message}”</p>}
       {who === "automation" && what !== "start" && (
         <p className="identity-settings-muted">
-          An automation sending into an existing thread arrives unstamped, so the guardrail cannot tell it is an
-          automation at all.
+          An automation sending into an existing thread isn{"'"}t stamped, so the guardrail can{"'"}t tell it is one.
         </p>
       )}
       <p className="identity-settings-muted">
-        Runs Identity{"'"}s real guardrail decision in your browser. Browser names and the fallback email are never
-        refused.
+        Runs Identity{"'"}s real guardrail in your browser. Alex is asking; Sam is someone else.
       </p>
-      <p className="identity-settings-muted">In this example Alex is asking and Sam is someone else.</p>
     </section>
   );
 }
+
+const capitalise = (s: string) => s.charAt(0).toUpperCase() + s.slice(1);
 
 function Coverage() {
   return (

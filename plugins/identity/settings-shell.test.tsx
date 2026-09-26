@@ -318,13 +318,17 @@ describe("People & machines settings section", () => {
     expect(rows).toEqual([
       ["alex@example.test", "Access email", "attribution and the guardrail"],
       ["a.rivera@example.test", "Access email", "attribution and the guardrail"],
-      ["ew-lab-002-alex", "name suffix", "machine owner (rule A)"],
-      ["renamed-box", "pin", "machine owner (rule A)"],
+      ["ew-lab-002-alex", "name suffix", "machine owner"],
+      ["renamed-box", "pin", "machine owner"],
     ]);
     expect(screen.getByText(/Machines: ew-lab-002-alex, renamed-box/)).toBeTruthy();
-    expect(screen.getByText(/People are managed in infrastructure/).textContent).toBe(
-      "People are managed in infrastructure (ew_bb_people). Colours are Identity's own and anyone can change them; every change is logged.");
-    expect(screen.getByText(/the 2000 most recent threads/)).toBeTruthy();
+    expect(screen.getByText(/People come from infrastructure/).textContent).toBe(
+      "People come from infrastructure (ew_bb_people). Anyone can change a colour.");
+    stubPopoverDom();
+    fireEvent.click(screen.getAllByRole("button", { name: "Seen — a thread is attributed to them" })[0]!);
+    const seen = await screen.findByRole("dialog", { name: "Seen" });
+    expect(seen.textContent).toContain("the 2000 most recent threads");
+    fireEvent.keyDown(seen, { key: "Escape" });
 
     fireEvent.click(buttons[1]!);
     expect(buttons.map((entry) => entry.getAttribute("aria-pressed"))).toEqual(["false", "true"]);
@@ -384,7 +388,7 @@ describe("People & machines settings section", () => {
   it("says so when the directory is empty", async () => {
     mount({ identity_roster: () => ({ ...roster, people: [] }) });
     expect(await screen.findByText(
-      "Nobody is registered yet. Identity reads its people from the directory setting above, which infrastructure manages.")).toBeTruthy();
+      "Nobody is registered yet. People come from the directory setting, which infrastructure manages.")).toBeTruthy();
   });
 
   it("still lists people when the overview cannot be read", async () => {

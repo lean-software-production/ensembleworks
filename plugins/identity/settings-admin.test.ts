@@ -299,7 +299,7 @@ describe("lintConfig", () => {
     const issue = lintConfig(healthy({ teamMachines: [] })).find((entry) => entry.id === "enforcement-no-team-machines");
     expect(issue?.severity).toBe("warning");
     expect(issue?.message).toBe("No team machine is configured, so an automation starting a thread on a named machine would be "
-      + "refused (rule C). Automations posting into an existing thread arrive unstamped and are not checked.");
+      + "refused by the automation rule. Automations posting into an existing thread arrive unstamped and are not checked.");
     expect(ids(lintConfig(healthy({ teamMachines: [], enforcement: "off" })))).not.toContain("enforcement-no-team-machines");
   });
 
@@ -402,14 +402,14 @@ describe("enforceRisks", () => {
 
   it("(a) an automation spawn on a named machine would be refused without a team machine", () => {
     expect(enforceRisks(healthy({ teamMachines: [] }))).toEqual([
-      "An automation starting a thread on a named machine would be refused: no team machine is configured (rule C). "
+      "An automation starting a thread on a named machine would be refused by the automation rule: no team machine is configured. "
       + "Automations posting into an existing thread arrive unstamped, and a start with no machine named is not judged, so neither is refused.",
     ]);
   });
 
   it("(b) names who would be refused on a renamed machine", () => {
     expect(enforceRisks(healthy({ machines: [teamBox, renamed] }))).toEqual([
-      "ew-lsp-003-sam is pinned to Alex Rivera, but its name now says Sam Chen: Sam Chen starting a thread there would be refused (rule A).",
+      "ew-lsp-003-sam is pinned to Alex Rivera, but its name now says Sam Chen: Sam Chen starting a thread there would be refused by the own-machine rule.",
     ]);
   });
 

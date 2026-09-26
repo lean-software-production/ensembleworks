@@ -154,6 +154,21 @@ describe("This browser tab", () => {
     expect(await within(panel).findByRole("combobox", { name: "Your name" })).toBeTruthy();
   });
 
+  it("says each setting in one sentence and keeps the term outside the checkbox label", async () => {
+    mount({ identity_whoami: () => ({ ...chosenAlex, person: null, provenance: "unknown", selection: null }) });
+    const panel = await openTab("This browser");
+    await within(panel).findByRole("combobox", { name: "Your name" });
+    const picker = within(panel).getByLabelText("Browser identity");
+    expect(within(picker).queryByText("This browser")).toBeNull();
+    const toggle = await within(panel).findByRole("checkbox", { name: "Let browsers choose a name" });
+    const term = within(panel).getByRole("button", { name: "Attribution only" });
+    expect(toggle.closest("label")!.contains(term)).toBe(false);
+    expect(within(panel).getByText(/^For a server only one person uses\./).textContent)
+      .toBe("For a server only one person uses. How it works");
+    expect(within(panel).getByRole("button", { name: "How it works" })).toBeTruthy();
+    expect(within(panel).getByText("Only the key's status is shown; it never leaves the server.")).toBeTruthy();
+  });
+
   it("disables Save and explains an invalid public origin", async () => {
     const update = vi.fn(() => ({ ok: true, changed: [] }));
     mount({ identity_update_settings: update });
@@ -348,7 +363,7 @@ describe("Machines tab", () => {
       "ew-lab-003-priya stays Erin Example's machine even though its name says Priya Shah.",
       { hostId: "h1", action: "keep" }],
     ["Re-pin to Priya Shah", "Re-pin ew-lab-003-priya to Priya Shah?", "Re-pin",
-      "Erin Example starting a thread on ew-lab-003-priya would be refused (rule A) once enforcing.",
+      "Erin Example starting a thread on ew-lab-003-priya would be refused by the own-machine rule once enforcing.",
       { hostId: "h1", action: "repin", person: "priya" }],
     ["Unpin", "Unpin ew-lab-003-priya?", "Unpin",
       "Identity re-derives the owner from the name on next sight.",
@@ -404,7 +419,7 @@ describe("Machines tab", () => {
     const row = rowsOf(panel).find((entry) => machineName(entry) === name)!;
     fireEvent.click(within(row).getByRole("button", { name: "Remove from team" }));
     const dialog = await dialogNamed(`Remove ${name} from the team?`);
-    expect(dialog.textContent).toContain(`An automation starting a thread on ${name} would be refused (rule C) once enforcing. `
+    expect(dialog.textContent).toContain(`An automation starting a thread on ${name} would be refused by the automation rule once enforcing. `
       + "Automations posting into an existing thread are not checked.");
     expect(within(dialog).getByRole("button", { name: "Remove from team" }).getAttribute("data-variant"))
       .toBe("destructive");

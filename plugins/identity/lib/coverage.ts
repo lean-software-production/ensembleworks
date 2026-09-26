@@ -13,9 +13,10 @@ export const COVERAGE_ROWS: readonly CoverageRow[] = [
     note: "Skips the dispatch hook; Identity records the requester afterwards. "
       + "A Send-now dispatch hook in BB core would move this to Checked." },
   { path: "Automation spawning a thread (threads.spawn)", status: "checked",
-    note: "Rule C applies to stamped automation spawns headed for a named machine; a spawn with no machine named is allowed." },
+    note: "The automation rule applies to stamped automation spawns headed for a named machine; "
+      + "a spawn with no machine named is allowed." },
   { path: "Automation sending into an existing thread (threads.send)", status: "blind",
-    note: "Arrives unstamped, so rule C cannot see it. Needs BB core to stamp threads.send." },
+    note: "Arrives unstamped, so the automation rule cannot see it. Needs BB core to stamp threads.send." },
   { path: "Agents and the CLI (no Access header)", status: "checked",
     note: "Always allowed: no identity means nothing to refuse. Attributed to the fallback email when one is set." },
   { path: "Terminals, Stop, Archive, approvals, host routes, plugin RPCs", status: "logged-only",
