@@ -1,4 +1,4 @@
-import { useId, useState, type MouseEvent } from "react";
+import { useEffect, useId, useRef, useState, type MouseEvent } from "react";
 import { useRpc } from "@get-bb/plugin-sdk/app";
 import type { PinResolution, rpcContract } from "../../server.js";
 import { parseTeamMachines, personFromHostName, type HostClassification, type HostKind } from "../../hosts.js";
@@ -80,7 +80,7 @@ const matches = (row: Row, filter: string) =>
 export function MachinesTab({ data }: { data: SettingsData }) {
   const rpc = useRpc<typeof rpcContract>();
   const base = useId();
-  const { overview, roster, machines, reload } = data;
+  const { overview, roster, machines, errors, reload } = data;
   const [filter, setFilter] = useState("");
   const [addName, setAddName] = useState("");
   // null until typed in, so the field follows the settings when a reload lands.
@@ -90,6 +90,11 @@ export function MachinesTab({ data }: { data: SettingsData }) {
   const [busy, setBusy] = useState(false);
   // Where a refusal is shown: a row's key, or the form it came from.
   const [error, setError] = useState<{ at: string; sentence: string } | null>(null);
+  const rootRef = useRef<HTMLDivElement>(null);
+  // After a row write succeeds, the list reloads and may replace or remove the button that
+  // opened the dialog. Until both reads that reshape the rows have landed, focus that falls
+  // off the page goes to the row's first action, else the filter, else the heading.
+  const settle = useRef<{ key: string; overview: typeof overview; machines: typeof machines } | null>(null);
 
   const teamText = overview?.settings.teamMachines ?? "";
   const write = (at: string, call: () => Promise<{ ok: true } | { ok: false; sentence: string }>, onOk?: () => void) => {
@@ -106,26 +111,45 @@ export function MachinesTab({ data }: { data: SettingsData }) {
     const answer = await rpc.call("identity_update_settings", { teamMachines: text });
     return answer.ok ? answer : { ok: false, sentence: refusalSentence(answer.reason) };
   }, onOk);
-  const resolvePin = (row: Row, action: "keep" | "repin" | "unpin") => {
+  const resolvePin = (row: Row, action: "keep" | "repin" | "unpin", onOk: () => void) => {
     const person = action === "repin" ? row.derived?.person : undefined;
     write(row.key, async () => {
       const answer = await rpc.call("identity_resolve_pin",
         person === undefined ? { hostId: row.key, action } : { hostId: row.key, action, person });
       return answer.ok ? answer : { ok: false, sentence: PIN_REFUSALS[answer.reason](row.name, row.derived?.displayName ?? "") };
-    });
+    }, onOk);
   };
   const confirm = () => {
     if (pending === null) return;
     const { action, row } = pending;
-    if (action === "team-add") writeTeam(row.key, addTeamMachine(teamText, row.name));
-    else if (action === "team-remove") writeTeam(row.key, removeTeamMachine(teamText, row.name));
-    else resolvePin(row, action);
+    const onOk = () => { settle.current = { key: row.key, overview, machines }; };
+    if (action === "team-add") writeTeam(row.key, addTeamMachine(teamText, row.name), onOk);
+    else if (action === "team-remove") writeTeam(row.key, removeTeamMachine(teamText, row.name), onOk);
+    else resolvePin(row, action, onOk);
   };
   const open = (action: Action, row: Row) => (event: MouseEvent<HTMLElement>) => {
     focusOpener(event);
+    settle.current = null;
     setError(null);
     setPending({ action, row });
   };
+
+  useEffect(() => {
+    const after = settle.current;
+    const root = rootRef.current;
+    if (after === null || root === null || busy || pending !== null) return;
+    const focused = document.activeElement;
+    if (focused === null || focused === document.body || !focused.isConnected) {
+      const row = [...root.querySelectorAll<HTMLElement>("tr[data-row-key]")].find((tr) => tr.dataset.rowKey === after.key);
+      const successor = row?.querySelector<HTMLElement>("button:not(:disabled)")
+        ?? root.querySelector<HTMLElement>("input[type=search]")
+        ?? root.querySelector<HTMLElement>("h3");
+      successor?.focus();
+    }
+    const landed = (read: "overview" | "machines", before: unknown) =>
+      data[read] !== before || errors[read] !== undefined;
+    if (landed("overview", after.overview) && landed("machines", after.machines)) settle.current = null;
+  });
 
   const people = roster?.people ?? [];
   const available = machines !== null && machines.unavailable === null;
@@ -139,8 +163,8 @@ export function MachinesTab({ data }: { data: SettingsData }) {
   const formError = (at: string) => error?.at === at ? <p className="identity-settings-error">{error.sentence}</p> : null;
 
   return (
-    <div className="identity-settings-stack">
-      <h3 className="identity-settings-heading">Machines</h3>
+    <div ref={rootRef} className="identity-settings-stack">
+      <h3 className="identity-settings-heading" tabIndex={-1}>Machines</h3>
       <p className="identity-settings-muted">
         Every machine BB knows, whose it is and why: a name suffix, a pin or the team list. Problems come first.
       </p>
@@ -168,7 +192,7 @@ export function MachinesTab({ data }: { data: SettingsData }) {
                 </thead>
                 <tbody>
                   {shown.map((row) => (
-                    <tr key={row.key}>
+                    <tr key={row.key} data-row-key={row.key}>
                       <th scope="row" data-label="Machine">{row.name}</th>
                       <td data-label="Kind">
                         <span className="identity-settings-badge" data-kind={row.kind}>

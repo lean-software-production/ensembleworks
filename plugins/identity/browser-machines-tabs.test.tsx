@@ -4,6 +4,7 @@ import { cleanup, fireEvent, screen, waitFor, within } from "@testing-library/re
 import { loadPluginApp, renderSlot } from "@get-bb/plugin-sdk/testing/app";
 import type { MachineList, RosterAnswer, SettingsOverview, WhoAmI } from "./server.js";
 import type { HostClassification } from "./hosts.js";
+import { parseTeamMachines } from "./hosts.js";
 import {
   addTeamMachine,
   AUDIT_JQ_COMMAND,
@@ -475,6 +476,70 @@ describe("Machines tab", () => {
     finish({ ok: true, machine: null });
     await waitFor(() => {
       for (const button of within(rowsOf(panel)[0]!).getAllByRole("button")) expect(button.hasAttribute("disabled")).toBe(false);
+    });
+  });
+
+  describe("after a write that changes the list, focus lands on a stable successor", () => {
+    /** Fixtures that answer each read with what the server holds now, so a write really changes the rows. */
+    function live(team: string, machines: HostClassification[]) {
+      const state = { team, machines };
+      const current = () => overview();
+      mount({
+        identity_settings_overview: () => ({ ...current(), settings: { ...current().settings, teamMachines: state.team } }),
+        identity_machines: () => machineList(state.machines),
+        identity_update_settings: (input) => {
+          state.team = (input as { teamMachines: string }).teamMachines;
+          state.machines = state.machines.map((host) => parseTeamMachines(state.team).includes(host.hostName)
+            ? { kind: "team", hostId: host.hostId, hostName: host.hostName, conflict: null } : host);
+          return { ok: true, changed: ["teamMachines"] };
+        },
+        identity_resolve_pin: () => {
+          state.machines = state.machines.map((host) => host.hostId === "h1" ? { ...conflictHost, conflict: null } : host);
+          return { ok: true, machine: null };
+        },
+      });
+    }
+    const rowNamed = (panel: HTMLElement, name: string) => rowsOf(panel).find((row) => machineName(row) === name);
+    async function confirmFrom(panel: HTMLElement, machine: string, button: string, title: string, confirmLabel: string) {
+      await within(panel).findByRole("table");
+      fireEvent.click(within(rowNamed(panel, machine)!).getByRole("button", { name: button }));
+      fireEvent.click(within(await dialogNamed(title)).getByRole("button", { name: confirmLabel }));
+      await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
+    }
+
+    it("moves to the row's remaining action when resolving a conflict removes the opener", async () => {
+      live(teamText, hosts);
+      const panel = await openTab("Machines");
+      await confirmFrom(panel, "ew-lab-003-priya", "Keep pin", "Keep the pin on ew-lab-003-priya?", "Keep pin");
+      await waitFor(() => expect(within(rowNamed(panel, "ew-lab-003-priya")!).queryByRole("button", { name: "Keep pin" }))
+        .toBeNull());
+      await waitFor(() => expect(document.activeElement)
+        .toBe(within(rowNamed(panel, "ew-lab-003-priya")!).getByRole("button", { name: "Make team machine" })));
+    });
+
+    it("moves to the action that replaced the opener when a machine joins the team", async () => {
+      live(teamText, hosts);
+      const panel = await openTab("Machines");
+      await confirmFrom(panel, "scratch-7", "Make team machine", "Make scratch-7 a team machine?", "Make team machine");
+      await waitFor(() => expect(document.activeElement)
+        .toBe(within(rowNamed(panel, "scratch-7")!).getByRole("button", { name: "Remove from team" })));
+    });
+
+    it("moves to the filter when the opener's row disappears", async () => {
+      live(teamText, hosts);
+      const panel = await openTab("Machines");
+      await confirmFrom(panel, "ew-lab-009-ci", "Remove from team", "Remove ew-lab-009-ci from the team?", "Remove from team");
+      await waitFor(() => expect(rowNamed(panel, "ew-lab-009-ci")).toBeUndefined());
+      await waitFor(() => expect(document.activeElement)
+        .toBe(within(panel).getByRole("searchbox", { name: "Filter machines" })));
+    });
+
+    it("moves to the Machines heading when the last row disappears", async () => {
+      live("ew-lab-009-ci", []);
+      const panel = await openTab("Machines");
+      await confirmFrom(panel, "ew-lab-009-ci", "Remove from team", "Remove ew-lab-009-ci from the team?", "Remove from team");
+      await waitFor(() => expect(within(panel).queryByRole("table")).toBeNull());
+      await waitFor(() => expect(document.activeElement).toBe(within(panel).getByRole("heading", { name: "Machines" })));
     });
   });
 
