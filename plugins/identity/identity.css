@@ -287,6 +287,69 @@
   }
 }
 
+/* Rules: one bordered choice per enforcement mode, its sentence beneath its name. */
+.identity-settings-modes { display: flex; flex-direction: column; gap: 6px; }
+.identity-settings-mode { align-items: flex-start; padding: 8px 10px; }
+.identity-settings-mode input { flex: 0 0 auto; width: 18px; height: 18px; margin: 1px 0 0; }
+/* What only BB core can provide: dashed, with its own glyph, never mistaken for a status. */
+.identity-settings-core {
+  align-self: flex-start;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  max-width: 100%;
+  padding: 2px 8px;
+  border: 1px dashed var(--core, #7c3aed);
+  border-radius: 999px;
+  color: var(--core, #7c3aed);
+  font-size: 12px;
+}
+.identity-settings-core::before { content: "⬡"; }
+.identity-settings select {
+  min-height: 40px;
+  max-width: 100%;
+  box-sizing: border-box;
+  padding: 0 8px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: var(--background);
+  color: inherit;
+  font: inherit;
+}
+.identity-settings-sim { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 8px; }
+.identity-settings-sim select { width: 100%; }
+.identity-settings-sim-out td { width: 33%; }
+.identity-settings details summary {
+  display: flex;
+  align-items: center;
+  min-height: 40px;
+  cursor: pointer;
+  list-style-position: inside;
+}
+.identity-settings details summary::before { content: "▸"; margin-right: 6px; }
+.identity-settings details[open] > summary::before { content: "▾"; }
+.identity-settings details summary::-webkit-details-marker { display: none; }
+.identity-settings summary:focus-visible {
+  outline: 2px solid var(--ring, #2563eb);
+  outline-offset: 2px;
+}
+.identity-settings-disclosure > summary { font-weight: 600; }
+
+/* Health: ledger fill as text first, a meter beside it when the count is known. */
+.identity-settings-ledger { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; min-height: 24px; }
+.identity-settings-ledger meter { width: min(100%, 200px); }
+
+@container (max-width: 719px) {
+  .identity-settings-sim { grid-template-columns: minmax(0, 1fr); }
+  .identity-settings-sim-out td { width: auto; }
+}
+@supports not (container-type: inline-size) {
+  @media (max-width: 719px) {
+    .identity-settings-sim { grid-template-columns: minmax(0, 1fr); }
+    .identity-settings-sim-out td { width: auto; }
+  }
+}
+
 /* Confirm dialog (rendered in a portal, so outside .identity-settings). */
 .identity-settings-overlay { position: fixed; inset: 0; background: rgb(0 0 0 / 0.45); z-index: 79; }
 .identity-settings-dialog {
@@ -314,3 +377,4 @@
 }
 .identity-settings-dialog-title { font-size: 16px; font-weight: 700; margin: 0; }
 .identity-settings-dialog-actions { justify-content: flex-end; }
+.identity-settings-dialog ul { margin: 0; padding-left: 18px; }

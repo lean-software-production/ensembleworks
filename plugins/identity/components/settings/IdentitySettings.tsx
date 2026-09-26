@@ -3,12 +3,14 @@ import { useRpc } from "@get-bb/plugin-sdk/app";
 import type { MachineList, RosterAnswer, rpcContract, SettingsOverview, WhoAmI } from "../../server.js";
 import type { SettingsTab } from "../../settings-admin.js";
 import { BrowserTab } from "./BrowserTab.js";
+import { HealthTab } from "./HealthTab.js";
 import { IdentityBar } from "./IdentityBar.js";
 import { MachinesTab } from "./MachinesTab.js";
 import { PeopleTab } from "./PeopleTab.js";
 import { ProfilePanel } from "./ProfilePanel.js";
 import { ReadinessStrip } from "./ReadinessStrip.js";
-import { SettingsTabs, TAB_LABELS } from "./SettingsTabs.js";
+import { RulesTab } from "./RulesTab.js";
+import { SettingsTabs } from "./SettingsTabs.js";
 
 type ReadKey = "overview" | "roster" | "whoami" | "machines";
 
@@ -80,22 +82,6 @@ export function useSettingsData(): SettingsData {
   return { overview, roster, whoami, machines, errors, reload, adoptWhoami, revision };
 }
 
-/** What each tab not built yet will show, under its real title. */
-type PlaceholderTab = Exclude<SettingsTab, "people" | "machines" | "browser">;
-const PLACEHOLDERS: Record<PlaceholderTab, string> = {
-  rules: "What the guardrail does in each mode, a simulator over the real rules, and which actions it can see.",
-  health: "The self-test, the picker chain, ledger fill, configuration checks and a redacted diagnostics bundle.",
-};
-
-function Placeholder({ tab }: { tab: PlaceholderTab }) {
-  return (
-    <div className="identity-settings-stack">
-      <h3 className="identity-settings-heading">{TAB_LABELS[tab]}</h3>
-      <p className="identity-settings-muted">{PLACEHOLDERS[tab]}</p>
-    </div>
-  );
-}
-
 /** The "People & machines" settings section: who you are, how ready Identity is, and the tabs. */
 export function IdentitySettings() {
   const data = useSettingsData();
@@ -150,8 +136,8 @@ export function IdentitySettings() {
           people: <PeopleTab data={data} />,
           machines: <MachinesTab data={data} />,
           browser: <BrowserTab data={data} />,
-          rules: <Placeholder tab="rules" />,
-          health: <Placeholder tab="health" />,
+          rules: <RulesTab data={data} />,
+          health: <HealthTab data={data} />,
         }}
       />
     </div>

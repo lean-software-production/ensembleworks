@@ -8,9 +8,10 @@ import {
   type SettingsPatch,
   type SigningKeyStatus,
 } from "../../settings-admin.js";
-import { PICKER_CHAIN, precedenceLadder, type RungState } from "../../lib/precedence.js";
+import { precedenceLadder, type RungState } from "../../lib/precedence.js";
 import { IdentityPicker } from "../IdentityPicker.js";
 import { ConfirmDialog, focusOpener } from "./ConfirmDialog.js";
+import { PickerChain } from "./PickerChain.js";
 import { refusalSentence } from "./ProfilePanel.js";
 import { StatusBadge } from "./StatusBadge.js";
 import type { SettingsData } from "./IdentitySettings.js";
@@ -93,7 +94,6 @@ export function BrowserTab({ data }: { data: SettingsData }) {
   };
   // People seen using this server, not merely listed: a directory names everyone the team might add.
   const looksShared = (overview?.accessSeen ?? false) || (roster?.people.filter((row) => row.seen).length ?? 0) > 1;
-  const chainAt = overview === null ? -1 : PICKER_CHAIN.findIndex((step) => step.status === overview.pickerStatus);
 
   return (
     <div className="identity-settings-stack">
@@ -134,23 +134,7 @@ export function BrowserTab({ data }: { data: SettingsData }) {
               </button>
             </div>
             {sentenceFor("origin")}
-            <ol aria-label="Picker readiness" className="identity-settings-chain">
-              {PICKER_CHAIN.map((step, index) => {
-                const here = index === chainAt;
-                const ready = step.status === "ready";
-                return (
-                  <li key={step.status} aria-current={here ? "step" : undefined}>
-                    <StatusBadge
-                      status={index < chainAt || (here && ready) ? "ok" : here ? "attention" : "off"}
-                      text={step.label}
-                    />
-                    <span className="identity-settings-muted">
-                      {index < chainAt ? "Passed." : here ? step.fix : "Not checked yet."}
-                    </span>
-                  </li>
-                );
-              })}
-            </ol>
+            <PickerChain status={overview.pickerStatus} />
           </section>
 
           <section className="identity-settings-stack" aria-labelledby={`${base}-fallback`}>
