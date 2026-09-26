@@ -143,7 +143,7 @@ describe("Rules tab — enforcement", () => {
 
   it("confirms Enforce naming who would be refused, gated on the acknowledgement", async () => {
     const update = vi.fn(() => ({ ok: true, changed: ["enforcement"] }));
-    const risk = "An automation starting a thread on a named machine would be refused by the automation rule: no team machine is configured.";
+    const risk = "A BB-stamped automation starting a thread on a named machine would be refused by the automation rule: no team machine is configured.";
     mount({ identity_settings_overview: () => overview({}, { enforceRisks: [risk] }), identity_update_settings: update });
     const panel = await openTab("Rules");
     const { enforce } = await modes(panel);

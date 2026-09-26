@@ -51,7 +51,7 @@ export const GLOSSARY: Record<GlossaryId, GlossaryEntry> = {
   "rule-own-machine": {
     title: "Own-machine rule",
     body: [
-      "In Enforce, someone whose Access email is in the directory can't start a thread on another person's machine; Audit logs it and lets it through. Team and unclaimed machines are open to every person; an automation still needs a team machine (the automation rule).",
+      "In Enforce, someone whose Access email is in the directory can't start a thread on another person's machine; Audit logs it and lets it through. Team and unclaimed machines are open to every person; a BB-stamped automation meets the automation rule instead.",
       "In the log: start-on-another-persons-machine.",
     ],
     more: "rules",
@@ -59,7 +59,7 @@ export const GLOSSARY: Record<GlossaryId, GlossaryEntry> = {
   "rule-own-thread": {
     title: "Own-thread rule",
     body: [
-      "In Enforce, someone whose Access email is in the directory can't send into a thread whose recorded starter is another such person; Audit logs it and lets it through. A child thread inherits its starter. One recorded from a browser name or the fallback email is open. A thread with no record, such as one begun with Send now, counts as a new start (own-machine rule).",
+      "In Enforce, someone whose Access email is in the directory can't send into someone else's thread; Audit logs it and lets it through. A child thread with no named requester can inherit a recorded starter. One recorded from a browser name or the fallback email is open. A thread with no record, such as one begun with Send now, counts as a new start (own-machine rule).",
       "In the log: follow-up-by-non-starter.",
     ],
     more: "rules",
@@ -92,8 +92,8 @@ export const GLOSSARY: Record<GlossaryId, GlossaryEntry> = {
   "machine-owner": {
     title: "Whose machine it is",
     body: [
-      "A machine whose name ends in -<name>, where <name> is someone's id or GitHub handle, is theirs. Identity pins it on first sight, so a rename doesn't change the owner; a rename that disagrees shows as a conflict.",
-      "Team-list machines are the team's, even with a person's name. Anything else is unclaimed: any person may start there. In Enforce an automation may not; Audit logs it and lets it through.",
+      "A machine whose name ends in -<name>, where <name> is someone's id or GitHub handle, is theirs. Identity pins it on first sight, so a rename doesn't change the owner; a disagreeing rename shows as a conflict.",
+      "Team-list machines are the team's, even with a person's name. Anything else is unclaimed: any person may start there. In Enforce a BB-stamped automation may not; Audit logs it and lets it through.",
     ],
     more: "machines",
   },

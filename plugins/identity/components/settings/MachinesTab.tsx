@@ -314,7 +314,7 @@ function PendingDialog({ pending: { action, row }, busy, onConfirm, onCancel }: 
     repin: {
       title: `Re-pin ${host} to ${derived ?? "the name's owner"}?`, confirmLabel: "Re-pin",
       consequence: `${host} becomes ${derived ?? "the name's owner"}'s machine. `
-        + `${pinned} starting a thread on ${host} would be refused by the own-machine rule once enforcing.`,
+        + `Once enforcing, the own-machine rule refuses ${pinned} a new thread on ${host} if their Access email is in the directory.`,
     },
     unpin: {
       title: `Unpin ${host}?`, confirmLabel: "Unpin",
@@ -326,7 +326,7 @@ function PendingDialog({ pending: { action, row }, busy, onConfirm, onCancel }: 
     },
     "team-remove": {
       title: `Remove ${host} from the team?`, confirmLabel: "Remove from team", destructive: true,
-      consequence: `An automation starting a thread on ${host} would be refused by the automation rule once enforcing. `
+      consequence: `A BB-stamped automation starting a thread on ${host} would be refused by the automation rule once enforcing. `
         + "Automations posting into an existing thread are not checked.",
     },
   };

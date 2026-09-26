@@ -33,19 +33,22 @@ describe("the glossary", () => {
   });
 
   it("keeps automations out of the machines people may use freely", () => {
-    // Rule C refuses a stamped automation on an unclaimed machine, so "open to everyone" lies.
+    // Rule C refuses a stamped automation on an unclaimed machine, so "open to everyone" lies;
+    // and only one BB stamps as the automations plugin meets it (guardrail.ts rule C).
     for (const id of ["rule-own-machine", "machine-owner"] as const) {
       expect(text(id), id).not.toMatch(/open to everyone|anyone may start/);
-      expect(text(id), id).toMatch(/an automation (still needs a team machine|may not)/);
+      expect(text(id), id).toMatch(/a BB-stamped automation (meets the automation rule|may not)/);
     }
   });
 
   it("describes the own-thread rule by the recorded starter, inherited ones included", () => {
-    // An agent's child thread inherits its parent's starter (decideAttribution), and rule B
-    // judges that record, not how the thread was started.
+    // A child thread inherits a lineage thread's recorded starter only when its own request
+    // resolves no person (decideAttribution), and rule B judges that record, not how the
+    // thread was started.
     expect(text("rule-own-thread")).not.toContain("started any other way");
     expect(text("rule-own-thread")).toContain("recorded starter");
-    expect(text("rule-own-thread")).toContain("inherits its starter");
+    expect(text("rule-own-thread")).not.toContain("A child thread inherits its starter");
+    expect(text("rule-own-thread")).toContain("A child thread with no named requester can inherit a recorded starter");
     expect(text("rule-own-thread")).toContain("recorded from a browser name or the fallback email");
   });
 

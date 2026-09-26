@@ -399,7 +399,7 @@ describe("Machines tab", () => {
       "ew-lab-003-priya stays Erin Example's machine even though its name says Priya Shah.",
       { hostId: "h1", action: "keep" }],
     ["Re-pin to Priya Shah", "Re-pin ew-lab-003-priya to Priya Shah?", "Re-pin",
-      "Erin Example starting a thread on ew-lab-003-priya would be refused by the own-machine rule once enforcing.",
+      "Once enforcing, the own-machine rule refuses Erin Example a new thread on ew-lab-003-priya if their Access email is in the directory.",
       { hostId: "h1", action: "repin", person: "priya" }],
     ["Unpin", "Unpin ew-lab-003-priya?", "Unpin",
       "Identity re-derives the owner from the name on next sight.",
@@ -455,7 +455,7 @@ describe("Machines tab", () => {
     const row = rowsOf(panel).find((entry) => machineName(entry) === name)!;
     fireEvent.click(within(row).getByRole("button", { name: "Remove from team" }));
     const dialog = await dialogNamed(`Remove ${name} from the team?`);
-    expect(dialog.textContent).toContain(`An automation starting a thread on ${name} would be refused by the automation rule once enforcing. `
+    expect(dialog.textContent).toContain(`A BB-stamped automation starting a thread on ${name} would be refused by the automation rule once enforcing. `
       + "Automations posting into an existing thread are not checked.");
     expect(within(dialog).getByRole("button", { name: "Remove from team" }).getAttribute("data-variant"))
       .toBe("destructive");
