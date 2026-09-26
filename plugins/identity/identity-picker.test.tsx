@@ -40,6 +40,30 @@ describe("accessible browser picker", () => {
     mount({ email: null, person: null, provenance: "unknown", selection: { status: "stale" }, picker });
     expect(await screen.findByText(/no longer in the directory/)).toBeTruthy();
   });
+  it("says why browser names are unavailable in words, not a status code", async () => {
+    mount({ email: null, person: null, provenance: "unknown", selection: null,
+      picker: { ...picker, enabled: false, status: "cookie-bridge-unavailable" } });
+    expect((await screen.findByRole("status")).textContent)
+      .toBe("Browser names are unavailable: the cookie bridge is not working.");
+  });
+  it.each([
+    ["not-in-directory", "select", "Identity could not use this name: that name is no longer in the directory."],
+    ["upstream-identity", "select", "Identity could not use this name: your Access email already names you."],
+    ["signing-key-unavailable", "forget", "Identity could not forget this name: there is no signing key."],
+  ] as const)("turns the server's %s refusal into a sentence", async (reason, action, message) => {
+    const matt = { person: "matt", displayName: "Matt", github: "matt" };
+    mount(action === "select"
+      ? { email: null, person: null, provenance: "unknown", selection: null, picker }
+      : { email: null, person: matt, provenance: "self-selected", selection: { status: "valid" }, picker },
+    () => ({ ok: false, reason }) as never);
+    if (action === "select") {
+      fireEvent.change(await screen.findByRole("combobox", { name: "Your name" }), { target: { value: "matt" } });
+      fireEvent.click(screen.getByRole("button", { name: "Use this name" }));
+    } else {
+      fireEvent.click(await screen.findByRole("button", { name: "Forget" }));
+    }
+    expect((await screen.findByRole("alert")).textContent).toBe(message);
+  });
   it("uses an RPC-minted GET capability so native WebView Origin rewriting cannot block selection", async () => {
     const request = vi.fn().mockResolvedValue({ ok: true });
     vi.stubGlobal("fetch", request);

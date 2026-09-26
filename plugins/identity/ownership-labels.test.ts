@@ -7,6 +7,7 @@ import {
   ownershipRowStatus,
   runsAs,
   starterPhrase,
+  type OwnershipBanner,
   type OwnershipView,
   personColor,
 } from "./ownership-labels.js";
@@ -140,19 +141,17 @@ describe("ownershipRowStatus", () => {
   });
 });
 
+/** Everything a banner says in words: its detail plus its explained note. */
+const said = (b: OwnershipBanner | null) => `${b?.detail ?? ""} ${b?.note?.text ?? ""}`;
+
 describe("composerBanner", () => {
   it("states who you are and lists your machines, without promising a warning", () => {
-    const banner = composerBanner({
-      me: david,
-      machines: [davidsMachine, mattsMachine, teamMachine, unclaimed],
-      enforcement: "off",
-    });
-    expect(banner.title).toBe("Starting as David");
-    expect(banner.detail).toBe(
-      "Your machines: ew-lsp-001-mrdavidlaing. Team machine: ew-lsp-001-main. "
-      + "BB does not tell a plugin which machine this composer has selected, so this banner cannot check it "
-      + "for you. Nothing else checks it yet either: starting on someone else's machine is recorded, not refused.",
-    );
+    expect(composerBanner({ me: david, machines: [davidsMachine, mattsMachine, teamMachine, unclaimed], enforcement: "off" }))
+      .toEqual({
+        title: "Starting as David",
+        detail: "Yours: ew-lsp-001-mrdavidlaing · Team: ew-lsp-001-main",
+        note: { text: "Starting on someone else's machine is recorded, not refused.", term: "composer-check" },
+      });
   });
 
   it("never promises an enforcement that is not switched on", () => {
@@ -160,9 +159,9 @@ describe("composerBanner", () => {
     // nothing refuses a start, so copy implying one is caught, refused or blocked would
     // be a lie told in the user's own composer.
     for (const machines of [[], [davidsMachine, teamMachine, unclaimed]]) {
-      const detail = composerBanner({ me: david, machines, enforcement: "off" }).detail;
+      const banner = composerBanner({ me: david, machines, enforcement: "off" });
       // Only positive claims are banned: "is recorded, not refused" is the honest form.
-      expect(detail).not.toMatch(/\b(is|are|will be|gets?)\s+(caught|refused|blocked|prevented|stopped)\b/i);
+      expect(said(banner)).not.toMatch(/\b(is|are|will be|gets?)\s+(caught|refused|blocked|prevented|stopped)\b/i);
     }
   });
 
@@ -171,34 +170,75 @@ describe("composerBanner", () => {
     // through. Copy that implied the message was caught, refused or blocked would be
     // false in exactly the mode the team is meant to evaluate this in.
     for (const machines of [[], [davidsMachine, teamMachine, unclaimed]]) {
-      const detail = composerBanner({ me: david, machines, enforcement: "audit" }).detail;
-      expect(detail).toMatch(/audit mode/i);
-      expect(detail).not.toMatch(/\b(is|are|will be|gets?)\s+(caught|refused|blocked|prevented|stopped)\b/i);
-      expect(detail).not.toMatch(/\b(was|were|has been|have been)\s+(caught|refused|blocked|prevented|stopped)\b/i);
+      const banner = composerBanner({ me: david, machines, enforcement: "audit" });
+      expect(said(banner)).toMatch(/audit mode/i);
+      expect(said(banner)).not.toMatch(/\b(is|are|will be|gets?)\s+(caught|refused|blocked|prevented|stopped)\b/i);
+      expect(said(banner)).not.toMatch(/\b(was|were|has been|have been)\s+(caught|refused|blocked|prevented|stopped)\b/i);
     }
   });
 
   it("says the guardrail is on, once it is", () => {
-    const detail = composerBanner({
+    const banner = composerBanner({
       me: david,
       machines: [davidsMachine, teamMachine, unclaimed],
       enforcement: "enforce",
-    }).detail;
-    expect(detail).toMatch(/starting on someone else's machine is refused/i);
-    // Still honest about what the banner itself cannot do (S3-lite).
-    expect(detail).toContain("does not tell a plugin which machine this composer has selected");
+    });
+    expect(said(banner)).toMatch(/starting on someone else's machine is refused/i);
+  });
+
+  it("explains, for every mode, why the banner cannot check the machine itself", () => {
+    // S3-lite: the composer cannot see the selected machine. The glossary says so once.
+    for (const enforcement of ["off", "audit", "enforce"] as const) {
+      expect(composerBanner({ me: david, machines: [], enforcement }).note?.term).toBe("composer-check");
+    }
+  });
+
+  it("says in one short note what happens at Send, per mode", () => {
+    expect(composerBanner({ me: david, enforcement: "audit", machines: [] }).note?.text)
+      .toBe("In audit mode, starting on someone else's machine is logged, then goes ahead.");
+    expect(composerBanner({ me: david, enforcement: "enforce", machines: [] }).note?.text)
+      .toBe("Starting on someone else's machine is refused at Send.");
   });
 
   it("says so plainly when there are no machines to list", () => {
-    expect(composerBanner({ me: david, enforcement: "off", machines: [] }).detail)
-      .toBe("No machines of yours are known yet. BB does not tell a plugin which machine this composer has "
-        + "selected. Nothing else checks it yet either: starting on someone else's machine is recorded, not refused.");
+    expect(composerBanner({ me: david, enforcement: "off", machines: [] }))
+      .toEqual({
+        title: "Starting as David",
+        detail: "No machines of yours known yet",
+        note: { text: "Starting on someone else's machine is recorded, not refused.", term: "composer-check" },
+      });
   });
 
   it("is neutral, not alarming, for an unrecognised sign-in", () => {
     expect(composerBanner({ me: null, enforcement: "off", machines: [teamMachine] })).toEqual({
       title: "Starting as an unrecognised sign-in",
-      detail: "Threads you start will show no starter. Add your email to Identity's directory setting to be named.",
+      detail: "Threads you start show no starter until your email is in Identity's directory.",
+    });
+  });
+
+  it("names the email that is missing only when there is one to add", () => {
+    // A fallback email outside the directory is the fallback's gap, not "your email"; an
+    // anonymous request (no email, or a stale, expired or invalid browser name) has none.
+    expect(composerBanner({ me: null, provenance: "upstream-header", enforcement: "off", machines: [] }).detail)
+      .toBe("Threads you start show no starter until your email is in Identity's directory.");
+    expect(composerBanner({ me: null, provenance: "configured-fallback", enforcement: "enforce", machines: [] })).toEqual({
+      title: "Starting as an unrecognised sign-in",
+      detail: "Threads you start show no starter until the fallback email is in Identity's directory.",
+    });
+    expect(composerBanner({ me: null, provenance: "unknown", enforcement: "enforce", machines: [] })).toEqual({
+      title: "Starting as an unrecognised sign-in",
+      detail: "Threads you start show no starter.",
+    });
+  });
+
+  it("calls a browser name or the fallback email attribution only, with no mode sentence", () => {
+    expect(composerBanner({ me: david, provenance: "self-selected", enforcement: "enforce", machines: [] })).toEqual({
+      title: "Starting as David", detail: "Chosen in this browser.",
+      note: { text: "Attribution only.", term: "attribution-only" },
+    });
+    expect(composerBanner({ me: david, provenance: "configured-fallback", enforcement: "enforce", machines: [] })).toEqual({
+      title: "Starting as David", detail: "From the fallback email.",
+      note: { text: "Attribution only.", term: "attribution-only" },
     });
   });
 });
@@ -207,15 +247,32 @@ describe("readOnlyBanner", () => {
   it("names whose thread this is when the guardrail is on", () => {
     expect(readOnlyBanner({ me: david, starter: matt, enforcement: "enforce" })).toEqual({
       title: "Read-only: Matt's thread",
-      detail: "Only Matt can send to it. Ask Matt, or start a thread of your own.",
+      detail: "Enforce refuses a message from you here; Send now skips the check. Ask Matt, or start a thread of your own.",
+      note: { text: "Own-thread rule", term: "rule-own-thread" },
     });
   });
 
   it("does not claim read-only when the setting is off, because nothing enforces it", () => {
     const banner = readOnlyBanner({ me: david, starter: matt, enforcement: "off" });
-    expect(banner?.title).toBe("Matt's thread");
-    expect(banner?.detail).not.toMatch(/\b(is|are|will be|gets?)\s+(caught|refused|blocked|prevented|stopped)\b/i);
+    expect(banner).toEqual({
+      title: "Matt's thread",
+      detail: "Meant for Matt to drive; enforcement is off, so nothing stops you.",
+      note: { text: "Own-thread rule", term: "rule-own-thread" },
+    });
+    expect(said(banner)).not.toMatch(/\b(is|are|will be|gets?)\s+(caught|refused|blocked|prevented|stopped)\b/i);
     expect(banner?.detail).toContain("enforcement");
+  });
+
+  it("in audit, says a message is logged and goes through, and that Send now is not judged", () => {
+    const banner = readOnlyBanner({ me: david, starter: matt, enforcement: "audit" });
+    expect(banner).toEqual({
+      title: "Matt's thread",
+      detail: "Meant for Matt to drive. In audit mode a message from you here is logged as a would-refuse, "
+        + "then goes through; Send now skips the check.",
+      note: { text: "Own-thread rule", term: "rule-own-thread" },
+    });
+    expect(said(banner)).not.toMatch(/\b(is|are|will be|gets?)\s+(caught|refused|blocked|prevented|stopped)\b/i);
+    expect(said(banner)).not.toMatch(/\b(was|were|has been|have been)\s+(caught|refused|blocked|prevented|stopped)\b/i);
   });
 
   it("says nothing on your own thread, an unrecorded one, or to an unrecognised sign-in", () => {

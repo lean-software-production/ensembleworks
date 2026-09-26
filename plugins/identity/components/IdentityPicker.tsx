@@ -1,8 +1,19 @@
 import { useCallback, useEffect, useId, useRef, useState } from "react";
 import { useRpc } from "@get-bb/plugin-sdk/app";
 import type { rpcContract, WhoAmI } from "../server.js";
+import { PICKER_STATUSES, type PickerStatus } from "../settings-admin.js";
+import { pickerProblem } from "../lib/precedence.js";
+import { Explain } from "./Explain.js";
 
 const REFRESH_MS = 5_000;
+
+/** A refusal reason (or picker status) from the server, as the end of a sentence. */
+function prepareProblem(reason: string): string {
+  if (reason === "upstream-identity") return "your Access email already names you";
+  if (reason === "not-in-directory") return "that name is no longer in the directory";
+  if ((PICKER_STATUSES as readonly string[]).includes(reason)) return pickerProblem(reason as PickerStatus);
+  return reason;
+}
 
 /**
  * The browser-name picker, moved out of app.tsx so both the app overlays and the settings
@@ -57,7 +68,9 @@ export function IdentityPicker({ onIdentityChange, refreshKey, heading = true }:
     try {
       const prepared = await rpcRef.current.call("identity_prepare_selection",
         action === "select" ? { action, personId: choice } : { action });
-      if (!prepared.ok) throw new Error(`Identity could not prepare this choice: ${prepared.reason}.`);
+      if (!prepared.ok) {
+        throw new Error(`Identity could not ${action === "select" ? "use" : "forget"} this name: ${prepareProblem(prepared.reason)}.`);
+      }
       const response = await fetch(prepared.url, { method: "GET", credentials: "same-origin", cache: "no-store" });
       if (!response.ok) {
         const payload = await response.json().catch(() => null) as { reason?: unknown } | null;
@@ -73,14 +86,16 @@ export function IdentityPicker({ onIdentityChange, refreshKey, heading = true }:
     finally { setBusy(false); }
   };
   if (me === null || me.picker.status === "off" || me.provenance === "upstream-header") return null;
-  if (!me.picker.enabled) return <p role="status" style={{ fontSize: 12 }}>Browser identity is unavailable: {me.picker.status}.</p>;
+  if (!me.picker.enabled) {
+    return <p role="status" style={{ fontSize: 12 }}>{`Browser names are unavailable: ${prepareProblem(me.picker.status)}.`}</p>;
+  }
   if (me.picker.people.length === 0) return <p role="status" style={{ fontSize: 12 }}>No names are configured in Identity yet.</p>;
   const chosen = me.provenance === "self-selected" && me.person !== null;
   return <div className="identity-picker" aria-label="Browser identity" style={{ marginTop: 12, paddingTop: 12,
     borderTop: "1px solid var(--border)", minWidth: 0 }}>
     {heading && <strong style={{ display: "block" }}>This browser</strong>}
     <p style={{ margin: "4px 0 8px", fontSize: 12 }}>{chosen
-      ? `Shown as ${me.person!.displayName} (chosen here; attribution only).`
+      ? <>Shown as {me.person!.displayName} (chosen here; <Explain term="attribution-only">attribution only</Explain>).</>
       : me.selection?.status === "stale"
         ? "Your earlier choice is no longer in the directory. Choose again."
         : "Choose a name for attribution in this browser. This does not verify who you are."}</p>

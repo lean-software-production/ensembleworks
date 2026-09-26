@@ -6,6 +6,7 @@ import { AUDIT_JQ_COMMAND, enforceRisks, lintConfig, readiness, type AdminFacts 
 export let Header: ComponentType<{ threadId: string }>;
 export let IdentityPrompt: ComponentType<Record<string, never>>;
 export let Settings: ComponentType<Record<string, never>>;
+export let ComposerBanner: ComponentType<Record<string, never>>;
 export const ownership: ThreadOwnership = {
   threadId: "fixture", starter: { person: "erin", displayName: "Erin Example", github: "erin" },
   via: "browser", inheritedFrom: null,
@@ -37,6 +38,8 @@ const hosts: HostClassification[] = [
   { kind: "team", hostId: "h3", hostName: "ew-main", conflict: null },
   { kind: "unclaimed", hostId: "h4", hostName: "sharedmachine" + "longname".repeat(6), conflict: null },
 ];
+// The new-thread composer banner: an Access-identified person in Enforce, with machines to list.
+const composerMachines: MachineList = { ...machines, me: alex, meProvenance: "upstream-header", machines: hosts, enforcement: "enforce" };
 const facts: AdminFacts = {
   directoryError: null, people: directory, teamMachines: ["ew-main"], machines: hosts, machinesUnavailable: null,
   enforcement: "audit", fallbackEmail: "", selfSelectedIdentity: true, selectionPublicOrigin: "https://bb.example.test",
@@ -82,6 +85,7 @@ const settingsRpc: Record<string, (input: any) => unknown> = {
   identity_prepare_selection: () => ({ ok: false, reason: "the fixture never selects" }),
 };
 const rpc = { call: async (method: string, input?: unknown) => {
+  if (screen === "composer" && method === "identity_machines") return composerMachines;
   if (screen === "settings") {
     const answer = settingsRpc[method];
     if (answer === undefined) throw new Error(`Unexpected fixture RPC: ${method}`);
@@ -108,13 +112,16 @@ export const useComposerView = unused;
 export const useRealtime = () => undefined;
 export const useRealtimeConnectionState = unused;
 type Slot = { id: string; component: ComponentType<any> };
+type Customization = { id: string; banners?: ReadonlyArray<{ component: ComponentType<any> }>; [key: string]: unknown };
 const ignore = () => undefined;
 export function definePluginApp(setup: (app: {
   contentScripts: { register: typeof ignore };
-  composer: { customize: typeof ignore };
+  composer: { customize: (entry: Customization) => void };
   slots: { experimental_appOverlay: (slot: Slot) => void; settingsSection: (slot: Slot) => void; experimental_threadHeaderAction: (slot: Slot) => void };
 }) => void) {
-  setup({ contentScripts: { register: ignore }, composer: { customize: ignore }, slots: {
+  setup({ contentScripts: { register: ignore }, composer: {
+    customize: (entry) => { if (entry.id === "ownership-banner") ComposerBanner = entry.banners![0]!.component; },
+  }, slots: {
     experimental_appOverlay: (slot) => { if (slot.id === "identity-prompt") IdentityPrompt = slot.component; },
     settingsSection: (slot) => { if (slot.id === "people") Settings = slot.component; },
     experimental_threadHeaderAction: (slot) => { if (slot.id === "thread-ownership") Header = slot.component; },

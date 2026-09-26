@@ -228,10 +228,12 @@ describe("People & machines settings section", () => {
     fireEvent.click(screen.getByRole("button", { name: "Use this name" }));
     const named = "You: Alex Rivera · chosen in this browser · counts for Attribution only";
     await waitFor(() => expect(you()).toBe(named));
-    expect(screen.getByText("Shown as Alex Rivera (chosen here; attribution only).")).toBeTruthy();
+    expect(screen.getAllByText((_, el) => el?.tagName === "P"
+      && el.textContent === "Shown as Alex Rivera (chosen here; attribution only).")).toHaveLength(1);
     await act(async () => { release(anonymous); await late; });
     expect(you()).toBe(named);
-    expect(screen.getByText("Shown as Alex Rivera (chosen here; attribution only).")).toBeTruthy();
+    expect(screen.getAllByText((_, el) => el?.tagName === "P"
+      && el.textContent === "Shown as Alex Rivera (chosen here; attribution only).")).toHaveLength(1);
     expect(screen.queryByRole("combobox", { name: "Your name" })).toBeNull();
   });
 

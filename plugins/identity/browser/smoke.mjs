@@ -112,6 +112,36 @@ try {
     console.log(`PASS ${variant}: popover preserves complete headerChip text`);
   }
   await page.close();
+  // The new-thread composer banner: one short note whose popover says when the machine is
+  // checked, naming the settings tab in words (there is no link into settings from here).
+  for (const [width, scheme] of [[320, 'light'], [390, 'light'], [390, 'dark']]) {
+    const shot = (name) => `${artifacts}/composer-${scheme === 'dark' ? 'dark-' : ''}${width}${name}.png`;
+    const context = await browser.newContext({ viewport: { width, height: 720 }, hasTouch: true, colorScheme: scheme });
+    const page = await context.newPage();
+    page.setDefaultTimeout(10000);
+    const errors = [];
+    page.on('pageerror', (error) => { errors.push(error.message); console.error(error.message); });
+    await page.goto(server.resolvedUrls.local[0] + '?screen=composer');
+    await expect(page.getByText('Starting as Alex Rivera')).toBeVisible();
+    expect(await page.evaluate(() => document.documentElement.scrollWidth), `${width}px composer: page width`).toBe(width);
+    await page.screenshot({ path: shot('') });
+    const note = page.getByRole('button', { name: /refused at Send/ });
+    expect(await note.evaluate((el) => getComputedStyle(el, '::before').height)).toBe('44px');
+    await note.tap();
+    const explain = page.getByRole('dialog', { name: 'When the machine is checked' });
+    await expect(explain).toBeVisible();
+    await expect(explain).toContainText('More: Identity settings › People & machines › Rules');
+    const bounds = await explain.boundingBox();
+    expect(bounds.x).toBeGreaterThanOrEqual(8);
+    expect(bounds.x + bounds.width).toBeLessThanOrEqual(width - 8);
+    await page.screenshot({ path: shot('-explain') });
+    await page.keyboard.press('Escape');
+    await expect(explain).toHaveCount(0);
+    await expect(note).toBeFocused();
+    expect(errors).toEqual([]);
+    console.log(`PASS ${width}px ${scheme} composer: banner without overflow, 44px note hit area, explain popover in bounds, Escape returns focus`);
+    await context.close();
+  }
   // The People & machines settings section: every tab at three widths, the tabs' keys, and
   // the two gated dialogs. Disclosures are opened first, so what they hide is measured too.
   const tabs = [['people', 'People'], ['machines', 'Machines'], ['browser', 'This browser'], ['rules', 'Rules'], ['health', 'Health']];
