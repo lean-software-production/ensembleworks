@@ -221,12 +221,14 @@ describe("composerBanner", () => {
     // anonymous request (no email, or a stale, expired or invalid browser name) has none.
     expect(composerBanner({ me: null, provenance: "upstream-header", enforcement: "off", machines: [] }).detail)
       .toBe("Threads you start get no starter of their own until your email is in Identity's directory.");
+    expect(composerBanner({ me: null, provenance: "upstream-header", enforcement: "off", machines: [] }).title)
+      .toBe("Starting as an unrecognised sign-in");
     expect(composerBanner({ me: null, provenance: "configured-fallback", enforcement: "enforce", machines: [] })).toEqual({
-      title: "Starting as an unrecognised sign-in",
+      title: "Starting from the fallback email",
       detail: "Threads you start get no starter of their own until the fallback email is in Identity's directory.",
     });
     expect(composerBanner({ me: null, provenance: "unknown", enforcement: "enforce", machines: [] })).toEqual({
-      title: "Starting as an unrecognised sign-in",
+      title: "Starting anonymously",
       detail: "Threads you start get no starter of their own.",
     });
   });

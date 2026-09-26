@@ -92,7 +92,7 @@ export const GLOSSARY: Record<GlossaryId, GlossaryEntry> = {
   "machine-owner": {
     title: "Whose machine it is",
     body: [
-      "Team-list machines are the team's, even with a person's name. Otherwise, a machine ending in -<name> (someone's id or GitHub handle) is theirs. Identity pins it on first sight, so a rename doesn't change the owner; a disagreeing one shows as a conflict.",
+      "Team-list machines are the team's, whatever their name or pin. Otherwise a pinned machine stays its owner's, through renames and after they leave the directory; a disagreeing name is flagged. Otherwise a name ending in -<name> (someone's id or GitHub handle) makes it theirs, and pins it.",
       "Anything else is unclaimed: any person may start there. In Enforce a BB-stamped automation may not; Audit logs it and lets it through.",
     ],
     more: "machines",

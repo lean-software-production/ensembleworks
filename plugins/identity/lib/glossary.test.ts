@@ -43,7 +43,10 @@ describe("the glossary", () => {
 
   it("puts the team list ahead of a pin when it says whose a machine is", () => {
     // classifyHost returns team before it consults the pin, so the pin promise holds only off the list.
-    expect(text("machine-owner")).toMatch(/^Team-list machines are the team's, even with a person's name\. Otherwise/);
+    // Then the pin, which outlives a rename and the person's leaving the directory (pinnedSummary),
+    // and only then the name.
+    expect(text("machine-owner")).toMatch(
+      /^Team-list machines are the team's, whatever their name or pin\. Otherwise a pinned machine stays its owner's, through renames and after they leave the directory;.* Otherwise a name ending in -<name>/);
   });
 
   it("describes the own-thread rule by the recorded starter, inherited ones included", () => {

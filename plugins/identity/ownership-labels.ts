@@ -257,15 +257,19 @@ export function composerBanner(input: {
     return { title: `Starting as ${input.me.displayName}`, detail: "From the fallback email.", note: attributionOnly };
   }
   if (input.me === null) {
-    // Name the email to add only when there is one: the fallback's is not "yours", and an
-    // anonymous request (no email, or a stale, expired or invalid browser name) has none.
+    // Name the source by provenance, and the email to add only when there is one: the
+    // fallback's is not "yours", and an anonymous request (no email, or a stale, expired or
+    // invalid browser name) has none. Only an Access email is a sign-in.
+    if (input.provenance === "configured-fallback") return {
+      title: "Starting from the fallback email",
+      detail: "Threads you start get no starter of their own until the fallback email is in Identity's directory.",
+    };
+    if (input.provenance === "unknown") {
+      return { title: "Starting anonymously", detail: "Threads you start get no starter of their own." };
+    }
     return {
       title: "Starting as an unrecognised sign-in",
-      detail: input.provenance === "configured-fallback"
-        ? "Threads you start get no starter of their own until the fallback email is in Identity's directory."
-        : input.provenance === "unknown"
-          ? "Threads you start get no starter of their own."
-          : "Threads you start get no starter of their own until your email is in Identity's directory.",
+      detail: "Threads you start get no starter of their own until your email is in Identity's directory.",
     };
   }
   const mine = input.machines

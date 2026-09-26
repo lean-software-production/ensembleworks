@@ -164,14 +164,14 @@ back as `null`. Attribution is a guardrail aid, not an audit log.
 Identity **shows** who owns what. The ownership UI only labels: nothing in it can reject,
 delay or alter a dispatch. What refuses is the guardrail, below.
 
-- **Machines are labelled `person`, `team` or `unclaimed`.** The `teamMachines` list is
-  checked first: a machine on it is the team's, whatever its name or pin, and reports no
-  conflict. Otherwise a machine named `<box>-<person>` whose last segment matches a
-  directory `person` or `github` belongs to that person; anything else is **unclaimed** —
-  never silently folded into "team". A host is **pinned** to its person by host id on first
-  sight, and off the team list a later rename that disagrees with the pin is *not*
-  followed: the pin stands and the disagreement is reported (`GET …/http/host-pins`, and
-  in the header chip).
+- **Machines are labelled `person`, `team` or `unclaimed`,** checked in this order: the
+  team list, the pin, the name. A machine on `teamMachines` is the team's, whatever its
+  name or pin, and reports no conflict. Otherwise a machine **pinned** to a person (by host
+  id) is theirs: a later rename that disagrees is *not* followed but reported
+  (`GET …/http/host-pins`, and in the header chip), and a pin to someone since removed from
+  the directory still names them. Otherwise a machine named `<box>-<person>` whose last
+  segment matches a directory `person` or `github` is that person's, and is pinned to them
+  on first sight. Anything else is **unclaimed** — never silently folded into "team".
 - **Thread rows** show who started the thread ("Started by David · team machine"), except
   while someone is viewing or typing — **presence wins** that glyph.
 - **The thread header** reads "Started by David · runs as ensembleworks-agent on
@@ -202,9 +202,13 @@ One three-way setting, `enforcement`:
 | `audit` | Take the **same** decision `enforce` would, write it to the log as a would-refuse, and let the message through. |
 | `enforce` | Act on that decision. |
 
-The rules `audit` reports and `enforce` acts on (`guardrail.ts`): **A** a known person's
-start on another *person's* machine (team and unclaimed machines are always fine); **B** a
-known person's message into a thread a different known person started; **C** an automation
+The rules `audit` reports and `enforce` acts on (`guardrail.ts`), where a *known person* is
+one whose Access email matches the directory: **A** a known person's request into a thread
+with no record — a new thread, or a follow-up after a Send now start — on another *person's*
+machine (team and unclaimed machines are always fine); **B** a known person's follow-up
+into a thread whose recorded starter is someone else, including a starter a child thread
+inherited from its lineage (a thread recorded from a browser name or `fallbackEmail` has no
+starter to protect); **C** an automation
 (`origin: plugin`, `originPluginId: automations`) headed for a machine that is not a team
 machine. A dispatch Identity cannot tie to a person is **never refused by rules A or B, in
 any mode** — that is the normal shape of every agent path (see the design note's S9) — and
@@ -434,7 +438,8 @@ Leave it empty on a shared server.
 ### `teamMachines`
 
 Host names of the shared team machines, one per line or comma separated (a JSON array
-works too). A host that matches neither a person nor this list renders as "unclaimed".
+works too). A host that is not on this list, not pinned and whose name names no one in
+the directory renders as "unclaimed".
 
 ### `sharedMachineUser`
 
