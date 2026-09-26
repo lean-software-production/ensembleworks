@@ -1,0 +1,1836 @@
+<!doctype html>
+<html lang="en" class="theme-auto">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="color-scheme" content="light dark">
+<script>document.documentElement.classList.add("js")</script>
+<title>Identity settings — three UX directions (design research)</title>
+<style>
+/* ── Tokens. Names mirror BB's own CSS variables (background, foreground, muted-foreground,
+      border, primary, destructive, warning, success, ring…) so a direction can be ported
+      without inventing a palette. BB has no --info token; "new plugin code" and "needs BB
+      core" colours below are mockup-only annotation colours, not product colours. ── */
+:root{
+  --background:#ffffff;--foreground:#0b1220;--card:#ffffff;--popover:#ffffff;
+  --primary:#1d4ed8;--primary-foreground:#ffffff;--secondary:#f1f4f8;--muted:#f3f5f8;
+  --muted-foreground:#556070;--subtle-foreground:#5f6977;--accent:#eef2f7;
+  --destructive:#b42318;--destructive-bg:#fdeceb;--warning:#9a5205;--warning-bg:#fff4e2;
+  --success:#166c41;--success-bg:#e8f6ee;--border:#dce1e9;--input:#c9d1dc;--ring:#2563eb;
+  --radius:8px;--page:#eef1f5;--recessed:#f5f7fa;--bezel:#1d2430;
+  --newcode:#1a5aa6;--newcode-bg:#e9f1fc;--core:#8a2cc4;--core-bg:#f5ecfc;
+  --shadow:0 1px 2px rgb(15 23 42/.06),0 8px 24px rgb(15 23 42/.08);
+  --scrim:rgb(15 23 42/.45);
+}
+html.dark{
+  --background:#0f1319;--foreground:#e6e9ef;--card:#151a23;--popover:#181e28;
+  --primary:#7aa2ff;--primary-foreground:#0b1220;--secondary:#1c222d;--muted:#1a2029;
+  --muted-foreground:#a6b0c0;--subtle-foreground:#99a3b3;--accent:#1f2633;
+  --destructive:#ff8a7d;--destructive-bg:#2c1614;--warning:#f3b760;--warning-bg:#2a2113;
+  --success:#72d49d;--success-bg:#10261a;--border:#2b3342;--input:#3a4454;--ring:#93b4ff;
+  --page:#0a0d12;--recessed:#12171f;--bezel:#000;
+  --newcode:#92c2ff;--newcode-bg:#12233a;--core:#d8a3ff;--core-bg:#2a1839;
+  --shadow:0 1px 2px rgb(0 0 0/.4),0 8px 24px rgb(0 0 0/.35);--scrim:rgb(0 0 0/.6);
+}
+@media (prefers-color-scheme: dark){
+  html.theme-auto{
+    --background:#0f1319;--foreground:#e6e9ef;--card:#151a23;--popover:#181e28;
+    --primary:#7aa2ff;--primary-foreground:#0b1220;--secondary:#1c222d;--muted:#1a2029;
+    --muted-foreground:#a6b0c0;--subtle-foreground:#99a3b3;--accent:#1f2633;
+    --destructive:#ff8a7d;--destructive-bg:#2c1614;--warning:#f3b760;--warning-bg:#2a2113;
+    --success:#72d49d;--success-bg:#10261a;--border:#2b3342;--input:#3a4454;--ring:#93b4ff;
+    --page:#0a0d12;--recessed:#12171f;--bezel:#000;
+    --newcode:#92c2ff;--newcode-bg:#12233a;--core:#d8a3ff;--core-bg:#2a1839;
+    --shadow:0 1px 2px rgb(0 0 0/.4),0 8px 24px rgb(0 0 0/.35);--scrim:rgb(0 0 0/.6);
+  }
+}
+*,*::before,*::after{box-sizing:border-box}
+html{font-family:ui-sans-serif,system-ui,-apple-system,"Segoe UI",Roboto,"Helvetica Neue",Arial,sans-serif;
+  font-size:14px;line-height:1.5;background:var(--page);color:var(--foreground);-webkit-text-size-adjust:100%}
+body{margin:0}
+h1,h2,h3,h4{line-height:1.25;margin:0}
+p{margin:0}
+code,.mono{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,"Liberation Mono",monospace;font-size:.92em}
+a{color:var(--primary)}
+button,input,select,textarea{font:inherit;color:inherit}
+:focus-visible{outline:2px solid var(--ring);outline-offset:2px}
+.sr-only{position:absolute!important;width:1px;height:1px;padding:0;margin:-1px;overflow:hidden;clip:rect(0 0 0 0);white-space:nowrap;border:0}
+.skip{position:absolute;left:-9999px;top:8px;z-index:100;background:var(--card);padding:8px 12px;border-radius:6px;border:1px solid var(--border)}
+.skip:focus{left:8px}
+@media (prefers-reduced-motion: no-preference){.anim{transition:background-color .15s,border-color .15s,color .15s}}
+
+/* ── Page chrome (the research document around the mockups) ── */
+.wrap{max-width:1320px;margin:0 auto;padding:0 20px}
+.page-head{padding:22px 0 10px;display:grid;gap:14px}
+.eyebrow{font-size:12px;color:var(--muted-foreground);letter-spacing:.01em}
+h1{font-size:22px;letter-spacing:-.01em;margin-top:2px}
+.lede{color:var(--muted-foreground);max-width:78ch}
+.toolbar{display:flex;flex-wrap:wrap;gap:10px 18px;align-items:center}
+.toolbar .grp{display:flex;align-items:center;gap:8px;flex-wrap:wrap}
+.toolbar .grp>span{font-size:12px;color:var(--muted-foreground)}
+.seg{display:inline-flex;border:1px solid var(--border);border-radius:8px;background:var(--card);overflow:hidden;flex-wrap:wrap}
+.seg input{position:absolute;opacity:0;width:1px;height:1px;margin:0}
+.seg label{display:inline-flex;align-items:center;gap:6px;min-height:34px;padding:4px 11px;cursor:pointer;font-size:13px;border-left:1px solid var(--border);user-select:none}
+.seg label:first-of-type{border-left:0}
+.seg input:checked+label{background:var(--primary);color:var(--primary-foreground)}
+.seg input:focus-visible+label{outline:2px solid var(--ring);outline-offset:-3px}
+.check{display:inline-flex;align-items:center;gap:6px;font-size:13px;min-height:34px;cursor:pointer}
+.check input{width:16px;height:16px;accent-color:var(--primary)}
+select.plain{min-height:34px;border:1px solid var(--border);border-radius:8px;background:var(--card);padding:0 8px}
+.legend{display:flex;flex-wrap:wrap;gap:8px 14px;font-size:12px;color:var(--muted-foreground);align-items:center}
+
+.optnav{position:sticky;top:0;z-index:20;background:color-mix(in srgb,var(--page) 92%,transparent);backdrop-filter:blur(6px);border-bottom:1px solid var(--border)}
+.optnav [role=tablist]{display:flex;gap:6px;overflow-x:auto;padding:8px 0;scrollbar-width:thin}
+.optnav [role=tab]{flex:0 0 auto;display:grid;text-align:left;gap:1px;min-height:44px;padding:6px 14px;border-radius:10px;border:1px solid var(--border);background:var(--card);cursor:pointer;max-width:290px}
+.optnav [role=tab] b{font-size:13.5px}
+.optnav [role=tab] small{font-size:11.5px;color:var(--muted-foreground);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.optnav [role=tab][aria-selected=true]{border-color:var(--primary);box-shadow:inset 0 0 0 1px var(--primary);background:color-mix(in srgb,var(--primary) 9%,var(--card))}
+
+.option{padding:18px 0 40px}
+html.js .option[hidden]{display:none}
+.thesis{display:grid;gap:6px;margin-bottom:12px}
+.thesis h2{font-size:19px}
+.thesis p{max-width:92ch;color:var(--muted-foreground)}
+.screenbar{display:flex;flex-wrap:wrap;gap:8px 14px;align-items:center;margin:10px 0 12px}
+.screenbar>span{font-size:12px;color:var(--muted-foreground)}
+.viewing{font-size:12px;color:var(--muted-foreground);margin:-4px 0 10px}
+.viewing b{color:var(--foreground);font-weight:600}
+
+/* ── Device frames. Every layout inside is driven by CONTAINER queries on .device, the same
+      mechanism BB's host uses (@md:), because a settings section never learns the viewport. ── */
+.stage{overflow-x:auto;padding:6px 2px 18px}
+.device{container-type:inline-size;container-name:dev;margin:0 auto;background:var(--background);border:1px solid var(--border);border-radius:12px;box-shadow:var(--shadow);overflow:hidden;position:relative}
+.device[data-vp=desktop]{width:100%;min-width:800px;max-width:1240px}
+.device[data-vp=narrow]{width:360px}
+.device[data-vp=mobile]{width:390px;border:10px solid var(--bezel);border-radius:34px}
+.device-cap{font-size:11.5px;color:var(--muted-foreground);text-align:center;margin-top:6px}
+.phonebar{display:none;justify-content:space-between;padding:6px 18px 2px;font-size:12px;font-weight:600}
+.device[data-vp=mobile] .phonebar{display:flex}
+
+/* ── BB host chrome (NOT plugin-controlled) ── */
+.bb{display:grid;grid-template-columns:208px minmax(0,1fr);min-height:680px}
+.bb-nav{border-right:1px solid var(--border);background:var(--recessed);padding:14px 10px;font-size:13px}
+.bb-nav h3{font-size:11px;text-transform:uppercase;letter-spacing:.06em;color:var(--muted-foreground);margin:12px 8px 4px}
+.bb-nav ul{list-style:none;margin:0;padding:0}
+.bb-nav li{padding:5px 8px;border-radius:6px;color:var(--muted-foreground)}
+.bb-nav li.on{background:var(--accent);color:var(--foreground);font-weight:600}
+.bb-nav li.sub{padding-left:18px}
+.bb-mhead{display:none;align-items:center;gap:8px;padding:10px 12px;border-bottom:1px solid var(--border);font-weight:600;background:var(--background);position:sticky;top:0;z-index:3}
+.bb-mhead .back{min-width:44px;min-height:44px;display:inline-flex;align-items:center;justify-content:center;border-radius:8px;border:0;background:transparent;font-size:18px}
+.bb-main{min-width:0;padding:20px 24px 28px}
+.bb-inner{max-width:1024px;margin:0 auto;display:grid;gap:16px}
+.host{position:relative}
+.host-tag{position:absolute;top:-9px;right:8px;font-size:10px;font-weight:700;letter-spacing:.04em;text-transform:uppercase;color:var(--muted-foreground);background:var(--background);padding:0 6px;border:1px solid var(--border);border-radius:999px}
+.host-outline{border:1px dashed var(--input);border-radius:10px;padding:12px}
+.plug-head{display:flex;gap:12px;align-items:flex-start}
+.plug-icon{width:36px;height:36px;border-radius:9px;background:linear-gradient(135deg,#4f6bd8,#8a57c8);display:grid;place-items:center;color:#fff;font-weight:700;flex:0 0 auto}
+.plug-head h3{font-size:17px}
+.plug-head p{color:var(--muted-foreground);font-size:12.5px}
+.plug-head .toggle-host{margin-left:auto;display:flex;align-items:center;gap:6px;font-size:12px;color:var(--muted-foreground)}
+.host h4.cfg{font-size:14px;margin:0 0 8px}
+details.genform{background:var(--recessed);border:1px solid var(--border);border-radius:10px}
+details.genform>summary{cursor:pointer;padding:10px 12px;font-size:12.5px;display:flex;gap:8px;align-items:center;min-height:44px;list-style:none}
+details.genform>summary::-webkit-details-marker{display:none}
+details.genform>summary::before{content:"▸";color:var(--muted-foreground)}
+details.genform[open]>summary::before{content:"▾"}
+.gf{display:grid;gap:0;padding:0 12px 10px}
+.gf-row{display:grid;grid-template-columns:minmax(0,1fr) 256px;gap:4px 16px;padding:8px 0;border-top:1px solid var(--border);font-size:12px}
+.gf-row b{font-size:12.5px}
+.gf-row p{color:var(--muted-foreground)}
+.gf-ctl{height:28px;border:1px solid var(--input);border-radius:6px;background:var(--background);display:flex;align-items:center;padding:0 8px;font-size:12px;color:var(--muted-foreground);overflow:hidden;white-space:nowrap;text-overflow:ellipsis}
+.sec-title{font-size:14px;font-weight:600}
+.sec-desc{font-size:12px;color:var(--muted-foreground);margin:2px 0 10px}
+.plugin-zone{border-radius:10px;outline:2px solid color-mix(in srgb,var(--primary) 35%,transparent);outline-offset:6px;position:relative;margin-top:10px}
+.plugin-zone>.zone-tag{display:block;margin:0 0 8px;font-size:11px;font-weight:700;color:var(--primary)}
+.details-link{font-size:12.5px}
+@container dev (max-width: 720px){
+  .bb{grid-template-columns:1fr}
+  .bb-nav{display:none}
+  .bb-mhead{display:flex}
+  .bb-main{padding:14px 12px 24px}
+  .gf-row{grid-template-columns:1fr}
+  .plug-head .toggle-host span{display:none}
+}
+
+/* ── Plugin UI primitives (would be vendored shadcn in the real plugin) ── */
+.card{background:var(--card);border:1px solid var(--border);border-radius:10px;padding:14px}
+.card.flat{background:transparent}
+.card h3{font-size:14px}
+.card h4{font-size:13px}
+.stack{display:grid;gap:12px}
+.stack.sm{gap:8px}
+.row{display:flex;gap:8px;align-items:center;flex-wrap:wrap}
+.muted{color:var(--muted-foreground)}
+.small{font-size:12px}
+.tiny{font-size:11.5px}
+.grid2{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:12px}
+.grid3{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:12px}
+@container dev (max-width: 720px){.grid2,.grid3{grid-template-columns:1fr}}
+.btn{display:inline-flex;align-items:center;justify-content:center;gap:6px;min-height:36px;padding:0 12px;border-radius:7px;border:1px solid var(--border);background:var(--background);cursor:pointer;font-size:13px;font-weight:500;text-decoration:none;color:var(--foreground)}
+.btn:hover{background:var(--accent)}
+.btn.primary{background:var(--primary);border-color:var(--primary);color:var(--primary-foreground)}
+.btn.primary:hover{filter:brightness(1.07)}
+.btn.danger{color:var(--destructive);border-color:color-mix(in srgb,var(--destructive) 55%,var(--border))}
+.btn.danger.solid{background:var(--destructive);color:#fff;border-color:var(--destructive)}
+html.dark .btn.danger.solid{color:#1a0b09}
+@media (prefers-color-scheme: dark){html.theme-auto .btn.danger.solid{color:#1a0b09}}
+.btn.ghost{border-color:transparent;background:transparent}
+.btn.sm{min-height:30px;padding:0 9px;font-size:12px}
+.btn[disabled],.btn[aria-disabled=true]{opacity:.5;cursor:not-allowed}
+@container dev (max-width: 720px){.btn{min-height:44px}.btn.sm{min-height:40px}}
+.pill{display:inline-flex;align-items:center;gap:5px;font-size:11.5px;font-weight:600;border-radius:999px;padding:1px 9px;border:1px solid var(--border);white-space:nowrap;background:var(--muted);color:var(--foreground)}
+.pill.ok{background:var(--success-bg);color:var(--success);border-color:color-mix(in srgb,var(--success) 35%,transparent)}
+.pill.warn{background:var(--warning-bg);color:var(--warning);border-color:color-mix(in srgb,var(--warning) 40%,transparent)}
+.pill.bad{background:var(--destructive-bg);color:var(--destructive);border-color:color-mix(in srgb,var(--destructive) 40%,transparent)}
+.pill.off{color:var(--muted-foreground)}
+.pill.mode{background:color-mix(in srgb,var(--primary) 12%,var(--card));color:var(--primary);border-color:color-mix(in srgb,var(--primary) 35%,transparent)}
+.ic{display:inline-block;width:1.1em;text-align:center;font-weight:700}
+.alert{border-radius:10px;padding:12px 14px;border:1px solid var(--border);display:grid;gap:6px;background:var(--card)}
+.alert.warn{background:var(--warning-bg);border-color:color-mix(in srgb,var(--warning) 45%,transparent)}
+.alert.bad{background:var(--destructive-bg);border-color:color-mix(in srgb,var(--destructive) 45%,transparent)}
+.alert.ok{background:var(--success-bg);border-color:color-mix(in srgb,var(--success) 40%,transparent)}
+.alert.trust{background:var(--recessed);border-left:4px solid var(--foreground)}
+.alert .t{font-weight:650}
+.alert.warn .t{color:var(--warning)} .alert.bad .t{color:var(--destructive)}
+.kv{display:grid;grid-template-columns:max-content minmax(0,1fr);gap:4px 14px;font-size:12.5px}
+.kv dt{color:var(--muted-foreground)}
+.kv dd{margin:0;overflow-wrap:anywhere}
+@container dev (max-width: 420px){.kv{grid-template-columns:1fr}.kv dd{margin-bottom:6px}}
+.av{--c:#5b6570;display:inline-grid;place-items:center;width:30px;height:30px;border-radius:50%;background:var(--c);color:#fff;font-size:11px;font-weight:700;flex:0 0 auto}
+.av.lg{width:44px;height:44px;font-size:15px}
+.av.ink-dark{color:#111827}
+.av.none{background:var(--muted);color:var(--muted-foreground);border:1px dashed var(--input)}
+.chips{display:flex;flex-wrap:wrap;gap:6px}
+.switch{display:inline-flex;align-items:center;gap:10px;cursor:pointer;min-height:36px}
+.switch input{appearance:none;-webkit-appearance:none;width:38px;height:22px;border-radius:999px;background:var(--input);position:relative;cursor:pointer;margin:0;flex:0 0 auto}
+.switch input::after{content:"";position:absolute;top:3px;left:3px;width:16px;height:16px;border-radius:50%;background:#fff;box-shadow:0 1px 2px rgb(0 0 0/.3)}
+.switch input:checked{background:var(--primary)}
+.switch input:checked::after{left:19px}
+.switch input:focus-visible{outline:2px solid var(--ring);outline-offset:2px}
+@media (prefers-reduced-motion: no-preference){.switch input::after{transition:left .15s}}
+input.text,select.text{min-height:36px;border:1px solid var(--input);border-radius:7px;background:var(--background);padding:0 10px;width:100%}
+@container dev (max-width: 720px){input.text,select.text{min-height:44px;font-size:16px}}
+label.f{display:grid;gap:4px;font-size:12.5px;font-weight:600}
+label.f .hint{font-weight:400;color:var(--muted-foreground);font-size:12px}
+.meter{height:8px;border-radius:999px;background:var(--muted);overflow:hidden;border:1px solid var(--border)}
+.meter>i{display:block;height:100%;background:var(--warning)}
+.meter.ok>i{background:var(--success)}
+hr.sep{border:0;border-top:1px solid var(--border);margin:4px 0}
+
+/* Capability annotations (mockup only) */
+.cap{display:inline-flex;align-items:center;gap:4px;font-size:10.5px;font-weight:700;letter-spacing:.01em;border-radius:999px;padding:0 7px;border:1px dashed;white-space:nowrap;vertical-align:middle;line-height:17px;text-transform:none}
+.cap.now{color:var(--success);border-color:var(--success);border-style:solid;background:transparent}
+.cap.new{color:var(--newcode);border-color:var(--newcode);background:var(--newcode-bg)}
+.cap.core{color:var(--core);border-color:var(--core);background:var(--core-bg)}
+.cap.core::before{content:"⬡"}
+.cap.new::before{content:"+"}
+.core-zone{outline:2px dashed var(--core);outline-offset:3px;border-radius:8px}
+body.hide-caps .cap{display:none}
+body.hide-caps .core-zone{outline:none}
+
+/* Tabs inside the plugin section */
+.itabs{display:flex;gap:2px;border-bottom:1px solid var(--border);overflow-x:auto;scrollbar-width:thin}
+.itabs button{border:0;background:transparent;padding:8px 12px;min-height:40px;border-bottom:2px solid transparent;cursor:pointer;font-size:13px;white-space:nowrap;color:var(--muted-foreground)}
+.itabs button[aria-selected=true]{color:var(--foreground);border-bottom-color:var(--primary);font-weight:600}
+@container dev (max-width: 720px){.itabs button{min-height:44px}}
+
+/* Screens */
+html.js .screen{display:none}
+html.js .screen.is-on{display:block}
+.screen-label{display:none}
+html:not(.js) .screen-label{display:block;font-weight:700;margin:14px 0 6px}
+
+/* Notes under each mockup */
+.notes{margin-top:18px;display:grid;grid-template-columns:repeat(auto-fit,minmax(300px,1fr));gap:12px}
+.notes details{background:var(--card);border:1px solid var(--border);border-radius:10px;padding:0 14px}
+.notes summary{cursor:pointer;font-weight:650;padding:11px 0;min-height:44px;display:flex;align-items:center}
+.notes details>div{padding:0 0 12px;display:grid;gap:8px;font-size:13px}
+.notes ul{margin:0;padding-left:18px;display:grid;gap:4px}
+.notes .pc{display:grid;grid-template-columns:1fr 1fr;gap:10px}
+@media (max-width:560px){.notes .pc{grid-template-columns:1fr}}
+
+/* Dialogs — BB turns Dialog into a bottom drawer on compact viewports; so do we, keyed off
+   the selected mock viewport rather than the real one. */
+dialog{border:1px solid var(--border);border-radius:12px;background:var(--popover);color:var(--foreground);padding:0;width:min(520px,calc(100vw - 24px));max-height:calc(100dvh - 24px);box-shadow:var(--shadow)}
+dialog::backdrop{background:var(--scrim)}
+dialog .dh{padding:16px 18px 0;display:grid;gap:6px}
+dialog .dh h2{font-size:16.5px}
+dialog .db{padding:12px 18px;display:grid;gap:10px;font-size:13px}
+dialog .df{padding:12px 18px 16px;display:flex;gap:8px;justify-content:flex-end;flex-wrap:wrap;border-top:1px solid var(--border)}
+dialog ul{margin:0;padding-left:18px;display:grid;gap:4px}
+body.vp-compact dialog{margin:auto auto 0;width:100%;max-width:100%;border-radius:16px 16px 0 0}
+body.vp-compact dialog .df{flex-direction:column-reverse}
+body.vp-compact dialog .df .btn{width:100%;min-height:44px}
+.grab{display:none;width:40px;height:4px;border-radius:9px;background:var(--input);margin:8px auto 0}
+body.vp-compact .grab{display:block}
+
+/* Compare section */
+table.matrix{width:100%;border-collapse:separate;border-spacing:0;font-size:13px;background:var(--card);border:1px solid var(--border);border-radius:10px;overflow:hidden}
+.matrix th,.matrix td{padding:9px 10px;border-top:1px solid var(--border);vertical-align:top;text-align:left}
+.matrix thead th{border-top:0;background:var(--recessed);font-size:12.5px}
+.matrix tbody th{font-weight:600;width:18%;background:var(--recessed)}
+.matrix td.best{background:color-mix(in srgb,var(--success) 9%,var(--card))}
+.tablewrap{overflow-x:auto;border-radius:10px}
+.toast{position:fixed;left:50%;bottom:18px;transform:translateX(-50%);background:var(--foreground);color:var(--background);padding:10px 14px;border-radius:10px;font-size:13px;box-shadow:var(--shadow);z-index:200;display:none;max-width:calc(100vw - 24px)}
+.toast.on{display:block}
+
+/* ── Layout details (added) ── */
+html:not(.js) .option[hidden]{display:block}
+.bb-col{min-width:0;display:flex;flex-direction:column}
+.bb-nav .host-tag{position:static;display:inline-block;margin:0 0 6px 6px}
+h5,.h5{margin:0;font-size:13.5px;line-height:1.3;font-weight:650}
+.sec-head{display:grid;gap:2px}
+.sec-head .sec-desc{margin:0}
+.host-cfg{margin-top:12px}
+.hostmsg{margin-top:10px}
+.device[data-vp=fixed]{width:100%;box-shadow:none}
+.device[data-vp=fixed] .bb-main{padding:12px}
+.grid-compare{display:grid;grid-template-columns:minmax(0,1fr) minmax(0,1fr);gap:14px}
+@media (max-width:900px){.grid-compare{grid-template-columns:1fr}}
+.dots{display:inline-flex;gap:3px;margin-left:auto;align-items:center;color:var(--muted-foreground)}
+.dots i{width:12px;height:12px;border-radius:50%;background:var(--c);display:inline-block}
+.reco{margin:0;padding-left:18px;display:grid;gap:8px}
+pre{margin:0 0 8px;padding:10px;border-radius:8px;background:var(--recessed);border:1px solid var(--border);overflow-x:auto;font-size:11.5px;line-height:1.45;white-space:pre}
+details.cmd{border:1px solid var(--border);border-radius:9px;padding:0 12px 10px}
+details.cmd summary{cursor:pointer;min-height:40px;display:flex;align-items:center;gap:.3em;flex-wrap:wrap;font-size:12.5px;font-weight:600}
+table.mini{width:100%;border-collapse:collapse;font-size:12px}
+table.mini th,table.mini td{text-align:left;padding:6px 8px;border-top:1px solid var(--border);vertical-align:top}
+table.mini thead th{border-top:0;color:var(--muted-foreground);font-weight:600}
+@container dev (max-width:560px){
+  table.mini:not(.simout) thead{display:none}
+  table.mini:not(.simout) tr{display:grid;gap:2px;border-top:1px solid var(--border);padding:7px 0}
+  table.mini:not(.simout) th,table.mini:not(.simout) td{border:0;padding:0}
+  table.mini:not(.simout) td[data-l]::before{content:attr(data-l) ": ";color:var(--muted-foreground);font-weight:600}
+  table.simout thead{display:table-header-group}
+}
+.checklist{list-style:none;margin:0;padding:0;display:grid;gap:8px;font-size:12.5px}
+.checklist li{display:flex;gap:8px;align-items:flex-start;flex-wrap:wrap}
+.checklist li>span:last-child{flex:1 1 180px;min-width:0}
+.checklist li.core-zone{padding:4px}
+.checklist li.ok .ic,.chain li.ok .ic{color:var(--success)}
+.checklist li.warn .ic{color:var(--warning)}
+.checklist li.bad .ic,.chain li.bad .ic{color:var(--destructive)}
+
+/* Direction 1 */
+.o1{display:grid;grid-template-columns:220px minmax(0,1fr);gap:16px;align-items:start}
+.steps{list-style:none;margin:0;padding:0;display:grid;gap:4px}
+.steps li>button,.steps li>.stepstatic{display:flex;gap:10px;align-items:flex-start;width:100%;text-align:left;border:1px solid transparent;background:transparent;border-radius:8px;padding:8px;min-height:44px;cursor:pointer}
+.steps .stepstatic{cursor:default}
+.steps li>button:hover{background:var(--accent)}
+.steps .n{flex:0 0 auto;width:24px;height:24px;border-radius:50%;display:grid;place-items:center;font-size:12px;font-weight:700;border:1.5px solid var(--input);color:var(--muted-foreground);background:var(--background)}
+.steps b{display:block;font-size:13px}
+.steps small{display:block;font-size:11.5px;color:var(--muted-foreground)}
+.steps li.cur>button{border-color:var(--primary);background:color-mix(in srgb,var(--primary) 8%,var(--card))}
+.steps li.cur .n{border-color:var(--primary);color:var(--primary)}
+.steps li.ok .n{border-color:var(--success);color:var(--success);background:var(--success-bg)}
+.steps li.warn .n{border-color:var(--warning);color:var(--warning);background:var(--warning-bg)}
+.steps li.bad .n{border-color:var(--destructive);color:var(--destructive);background:var(--destructive-bg)}
+@container dev (max-width:720px){
+  .o1{grid-template-columns:1fr}
+  .steps{display:flex;overflow-x:auto;gap:6px;padding-bottom:4px;scroll-snap-type:x proximity}
+  .steps li{flex:0 0 auto;scroll-snap-align:start}
+  .steps li>button,.steps li>.stepstatic{border:1px solid var(--border);width:190px}
+}
+.choices{display:grid;gap:8px}
+.choice{display:flex;gap:10px;align-items:flex-start;border:1px solid var(--border);border-radius:9px;padding:10px 12px;cursor:pointer;min-height:44px}
+.choice:has(input:checked){border-color:var(--primary);box-shadow:inset 0 0 0 1px var(--primary)}
+.choice input{margin-top:3px;width:16px;height:16px;accent-color:var(--primary);flex:0 0 auto}
+.choice b{font-size:13px}
+.choice small{display:block;color:var(--muted-foreground);font-size:12px;margin-top:2px}
+.recs{background:var(--recessed);border:1px solid var(--border);border-radius:9px;padding:10px 12px;display:grid;gap:6px}
+.chain{list-style:none;margin:6px 0 8px;padding:0;display:grid;border:1px solid var(--border);border-radius:9px;overflow:hidden}
+.chain li{display:flex;gap:10px;padding:9px 12px;border-top:1px solid var(--border);align-items:flex-start}
+.chain li:first-child{border-top:0}
+.chain li>span:last-child{display:grid;gap:2px;min-width:0;flex:1}
+.chain b{font-size:13px}
+.chain small{color:var(--muted-foreground);font-size:12px;display:grid;gap:6px;justify-items:start}
+.chain li.bad{background:var(--destructive-bg)}
+.ladder{list-style:none;margin:0;padding:0;display:grid;gap:6px}
+.ladder li{display:flex;gap:10px;align-items:flex-start;padding:8px 10px;border:1px solid var(--border);border-radius:9px}
+.ladder li.here,.ladder li.win{border-color:var(--primary);background:color-mix(in srgb,var(--primary) 7%,var(--card))}
+.ladder .rung{flex:0 0 auto;width:24px;height:24px;border-radius:6px;background:var(--muted);display:grid;place-items:center;font-weight:700;font-size:12px}
+.ladder b{font-size:13px}
+.ladder small{display:block;color:var(--muted-foreground);font-size:12px;margin-top:2px}
+.ladder .pill{margin:2px 0}
+.stages{list-style:none;margin:0;padding:0;display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:8px}
+.stages li{border:1px solid var(--border);border-radius:9px;padding:10px;display:grid;gap:4px;align-content:start}
+.stages li.on{border-color:var(--primary);box-shadow:inset 0 0 0 1px var(--primary)}
+.stages small{color:var(--muted-foreground);font-size:12px}
+@container dev (max-width:720px){.stages{grid-template-columns:1fr}}
+.rule{border:1px solid var(--border);border-radius:9px;padding:10px;display:grid;gap:4px;align-content:start;justify-items:start}
+.rule small{color:var(--muted-foreground);font-size:12px}
+
+/* Direction 2 */
+.idbar{display:flex;gap:10px;align-items:center;flex-wrap:wrap;padding:10px 12px;border:1px solid var(--border);border-radius:10px;background:var(--recessed)}
+.idbar>div{display:grid;min-width:0;flex:1 1 200px}
+.idbar small{color:var(--muted-foreground);font-size:12px}
+button.pill{cursor:pointer;min-height:28px;font:inherit;font-size:11.5px;font-weight:600}
+button.pill[aria-pressed=true]{box-shadow:inset 0 0 0 1.5px currentColor}
+@container dev (max-width:720px){button.pill{min-height:40px;padding:4px 12px}}
+.count{font-size:11px;color:var(--muted-foreground);margin-left:3px}
+.md{display:grid;grid-template-columns:minmax(230px,300px) minmax(0,1fr);gap:14px;align-items:start}
+@container dev (max-width:720px){.md{grid-template-columns:1fr}}
+.plist{list-style:none;margin:0;padding:0;display:grid;gap:4px}
+.plist li>button{display:flex;gap:10px;align-items:center;width:100%;text-align:left;border:1px solid var(--border);border-radius:9px;background:var(--card);padding:8px 10px;cursor:pointer;min-height:48px;flex-wrap:wrap}
+.plist li>button>span:nth-child(2){flex:1 1 120px;min-width:0}
+.plist li>button.sel{border-color:var(--primary);box-shadow:inset 0 0 0 1px var(--primary)}
+.plist small{display:block;font-size:11.5px;color:var(--muted-foreground)}
+.plist li.gone>button{border-style:dashed;background:transparent}
+.plist.dim li{display:flex;gap:8px;align-items:center;opacity:.75;padding:3px 0}
+.plist.radios label{display:flex;gap:10px;align-items:center;border:1px solid var(--border);border-radius:9px;padding:6px 10px;min-height:44px;cursor:pointer}
+.plist.radios label:has(input:checked){border-color:var(--primary)}
+.plist.radios input{accent-color:var(--primary);width:16px;height:16px}
+.today-list li{display:flex;gap:10px;align-items:center;border:1px solid var(--border);border-radius:9px;padding:8px 10px;flex-wrap:wrap}
+.today-list li>span:nth-child(2){flex:1 1 140px}
+.swatches{display:flex;flex-wrap:wrap;gap:6px}
+.swatches button{width:32px;height:32px;border-radius:50%;border:2px solid var(--card);background:var(--c);box-shadow:0 0 0 1px var(--border);cursor:pointer;padding:0;display:grid;place-items:center}
+.swatches button[aria-checked=true]{box-shadow:0 0 0 2px var(--foreground)}
+.swatches button[aria-checked=true]::after{content:"✓";color:#fff;font-weight:700}
+@container dev (max-width:720px){.swatches button{width:40px;height:40px}}
+table.mt{width:100%;border-collapse:collapse;font-size:12.5px;background:var(--card)}
+table.mt th,table.mt td{text-align:left;padding:8px 10px;border-top:1px solid var(--border);vertical-align:top}
+table.mt thead th{border-top:0;background:var(--recessed);font-size:12px;color:var(--muted-foreground)}
+table.mt tr.attn{background:color-mix(in srgb,var(--warning) 7%,var(--card))}
+.tablewrap>table.mt{border:1px solid var(--border)}
+@container dev (max-width:720px){
+  table.mt,table.mt tbody,table.mt tr,table.mt th,table.mt td{display:block;width:100%}
+  .tablewrap>table.mt{border:0;background:transparent}
+  table.mt thead{display:none}
+  table.mt tr{border:1px solid var(--border);border-radius:10px;margin-bottom:8px;padding:6px 10px;background:var(--card)}
+  table.mt tr[hidden]{display:none}
+  table.mt th,table.mt td{border:0;padding:3px 0}
+  table.mt td[data-l]::before{content:attr(data-l);display:block;font-size:11px;color:var(--muted-foreground);font-weight:600}
+  table.mt td[data-l="Actions"]:empty{display:none}
+  table.mt td[data-l="Actions"]::before{display:none}
+}
+fieldset.mockstate{border:1px dashed var(--input);border-radius:9px;padding:6px 10px 10px;margin:0;min-width:0}
+fieldset.mockstate legend{font-size:11.5px;color:var(--muted-foreground);padding:0 4px}
+
+/* Direction 3 */
+.trustband{border-left:4px solid var(--foreground);background:var(--recessed);border-radius:0 9px 9px 0;padding:10px 12px;font-size:12.5px}
+.modeseg{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:8px}
+.modeseg label{display:flex;gap:8px;align-items:flex-start;border:1px solid var(--border);border-radius:9px;padding:10px;cursor:pointer;min-height:44px}
+.modeseg label:has(input:checked){border-color:var(--primary);box-shadow:inset 0 0 0 1px var(--primary);background:color-mix(in srgb,var(--primary) 7%,var(--card))}
+.modeseg input{accent-color:var(--primary);margin-top:3px}
+.modeseg small{display:block;color:var(--muted-foreground);font-size:12px}
+@container dev (max-width:560px){.modeseg{grid-template-columns:1fr}}
+.tile{display:flex;flex-direction:column;gap:6px;align-items:flex-start}
+.big{font-size:26px;font-weight:700;display:flex;align-items:baseline;gap:8px;padding:2px 6px;margin-top:auto}
+.big small{font-size:12px;font-weight:500;color:var(--muted-foreground)}
+.events{list-style:none;margin:0;padding:0;display:grid;font-size:12.5px}
+.events li{display:flex;gap:8px;align-items:center;flex-wrap:wrap;padding:7px 0;border-top:1px solid var(--border)}
+.events li:first-child{border-top:0}
+.events time{font-variant-numeric:tabular-nums;color:var(--muted-foreground);min-width:90px}
+.events li>span:nth-of-type(2){flex:1 1 200px}
+.trace{list-style:none;margin:0;padding:0;display:grid;gap:6px}
+.trace li{border:1px solid var(--border);border-radius:9px;padding:8px 10px;font-size:12.5px}
+.trace li small{display:block;color:var(--muted-foreground);margin-top:2px}
+.trace li.win{border-color:color-mix(in srgb,var(--success) 50%,var(--border));background:var(--success-bg)}
+.trace li.skip{border-style:dashed}
+.sim{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:10px}
+@container dev (max-width:720px){.sim{grid-template-columns:1fr}}
+
+/* Grid min-width guards: nowrap form values and long codes must not widen the page */
+.bb-inner{grid-template-columns:minmax(0,1fr)}
+.bb-inner>*,.screen,.gf-row>*,.plug-head>div,.o1>*,.md>*,.grid2>*,.grid3>*,.grid-compare>*{min-width:0}
+.plug-head>div:nth-child(2){flex:1 1 auto}
+.sec-head,.plugin-zone{min-width:0}
+code{overflow-wrap:anywhere}
+@media (max-width:900px){.option>.grid2{grid-template-columns:1fr}}
+.cap{white-space:normal;max-width:100%;border-radius:9px}
+.switch{flex-wrap:wrap}
+.tablewrap,.steps,.itabs,pre{position:relative}
+</style>
+</head>
+<body>
+<a class="skip" href="#main">Skip to the mockups</a>
+
+<div class="wrap">
+<header class="page-head">
+  <div>
+    <p class="eyebrow">EnsembleWorks · Identity plugin (bb-plugin-identity 0.1.0) · design research only, nothing here is implemented</p>
+    <h1>Identity settings: three UX directions</h1>
+    <p class="lede">Each direction is drawn inside BB's real settings-page chrome as it exists today. BB renders the plugin header and the <em>generated</em> form from <code>bb.settings.define</code>; Identity's <code>settingsSection</code> renders beneath that form. All names, emails, hosts and origins below are invented sample data.</p>
+  </div>
+  <div class="toolbar" role="group" aria-label="Mockup controls">
+    <div class="grp">
+      <span id="vp-label">Viewport</span>
+      <div class="seg" role="radiogroup" aria-labelledby="vp-label">
+        <input type="radio" name="vp" id="vp-desktop" value="desktop" checked><label for="vp-desktop">Desktop</label>
+        <input type="radio" name="vp" id="vp-narrow" value="narrow"><label for="vp-narrow">Narrow sidebar · 360</label>
+        <input type="radio" name="vp" id="vp-mobile" value="mobile"><label for="vp-mobile">Mobile · 390</label>
+      </div>
+    </div>
+    <div class="grp">
+      <label for="theme" class="small muted">Theme</label>
+      <select id="theme" class="plain">
+        <option value="auto">Follow system</option>
+        <option value="light">Light</option>
+        <option value="dark">Dark (BB's <code>.dark</code> class)</option>
+      </select>
+    </div>
+    <label class="check"><input type="checkbox" id="caps" checked> Show capability labels</label>
+  </div>
+  <div class="legend" aria-label="Capability label legend">
+    <span><span class="cap now">Exists today</span> backed by current Identity data or RPCs</span>
+    <span><span class="cap new">New Identity code</span> feasible inside the current Plugin SDK</span>
+    <span><span class="cap core">Needs BB core API</span> conceptual; the SDK has no such API today</span>
+    <span><span class="host-tag" style="position:static">BB host</span> chrome the plugin cannot change</span>
+  </div>
+</header>
+</div>
+
+<nav class="optnav" aria-label="Design directions">
+  <div class="wrap">
+    <div role="tablist" aria-label="Design direction" id="optTabs">
+      <button role="tab" id="tab-guided" aria-controls="opt-guided" aria-selected="true" tabindex="0"><b>1 · Setup path</b><small>Guided decisions with live readiness</small></button>
+      <button role="tab" id="tab-directory" aria-controls="opt-directory" aria-selected="false" tabindex="-1"><b>2 · People &amp; machines directory</b><small>Object-first: every fact on its person or host</small></button>
+      <button role="tab" id="tab-trust" aria-controls="opt-trust" aria-selected="false" tabindex="-1"><b>3 · Trust &amp; operations console</b><small>Evidence-first: mode, coverage, health</small></button>
+      <button role="tab" id="tab-compare" aria-controls="compare" aria-selected="false" tabindex="-1"><b>Compare &amp; recommend</b><small>Matrix, today's UI, migration</small></button>
+    </div>
+  </div>
+</nav>
+
+<main id="main" class="wrap">
+
+<!-- ═══════════════════════════ DIRECTION 1 · SETUP PATH ═══════════════════════════ -->
+<section id="opt-guided" class="option" role="tabpanel" aria-labelledby="tab-guided" tabindex="0">
+  <div class="thesis">
+    <h2>Direction 1 · Setup path</h2>
+    <p><strong>Thesis:</strong> most confusion comes from settings whose meaning depends on each other: picker, origin, key and fallback; enforcement and team machines. So the section becomes an ordered list of decisions. Each one shows its live readiness and names what it depends on. The first question asked is how people actually reach the server, and the recommendations follow from the answer. The generated form stays in place as the “advanced” surface.</p>
+  </div>
+  <div class="screenbar">
+    <span id="scr-guided-l">Screen</span>
+    <div class="seg" role="radiogroup" aria-labelledby="scr-guided-l">
+      <input type="radio" name="scr-guided" id="r-g-first" value="g-first" checked><label for="r-g-first">First run</label>
+      <input type="radio" name="scr-guided" id="r-g-browser" value="g-browser"><label for="r-g-browser">Browser names</label>
+      <input type="radio" name="scr-guided" id="r-g-guard" value="g-guard"><label for="r-g-guard">Guardrail rollout</label>
+      <input type="radio" name="scr-guided" id="r-g-check" value="g-check"><label for="r-g-check">Check · degraded</label>
+    </div>
+  </div>
+  <p class="viewing" aria-live="polite" data-viewing="guided"></p>
+  <div class="stage"><div class="device" data-vp="desktop">
+    <div class="phonebar" aria-hidden="true"><span>9:41</span><span>5G ▮▮▮</span></div>
+    <div class="bb">
+      <aside class="bb-nav" data-tpl="tpl-nav" aria-label="BB settings navigation (host chrome, approximate)"></aside>
+      <div class="bb-col">
+        <div class="bb-mhead"><button class="back" type="button" aria-label="Back to Settings (host control, mockup only)">‹</button><span>Identity</span></div>
+        <div class="bb-main"><div class="bb-inner">
+
+<!-- G · First run -->
+<div class="screen is-on" data-screen="g-first" data-name="First run: fresh install, empty directory">
+  <h3 class="screen-label">Screen · First run</h3>
+  <div data-tpl="tpl-hosttop" data-variant="fresh"></div>
+  <div class="sec-head"><h4 class="sec-title">Identity setup</h4><p class="sec-desc">Decide how this server tells people apart, then check that it works.</p></div>
+  <div class="plugin-zone"><span class="zone-tag">Rendered by Identity · <code>app.slots.settingsSection</code></span>
+    <div class="o1">
+      <ol class="steps" aria-label="Setup steps">
+        <li class="cur"><button type="button" data-go="g-first" aria-current="step"><span class="n" aria-hidden="true">1</span><span><b>Server profile</b><small>Not answered yet</small></span></button></li>
+        <li class="todo"><span class="stepstatic"><span class="n" aria-hidden="true">2</span><span><b>People</b><small>Directory is empty · drawn in Direction 2</small></span></span></li>
+        <li class="todo"><span class="stepstatic"><span class="n" aria-hidden="true">3</span><span><b>Machines</b><small>7 hosts seen, all unclaimed</small></span></span></li>
+        <li class="todo"><button type="button" data-go="g-browser"><span class="n" aria-hidden="true">4</span><span><b>Browser names</b><small>Off</small></span></button></li>
+        <li class="todo"><button type="button" data-go="g-guard"><span class="n" aria-hidden="true">5</span><span><b>Guardrail</b><small>Off</small></span></button></li>
+        <li class="ok"><button type="button" data-go="g-check"><span class="n" aria-hidden="true">✓</span><span><b>Check</b><small>Self-test passed at start-up</small></span></button></li>
+      </ol>
+      <div class="stack">
+        <div class="alert trust" role="note">
+          <p class="t">What Identity is, and is not</p>
+          <p class="small">Identity labels who started what, and it can stop honest mistakes such as starting a thread on a teammate's machine. It is not access control. Anyone who can reach this server can still use Send-now, a terminal, or the API. <span class="cap now">Exists today · README trust statement</span></p>
+        </div>
+        <fieldset class="card stack" style="margin:0">
+          <legend class="sr-only">Server profile</legend>
+          <div><p class="tiny muted">Step 1 of 6</p><h5 class="h5">How do people reach this BB server?</h5>
+            <p class="small muted">The answer only picks the recommended values below. Nothing changes until you apply them. <span class="cap new">New Identity code</span></p></div>
+          <div class="choices">
+            <label class="choice"><input type="radio" name="g-prof" checked>
+              <span><b>Through Cloudflare Access</b> <span class="pill ok"><span class="ic" aria-hidden="true">✓</span>Detected on this request</span>
+                <small>Identity reads the email Access adds to each request, as-is. It doesn't verify it. Recommended for a shared team server.</small></span></label>
+            <label class="choice"><input type="radio" name="g-prof">
+              <span><b>Directly, with no sign-in proxy</b>
+                <small>The server can't tell anyone apart. People can choose a name in their browser, and that name is for attribution only.</small></span></label>
+            <label class="choice"><input type="radio" name="g-prof">
+              <span><b>Only me, on this computer</b>
+                <small>Set a fallback email. Every request, including agents and the CLI, is then attributed to you.</small></span></label>
+          </div>
+          <div class="recs">
+            <p class="small"><b>Recommended for “Through Cloudflare Access”</b></p>
+            <table class="mini">
+              <caption class="sr-only">Recommended settings</caption>
+              <thead><tr><th scope="col">Setting</th><th scope="col">Now</th><th scope="col">Recommended</th><th scope="col">Why</th></tr></thead>
+              <tbody>
+                <tr><th scope="row">People directory</th><td>Empty</td><td>From your infra</td><td>Nobody is recognised until emails are listed. This server's list is rendered by Ansible.</td></tr>
+                <tr><th scope="row">Fallback email</th><td>Empty</td><td>Leave empty</td><td>On a shared server, a fallback would attribute every agent and CLI call to one person.</td></tr>
+                <tr><th scope="row">Browser identity picker</th><td>Off</td><td>Off</td><td>Access already names people. A browser choice would only ever be outranked.</td></tr>
+                <tr><th scope="row">Enforcement</th><td>Off</td><td>Audit, later</td><td>Turn it on after machines have owners (step 5).</td></tr>
+              </tbody>
+            </table>
+          </div>
+          <div class="row">
+            <button class="btn primary" type="button" data-toast="Mockup only: nothing was changed. In the product this would write two settings through a new Identity RPC (experimental_set).">Apply 2 recommendations</button>
+            <button class="btn" type="button" data-go="g-browser">Skip for now</button>
+            <a class="details-link" href="#opt-guided" data-open-form>Edit the fields myself (Configuration above)</a>
+          </div>
+        </fieldset>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- G · Browser names -->
+<div class="screen" data-screen="g-browser" data-name="Browser names step: picker ready">
+  <h3 class="screen-label">Screen · Browser names</h3>
+  <div data-tpl="tpl-hosttop"></div>
+  <div class="sec-head"><h4 class="sec-title">Identity setup</h4><p class="sec-desc">Decide how this server tells people apart, then check that it works.</p></div>
+  <div class="plugin-zone"><span class="zone-tag">Rendered by Identity · <code>app.slots.settingsSection</code></span>
+    <div class="o1">
+      <ol class="steps" aria-label="Setup steps">
+        <li class="ok"><button type="button" data-go="g-first"><span class="n" aria-hidden="true">✓</span><span><b>Server profile</b><small>Direct, no sign-in proxy</small></span></button></li>
+        <li class="ok"><span class="stepstatic"><span class="n" aria-hidden="true">✓</span><span><b>People</b><small>4 people · managed by Ansible</small></span></span></li>
+        <li class="warn"><span class="stepstatic"><span class="n" aria-hidden="true">!</span><span><b>Machines</b><small>1 conflict · 1 missing</small></span></span></li>
+        <li class="cur"><button type="button" data-go="g-browser" aria-current="step"><span class="n" aria-hidden="true">4</span><span><b>Browser names</b><small>Ready</small></span></button></li>
+        <li class="ok"><button type="button" data-go="g-guard"><span class="n" aria-hidden="true">●</span><span><b>Guardrail</b><small>Audit since 18 Sep</small></span></button></li>
+        <li class="ok"><button type="button" data-go="g-check"><span class="n" aria-hidden="true">✓</span><span><b>Check</b><small>Passed 09:12</small></span></button></li>
+      </ol>
+      <div class="stack">
+        <div class="card stack">
+          <div><p class="tiny muted">Step 4 of 6</p><h5 class="h5">Let people choose a name in their browser?</h5>
+            <p class="small muted">With no sign-in proxy, a browser can say “this is Alex” so threads get a name. The server never proves that, and the guardrail never acts on it.</p></div>
+          <label class="switch"><input type="checkbox" checked aria-describedby="g-pick-d"> <span><b>Browser identity picker</b></span> <span class="cap new">Writes via new Identity RPC</span></label>
+          <p id="g-pick-d" class="small muted">People see “Choose your identity” the first time they open BB in a browser. They can pick “Not now” and stay anonymous.</p>
+          <div>
+            <p class="small"><b>Picker readiness</b> <span class="cap now">pickerStatus() today</span></p>
+            <ol class="chain" aria-label="Picker readiness, in the order Identity checks">
+              <li class="ok"><span class="ic" aria-hidden="true">✓</span><span><b>Switched on</b><small>Browser identity picker is on.</small></span></li>
+              <li class="ok"><span class="ic" aria-hidden="true">✓</span><span><b>Public origin set</b>
+                <small><label for="g-origin" class="sr-only">Identity picker public origin</label><input id="g-origin" class="text mono" value="https://bb.example.test" aria-describedby="g-origin-h"><span id="g-origin-h">The exact scheme, host and optional port people type, with no path. It matches the origin this page was opened from. <span class="cap new">origin match check</span></span></small></span></li>
+              <li class="ok"><span class="ic" aria-hidden="true">✓</span><span><b>Signing key available</b><small>[set]. Generated automatically on first start. <button class="btn sm danger" type="button" data-dialog="dlg-rotate">Rotate key…</button></small></span></li>
+              <li class="ok"><span class="ic" aria-hidden="true">✓</span><span><b>Cookie bridge working</b><small>Self-test at 09:12: “named cookie reached request context”.</small></span></li>
+            </ol>
+            <p class="alert ok small" role="status"><span><span class="ic" aria-hidden="true">✓</span> <b>Ready.</b> The picker appears on this server's next page load.</span></p>
+          </div>
+        </div>
+        <div class="card stack">
+          <h5 class="h5">How Identity decides who someone is</h5>
+          <p class="small muted">Identity checks these in order. The first one that applies wins. <span class="cap now">resolveRequester() today</span></p>
+          <ol class="ladder">
+            <li><span class="rung">1</span><div><b>Sign-in proxy email</b> <span class="pill">Attribution + guardrail</span><small>The Cloudflare Access header, read as-is and not verified by Identity. This is the only source the guardrail acts on.</small></div></li>
+            <li class="here"><span class="rung">2</span><div><b>Name chosen in this browser</b> <span class="pill">Attribution only</span> <span class="pill mode"><span aria-hidden="true">◀</span> You are here: Priya Shah</span><small>A signed cookie in this browser. It expires after a while and is never used for the guardrail.</small></div></li>
+            <li><span class="rung">3</span><div><b>Fallback email</b> <span class="pill off">Not set</span><small>Used only for a request that has neither of the above. Attribution only. The guardrail ignores it.</small></div></li>
+            <li><span class="rung">4</span><div><b>Anonymous</b><small>Nothing matched. The thread shows no starter.</small></div></li>
+          </ol>
+          <div class="alert warn small"><p class="t">One exception to the order</p><p>If a browser's choice has expired, or names someone no longer in the directory, that browser shows as <b>anonymous</b>. It doesn't fall through to the fallback email, so a stale choice can't become someone else.</p></div>
+        </div>
+        <div class="row"><button class="btn" type="button" data-go="g-first">Back</button><button class="btn primary" type="button" data-go="g-guard">Continue to Guardrail</button></div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- G · Guardrail -->
+<div class="screen" data-screen="g-guard" data-name="Guardrail step: staged rollout, audit on">
+  <h3 class="screen-label">Screen · Guardrail rollout</h3>
+  <div data-tpl="tpl-hosttop"></div>
+  <div class="sec-head"><h4 class="sec-title">Identity setup</h4><p class="sec-desc">Decide how this server tells people apart, then check that it works.</p></div>
+  <div class="plugin-zone"><span class="zone-tag">Rendered by Identity · <code>app.slots.settingsSection</code></span>
+    <div class="o1">
+      <ol class="steps" aria-label="Setup steps">
+        <li class="ok"><button type="button" data-go="g-first"><span class="n" aria-hidden="true">✓</span><span><b>Server profile</b><small>Behind Cloudflare Access</small></span></button></li>
+        <li class="ok"><span class="stepstatic"><span class="n" aria-hidden="true">✓</span><span><b>People</b><small>4 people · managed by Ansible</small></span></span></li>
+        <li class="warn"><span class="stepstatic"><span class="n" aria-hidden="true">!</span><span><b>Machines</b><small>1 conflict · 1 missing</small></span></span></li>
+        <li class="ok"><button type="button" data-go="g-browser"><span class="n" aria-hidden="true">–</span><span><b>Browser names</b><small>Off (not needed)</small></span></button></li>
+        <li class="cur"><button type="button" data-go="g-guard" aria-current="step"><span class="n" aria-hidden="true">5</span><span><b>Guardrail</b><small>Audit since 18 Sep</small></span></button></li>
+        <li class="ok"><button type="button" data-go="g-check"><span class="n" aria-hidden="true">✓</span><span><b>Check</b><small>Passed 09:12</small></span></button></li>
+      </ol>
+      <div class="stack">
+        <div class="card stack">
+          <div><p class="tiny muted">Step 5 of 6</p><h5 class="h5">Catch honest mistakes, in stages</h5>
+            <p class="small muted">All three stages make the same decision. They differ only in what happens next.</p></div>
+          <ol class="stages" aria-label="Rollout stages">
+            <li><b>Off</b><small>Records who started what and labels it. Refuses nothing and logs nothing.</small></li>
+            <li class="on" aria-current="true"><b>Audit</b> <span class="pill mode">Current · since 18 Sep</span><small>Logs every dispatch it would refuse as a would-refuse line in the plugin log, then lets it through.</small></li>
+            <li><b>Enforce</b><small>Refuses those dispatches with a message that names the rule and suggests a fix.</small></li>
+          </ol>
+          <div class="grid3">
+            <div class="rule"><span class="pill">Rule A</span><b>Starting on another person's machine</b><small>Team and unclaimed machines are always fine.</small></div>
+            <div class="rule"><span class="pill">Rule B</span><b>Sending into a thread someone else started</b><small>Other people's threads are read-only.</small></div>
+            <div class="rule"><span class="pill">Rule C</span><b>An automation off a team machine</b><small>Only covers automations that start a new thread. An automation sent into an existing thread arrives unstamped, and Identity can't see it. <span class="cap core">BB core: stamp threads.send</span></small></div>
+          </div>
+          <div class="alert small"><p class="t">Always allowed, in every stage</p><p>Anything Identity can't tie to a person: an agent's own <code>bb thread tell</code>, retries, plugin follow-ups, the CLI, and names from the fallback email or a browser choice. Send-now, terminals and raw API calls never pass through the guardrail at all.</p></div>
+        </div>
+        <div class="card stack">
+          <h5 class="h5">Before you switch to Enforce</h5>
+          <ul class="checklist">
+            <li class="ok"><span class="ic" aria-hidden="true">✓</span> Audit has been on for 7 days.</li>
+            <li class="warn"><span class="ic" aria-hidden="true">!</span> <span><b>ew-lab-003-priya</b> is pinned to Erin, but its name now says Priya. In Enforce, Priya would be refused there. <a href="#opt-directory" data-jump="d-machines">Resolve in Machines</a></span></li>
+            <li class="warn"><span class="ic" aria-hidden="true">!</span> <span>Team machine <b>ew-lab-009-ci</b> is listed but BB has no host by that name. Automations aimed at it can't be matched.</span></li>
+            <li class="core-zone"><span class="ic" aria-hidden="true">?</span> <span>Would-refuse lines in the last 7 days: <b>not available in the UI</b>. <span class="cap core">BB core: plugin log query</span> The owner decided on 18 Sep that audit stays in <code>bb plugin logs</code> only.</span></li>
+          </ul>
+          <details class="cmd"><summary>Read the audit lines from a terminal</summary>
+            <pre class="mono" tabindex="0">bb plugin logs identity \
+  | jq -r 'select(.message|startswith("identity-audit")) | .message[15:]' \
+  | jq -c 'select(.kind=="dispatch" and .verdict=="reject")
+           | {at, rule, person, host: .host.name}'</pre>
+            <button class="btn sm" type="button" data-copy>Copy command</button>
+          </details>
+          <div class="row"><button class="btn danger" type="button" data-dialog="dlg-enforce">Switch to Enforce…</button><button class="btn" type="button" data-toast="Mockup only: nothing was changed.">Back to Off</button></div>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- G · Check (degraded) -->
+<div class="screen" data-screen="g-check" data-name="Check step: cookie leg failed after an upgrade">
+  <h3 class="screen-label">Screen · Check · degraded</h3>
+  <div data-tpl="tpl-hosttop"></div>
+  <div class="sec-head"><h4 class="sec-title">Identity setup</h4><p class="sec-desc">Decide how this server tells people apart, then check that it works.</p></div>
+  <div class="plugin-zone"><span class="zone-tag">Rendered by Identity · <code>app.slots.settingsSection</code></span>
+    <div class="o1">
+      <ol class="steps" aria-label="Setup steps">
+        <li class="ok"><button type="button" data-go="g-first"><span class="n" aria-hidden="true">✓</span><span><b>Server profile</b><small>Direct, no sign-in proxy</small></span></button></li>
+        <li class="ok"><span class="stepstatic"><span class="n" aria-hidden="true">✓</span><span><b>People</b><small>4 people · managed by Ansible</small></span></span></li>
+        <li class="warn"><span class="stepstatic"><span class="n" aria-hidden="true">!</span><span><b>Machines</b><small>1 conflict · 1 missing</small></span></span></li>
+        <li class="bad"><button type="button" data-go="g-browser"><span class="n" aria-hidden="true">✕</span><span><b>Browser names</b><small>Cookie bridge unavailable</small></span></button></li>
+        <li class="ok"><button type="button" data-go="g-guard"><span class="n" aria-hidden="true">●</span><span><b>Guardrail</b><small>Audit since 18 Sep</small></span></button></li>
+        <li class="cur bad"><button type="button" data-go="g-check" aria-current="step"><span class="n" aria-hidden="true">✕</span><span><b>Check</b><small>1 of 3 legs failed</small></span></button></li>
+      </ol>
+      <div class="stack">
+        <div class="alert bad" role="alert">
+          <p class="t"><span class="ic" aria-hidden="true">✕</span> Browser names stopped working after the last BB upgrade</p>
+          <p class="small">The self-test's cookie leg failed: “named cookie did not reach request context”. Until it passes, browser choices are ignored. People show as anonymous unless a sign-in proxy names them. Nothing is refused because of this.</p>
+        </div>
+        <div class="card stack">
+          <div class="row" style="justify-content:space-between"><h5 class="h5">Self-test <span class="muted small">· ran at plugin start, 25 Sep 09:12</span></h5>
+            <div class="row"><button class="btn sm" type="button" data-toast="Mockup only: the self-test route exists today (GET …/http/request-context-self-test). A button needs new Identity code.">Re-run self-test</button><span class="cap new">button</span></div></div>
+          <ol class="chain" aria-label="Self-test legs">
+            <li class="ok"><span class="ic" aria-hidden="true">✓</span><span><b>Request context patch</b><small>“request context is live (probe saw its own tagged email)”</small></span></li>
+            <li class="ok"><span class="ic" aria-hidden="true">✓</span><span><b>Email leg</b><small>A tagged probe email reached the request context.</small></span></li>
+            <li class="bad"><span class="ic" aria-hidden="true">✕</span><span><b>Cookie leg</b><small>“named cookie did not reach request context”. BB's request handling probably changed in the upgrade.</small></span></li>
+          </ol>
+          <dl class="kv">
+            <dt>Directory</dt><dd><span class="ic" aria-hidden="true">✓</span> 4 people parsed</dd>
+            <dt>Public origin</dt><dd><span class="ic" aria-hidden="true">✓</span> https://bb.example.test</dd>
+            <dt>Signing key</dt><dd><span class="ic" aria-hidden="true">✓</span> [set]</dd>
+            <dt>Plugin SDK</dt><dd><span class="ic" aria-hidden="true">!</span> Built against 0.4.104, host runs 0.4.84 <span class="cap new">version check</span></dd>
+          </dl>
+        </div>
+        <div class="card stack">
+          <h5 class="h5">What to try</h5>
+          <ol class="small" style="margin:0;padding-left:18px;display:grid;gap:4px">
+            <li>Reload the plugin: <code>bb plugin reload identity</code>. The self-test runs again at start-up.</li>
+            <li>If it still fails, Identity needs an update for this BB version. Send the diagnostics below with your report.</li>
+          </ol>
+          <div class="row"><button class="btn" type="button" data-toast="Mockup only: would copy a JSON summary with emails, keys and origins redacted.">Copy redacted diagnostics</button><span class="cap new">New Identity code</span></div>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+
+        </div></div>
+      </div>
+    </div>
+  </div><p class="device-cap" data-cap></p></div>
+
+  <div class="notes">
+    <details open><summary>IA, journey and first run</summary><div>
+      <ul>
+        <li>One section with six ordered steps: Server profile → People → Machines → Browser names → Guardrail → Check. Each step's status line comes from live data, so the rail also works as a dashboard on return visits.</li>
+        <li>First run opens on the profile question and pre-selects what Identity can detect: whether this request carried an Access header. Picking an answer previews changes as a Now → Recommended table, and nothing is written until “Apply”.</li>
+        <li>People and emails stay read-only (Ansible renders them). The People step links to a “copy entry” action and doesn't offer editing.</li>
+        <li>The precedence ladder appears where the confusion happens, next to the picker, with a “you are here” marker.</li>
+      </ul></div></details>
+    <details><summary>Audit vs enforcement, diagnostics</summary><div>
+      <ul>
+        <li>The rollout is shown as three stages of <em>one</em> decision. This matches the code: audit and enforce call the same <code>decideGuardrail</code>.</li>
+        <li>The pre-Enforce checklist names the people who would be refused (from pin conflicts), not just a count.</li>
+        <li>Would-refuse counts are shown as unavailable and labelled as a BB core and owner decision. The jq command is the supported path today.</li>
+        <li>Check shows self-test legs, the picker chain and config lint, and the failing step turns red on the rail.</li>
+      </ul></div></details>
+    <details><summary>Responsive, accessibility, safety</summary><div>
+      <ul>
+        <li>Desktop: 220px rail plus the step panel. Narrow sidebar and mobile: the rail becomes a horizontally scrolling stepper above the panel, and each chip keeps its status text.</li>
+        <li>The rail is an ordered list with <code>aria-current="step"</code>. Statuses are always icon plus text, never colour alone.</li>
+        <li>Enforce and key rotation open confirm dialogs with the safe button focused. They become bottom sheets on compact viewports, matching BB's Dialog.</li>
+      </ul></div></details>
+    <details><summary>Trade-offs and migration</summary><div>
+      <div class="pc"><div><b>Advantages</b><ul><li>Best first-run experience. Dependencies are explicit.</li><li>Staged rollout is the natural home for audit.</li><li>Recommendations follow from one answer.</li></ul></div>
+      <div><b>Disadvantages</b><ul><li>Returning admins must walk the steps to find one fact (“who owns this host?”).</li><li>A wizard can suggest a finished setup when people are managed in infra.</li><li>Colours and People get squeezed.</li></ul></div></div>
+      <p><b>Complexity:</b> medium. Mostly reads existing RPCs. Writes need one new Identity RPC over <code>experimental_set</code>. <b>Migration:</b> the People roster moves into step 2, and the section id changes from <code>people</code> to <code>setup</code>.</p></div></details>
+  </div>
+</section>
+
+<!-- ═══════════════════════════ DIRECTION 2 · DIRECTORY ═══════════════════════════ -->
+<section id="opt-directory" class="option" role="tabpanel" aria-labelledby="tab-directory" tabindex="0" hidden>
+  <div class="thesis">
+    <h2>Direction 2 · People &amp; machines directory</h2>
+    <p><strong>Thesis:</strong> admins come back with questions about a specific thing. “Why is Priya's machine showing Erin?” “Which emails count as Alex?” “Why am I anonymous in this browser?” So the section is organised around the objects: people, machines and this browser. Each fact sits on its object with its provenance (<em>where it came from</em> and <em>what it counts for</em>). The rules sit in a fourth tab. An identity bar always shows who <em>you</em> are right now and how Identity knows.</p>
+  </div>
+  <div class="screenbar">
+    <span id="scr-dir-l">Screen</span>
+    <div class="seg" role="radiogroup" aria-labelledby="scr-dir-l">
+      <input type="radio" name="scr-directory" id="r-d-people" value="d-people" checked><label for="r-d-people">People</label>
+      <input type="radio" name="scr-directory" id="r-d-machines" value="d-machines"><label for="r-d-machines">Machines · conflict</label>
+      <input type="radio" name="scr-directory" id="r-d-browser" value="d-browser"><label for="r-d-browser">This browser</label>
+      <input type="radio" name="scr-directory" id="r-d-direrror" value="d-direrror"><label for="r-d-direrror">Directory error</label>
+    </div>
+  </div>
+  <p class="viewing" aria-live="polite" data-viewing="directory"></p>
+  <div class="stage"><div class="device" data-vp="desktop">
+    <div class="phonebar" aria-hidden="true"><span>9:41</span><span>5G ▮▮▮</span></div>
+    <div class="bb">
+      <aside class="bb-nav" data-tpl="tpl-nav" aria-label="BB settings navigation (host chrome, approximate)"></aside>
+      <div class="bb-col">
+        <div class="bb-mhead"><button class="back" type="button" aria-label="Back to Settings (host control, mockup only)">‹</button><span>Identity</span></div>
+        <div class="bb-main"><div class="bb-inner">
+
+<!-- D · People -->
+<div class="screen is-on" data-screen="d-people" data-name="People tab: Alex selected, Priya's colour clashes with Sam's">
+  <h3 class="screen-label">Screen · People</h3>
+  <div data-tpl="tpl-hosttop"></div>
+  <div class="sec-head"><h4 class="sec-title">People &amp; machines</h4><p class="sec-desc">Who Identity recognises, which machines are theirs, and how each fact was worked out.</p></div>
+  <div class="plugin-zone"><span class="zone-tag">Rendered by Identity · <code>app.slots.settingsSection</code></span>
+    <div class="stack">
+      <div class="idbar" role="status">
+        <span class="av" style="--c:#2f6bb8" aria-hidden="true">SO</span>
+        <div><b>You: Sam Okafor</b><small>From the Cloudflare Access email, read as-is and not verified.</small></div>
+        <span class="pill mode">Guardrail · Audit</span>
+        <button class="pill warn linkish" type="button" data-go="d-machines"><span class="ic" aria-hidden="true">!</span>2 need attention</button>
+      </div>
+      <div class="itabs" role="tablist" aria-label="Identity sections">
+        <button role="tab" type="button" aria-selected="true" data-go="d-people">People <span class="count">4</span></button>
+        <button role="tab" type="button" aria-selected="false" tabindex="-1" data-go="d-machines">Machines <span class="count">8</span></button>
+        <button role="tab" type="button" aria-selected="false" tabindex="-1" data-go="d-browser">This browser</button>
+        <button role="tab" type="button" aria-selected="false" tabindex="-1" data-jump="t-overview" data-jump-opt="opt-trust">Rules &amp; health ↗</button>
+      </div>
+      <div class="alert small core-zone" role="note">
+        <p class="t">Managed in infrastructure</p>
+        <p>This server's people list is rendered by Ansible from <code>ew_bb_people</code>. Editing it here would be overwritten on the next deploy, so change people there. Colours are stored by Identity and are safe to change here. <span class="cap core">BB core: setting provenance / lock</span> Today Identity can't tell that a setting is managed elsewhere, so this notice would have to be static.</p>
+      </div>
+      <div class="md">
+        <ul class="plist" aria-label="People">
+          <li><button type="button" aria-pressed="true" class="sel"><span class="av" style="--c:#3f7d33" aria-hidden="true">AR</span><span><b>Alex Rivera</b><small>alex · 2 emails · 1 machine</small></span><span class="pill ok"><span class="ic" aria-hidden="true">●</span>Seen 2h ago</span></button></li>
+          <li><button type="button" aria-pressed="false"><span class="av" style="--c:#96379a" aria-hidden="true">EE</span><span><b>Erin Example</b><small>erin · 1 email · 2 machines</small></span><span class="pill">Seen 1d ago</span></button></li>
+          <li><button type="button" aria-pressed="false"><span class="av" style="--c:#2a6fc0" aria-hidden="true">PS</span><span><b>Priya Shah</b><small>priya · 1 email · 0 machines</small></span><span class="pill warn"><span class="ic" aria-hidden="true">!</span>Colour close to Sam's</span></button></li>
+          <li><button type="button" aria-pressed="false"><span class="av" style="--c:#2f6bb8" aria-hidden="true">SO</span><span><b>Sam Okafor</b> <span class="muted small">(you)</span><small>sam · 1 email · 1 machine</small></span><span class="pill ok"><span class="ic" aria-hidden="true">●</span>Here now</span></button></li>
+          <li class="gone"><button type="button" aria-pressed="false"><span class="av none" aria-hidden="true">jo</span><span><b>jo</b><small>Not in the directory · 1 stale pin · 3 threads on record</small></span><span class="pill warn"><span class="ic" aria-hidden="true">!</span>Stale</span></button></li>
+        </ul>
+        <article class="card stack" aria-labelledby="d-alex">
+          <div class="row"><span class="av lg" style="--c:#3f7d33" aria-hidden="true">AR</span><div><h5 id="d-alex" class="h5">Alex Rivera</h5><p class="small muted">person <code>alex</code> · GitHub <code>alexr</code></p></div></div>
+          <div>
+            <p class="small"><b>Recognised by</b></p>
+            <table class="mini prov">
+              <caption class="sr-only">How Identity recognises Alex</caption>
+              <thead><tr><th scope="col">Signal</th><th scope="col">From</th><th scope="col">Counts for</th></tr></thead>
+              <tbody>
+                <tr><td><code>alex@example.test</code></td><td>Access email · directory</td><td><span class="pill">Attribution + guardrail</span></td></tr>
+                <tr><td><code>a.rivera@example.test</code></td><td>Access email · directory</td><td><span class="pill">Attribution + guardrail</span></td></tr>
+                <tr><td>“Alex Rivera” picked in a browser</td><td>Browser picker</td><td><span class="pill off">Attribution only</span></td></tr>
+                <tr><td>Host names ending <code>-alex</code> or <code>-alexr</code></td><td>Name suffix rule</td><td><span class="pill off">Machine owner</span></td></tr>
+              </tbody>
+            </table>
+          </div>
+          <dl class="kv">
+            <dt>Machines</dt><dd><a href="#opt-directory" data-go="d-machines">ew-lab-002-alex</a> · owner by name, pinned 12 Sep</dd>
+            <dt>Threads on record</dt><dd>38 <span class="muted">of the 2,000 most recent threads Identity keeps</span></dd>
+            <dt>Last seen</dt><dd>Started a thread 2 hours ago</dd>
+          </dl>
+          <div>
+            <p class="small" id="d-col-l"><b>Colour</b> <span class="muted">· chosen by Sam on 22 Sep</span></p>
+            <div class="swatches" role="radiogroup" aria-labelledby="d-col-l">
+              <button type="button" role="radio" aria-checked="false" style="--c:#b4322e" aria-label="Red"></button>
+              <button type="button" role="radio" aria-checked="false" style="--c:#b9651b" aria-label="Orange"></button>
+              <button type="button" role="radio" aria-checked="false" style="--c:#9a7b10" aria-label="Ochre"></button>
+              <button type="button" role="radio" aria-checked="true" style="--c:#3f7d33" aria-label="Green (current)"></button>
+              <button type="button" role="radio" aria-checked="false" style="--c:#1f7a6b" aria-label="Teal"></button>
+              <button type="button" role="radio" aria-checked="false" style="--c:#2f6bb8" aria-label="Blue, used by Sam"></button>
+              <button type="button" role="radio" aria-checked="false" style="--c:#5b4bc4" aria-label="Indigo"></button>
+              <button type="button" role="radio" aria-checked="false" style="--c:#96379a" aria-label="Purple, used by Erin"></button>
+              <button type="button" role="radio" aria-checked="false" style="--c:#b02e6e" aria-label="Magenta"></button>
+              <button type="button" role="radio" aria-checked="false" style="--c:#5b6570" aria-label="Slate"></button>
+            </div>
+            <p class="tiny muted" style="margin-top:6px">Anyone on this server can change anyone's colour, and every change is logged. <button class="btn sm ghost" type="button" data-toast="Mockup only: identity_clear_person_color exists today.">Use dealt colour</button> <span class="cap now">set / clear colour RPCs</span></p>
+          </div>
+          <details class="cmd"><summary>Entry for <code>ew_bb_people</code></summary>
+            <pre class="mono" tabindex="0">{ "person": "alex", "github": "alexr", "displayName": "Alex Rivera",
+  "emails": ["alex@example.test", "a.rivera@example.test"] }</pre>
+            <button class="btn sm" type="button" data-copy>Copy entry</button> <span class="cap new">New Identity code</span>
+          </details>
+          <p class="tiny muted">“Seen” comes from the attribution records Identity keeps (the 2,000 most recent threads). “Not seen” means no thread of theirs is on record, not that they have never used this server.</p>
+        </article>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- D · Machines -->
+<div class="screen" data-screen="d-machines" data-name="Machines tab: pin conflict, stale pin, missing team machine">
+  <h3 class="screen-label">Screen · Machines</h3>
+  <div data-tpl="tpl-hosttop"></div>
+  <div class="sec-head"><h4 class="sec-title">People &amp; machines</h4><p class="sec-desc">Who Identity recognises, which machines are theirs, and how each fact was worked out.</p></div>
+  <div class="plugin-zone"><span class="zone-tag">Rendered by Identity · <code>app.slots.settingsSection</code></span>
+    <div class="stack">
+      <div class="idbar" role="status">
+        <span class="av" style="--c:#2f6bb8" aria-hidden="true">SO</span>
+        <div><b>You: Sam Okafor</b><small>From the Cloudflare Access email, read as-is and not verified.</small></div>
+        <span class="pill mode">Guardrail · Audit</span>
+      </div>
+      <div class="itabs" role="tablist" aria-label="Identity sections">
+        <button role="tab" type="button" aria-selected="false" tabindex="-1" data-go="d-people">People <span class="count">4</span></button>
+        <button role="tab" type="button" aria-selected="true" data-go="d-machines">Machines <span class="count">8</span></button>
+        <button role="tab" type="button" aria-selected="false" tabindex="-1" data-go="d-browser">This browser</button>
+        <button role="tab" type="button" aria-selected="false" tabindex="-1" data-jump="t-overview" data-jump-opt="opt-trust">Rules &amp; health ↗</button>
+      </div>
+      <div class="row" role="group" aria-label="Filter machines">
+        <button class="pill" type="button" aria-pressed="true">All 8</button>
+        <button class="pill warn" type="button" aria-pressed="false"><span class="ic" aria-hidden="true">!</span>Needs attention 3</button>
+        <button class="pill" type="button" aria-pressed="false">Team 1</button>
+        <button class="pill" type="button" aria-pressed="false">Unclaimed 1</button>
+      </div>
+      <div class="tablewrap">
+      <table class="mt">
+        <caption class="sr-only">Machines BB knows, with the owner Identity worked out and why</caption>
+        <thead><tr><th scope="col">Machine</th><th scope="col">Shown as</th><th scope="col">Why</th><th scope="col">Status</th><th scope="col"><span class="sr-only">Actions</span></th></tr></thead>
+        <tbody>
+          <tr class="attn"><th scope="row" data-l="Machine"><code>ew-lab-003-priya</code></th><td data-l="Shown as">Erin Example</td><td data-l="Why">Pinned to Erin on 2 Sep as <code>ew-lab-003-erin</code>. It was renamed on 21 Sep and the name now says Priya.</td><td data-l="Status"><span class="pill warn"><span class="ic" aria-hidden="true">!</span>Pin conflict</span></td>
+            <td data-l="Actions"><div class="row"><button class="btn sm" type="button" data-toast="Mockup only: keeps Erin, and would acknowledge the conflict (new Identity code).">Keep Erin</button><button class="btn sm primary" type="button" data-dialog="dlg-repin">Re-pin to Priya…</button></div></td></tr>
+          <tr class="attn"><th scope="row" data-l="Machine"><code>ew-lab-005-jo</code></th><td data-l="Shown as"><span class="muted">jo (not in directory)</span></td><td data-l="Why">Pinned to jo on 2 Sep. jo is no longer in the directory.</td><td data-l="Status"><span class="pill warn"><span class="ic" aria-hidden="true">!</span>Stale pin</span></td>
+            <td data-l="Actions"><div class="row"><button class="btn sm" type="button" data-dialog="dlg-repin" data-variant="unpin">Unpin…</button></div></td></tr>
+          <tr class="attn"><th scope="row" data-l="Machine"><code>ew-lab-009-ci</code></th><td data-l="Shown as"><span class="muted">—</span></td><td data-l="Why">Listed in Team machines, but BB has no host by that name.</td><td data-l="Status"><span class="pill warn"><span class="ic" aria-hidden="true">!</span>Missing</span></td>
+            <td data-l="Actions"><div class="row"><button class="btn sm" type="button" data-toast="Mockup only: would remove it from teamMachines through a new Identity RPC.">Remove from list</button></div></td></tr>
+          <tr><th scope="row" data-l="Machine"><code>ew-lab-001-main</code></th><td data-l="Shown as">Team machine</td><td data-l="Why">Listed in Team machines.</td><td data-l="Status"><span class="pill ok"><span class="ic" aria-hidden="true">✓</span>Team</span></td>
+            <td data-l="Actions"><div class="row"><button class="btn sm danger" type="button" data-dialog="dlg-removeteam">Remove from team…</button></div></td></tr>
+          <tr><th scope="row" data-l="Machine"><code>ew-lab-002-alex</code></th><td data-l="Shown as">Alex Rivera</td><td data-l="Why">Name ends in <code>-alex</code>. Pinned 12 Sep.</td><td data-l="Status"><span class="pill ok"><span class="ic" aria-hidden="true">✓</span>Owned</span></td><td data-l="Actions"></td></tr>
+          <tr><th scope="row" data-l="Machine"><code>ew-lab-002-sam</code></th><td data-l="Shown as">Sam Okafor <span class="muted">(you)</span></td><td data-l="Why">Name ends in <code>-sam</code>. Pinned 12 Sep.</td><td data-l="Status"><span class="pill ok"><span class="ic" aria-hidden="true">✓</span>Owned</span></td><td data-l="Actions"></td></tr>
+          <tr><th scope="row" data-l="Machine"><code>ew-lab-004-erin</code></th><td data-l="Shown as">Erin Example</td><td data-l="Why">Name ends in <code>-erin</code>. Pinned 14 Sep.</td><td data-l="Status"><span class="pill ok"><span class="ic" aria-hidden="true">✓</span>Owned</span></td><td data-l="Actions"></td></tr>
+          <tr><th scope="row" data-l="Machine"><code>scratch-7</code></th><td data-l="Shown as"><span class="muted">Unclaimed</span></td><td data-l="Why">Its name matches nobody, and it isn't a team machine.</td><td data-l="Status"><span class="pill off">Unclaimed</span></td>
+            <td data-l="Actions"><div class="row"><button class="btn sm" type="button" data-toast="Mockup only: would add scratch-7 to teamMachines through a new Identity RPC.">Make team machine</button></div></td></tr>
+        </tbody>
+      </table>
+      </div>
+      <details class="card flat"><summary class="small"><b>How a machine gets its owner</b></summary>
+        <ol class="small" style="margin:8px 0 0;padding-left:18px;display:grid;gap:4px">
+          <li><b>Listed in Team machines</b>: shown as the team machine.</li>
+          <li><b>Pinned owner</b>: the first owner Identity saw, kept when a machine is renamed so a rename can't hand it to someone else.</li>
+          <li><b>Name suffix</b>: the part after the last dash matches someone's person name or GitHub login.</li>
+          <li>Otherwise <b>unclaimed</b>, and never silently shown as the team machine.</li>
+        </ol>
+        <p class="tiny muted" style="margin-top:6px">Guessing from names is a stand-in. <span class="cap core">BB core: an owner field on hosts</span> would replace steps 2 and 3. Today there is no way to unpin, and conflicts are reported from the moment Identity loads. Re-pin and unpin need <span class="cap new">New Identity code</span>.</p>
+      </details>
+    </div>
+  </div>
+</div>
+
+<!-- D · This browser -->
+<div class="screen" data-screen="d-browser" data-name="This browser tab: per-state explanation and picker">
+  <h3 class="screen-label">Screen · This browser</h3>
+  <div data-tpl="tpl-hosttop"></div>
+  <div class="sec-head"><h4 class="sec-title">People &amp; machines</h4><p class="sec-desc">Who Identity recognises, which machines are theirs, and how each fact was worked out.</p></div>
+  <div class="plugin-zone"><span class="zone-tag">Rendered by Identity · <code>app.slots.settingsSection</code></span>
+    <div class="stack">
+      <div class="idbar" role="status" data-bstate-bar>
+        <span class="av none" aria-hidden="true">?</span>
+        <div><b data-bs="title">You: anonymous</b><small data-bs="sub">Your earlier choice is no longer in the directory.</small></div>
+      </div>
+      <div class="itabs" role="tablist" aria-label="Identity sections">
+        <button role="tab" type="button" aria-selected="false" tabindex="-1" data-go="d-people">People <span class="count">4</span></button>
+        <button role="tab" type="button" aria-selected="false" tabindex="-1" data-go="d-machines">Machines <span class="count">8</span></button>
+        <button role="tab" type="button" aria-selected="true" data-go="d-browser">This browser</button>
+        <button role="tab" type="button" aria-selected="false" tabindex="-1" data-jump="t-overview" data-jump-opt="opt-trust">Rules &amp; health ↗</button>
+      </div>
+      <fieldset class="mockstate"><legend>Example state (mockup control)</legend>
+        <div class="seg" role="radiogroup" aria-label="Browser selection state">
+          <input type="radio" name="bstate" id="bs-stale" value="stale" checked><label for="bs-stale">Stale</label>
+          <input type="radio" name="bstate" id="bs-valid" value="valid"><label for="bs-valid">Valid</label>
+          <input type="radio" name="bstate" id="bs-expired" value="expired"><label for="bs-expired">Expired</label>
+          <input type="radio" name="bstate" id="bs-override" value="override"><label for="bs-override">Outranked</label>
+          <input type="radio" name="bstate" id="bs-invalid" value="invalid"><label for="bs-invalid">Key rotated</label>
+        </div>
+      </fieldset>
+      <div class="grid2">
+        <div class="card stack">
+          <h5 class="h5">Who this browser is, and why</h5>
+          <ol class="ladder compact" aria-live="polite">
+            <li data-bs-row="1"><span class="rung">1</span><div><b>Sign-in proxy email</b><small data-bs="r1">None on this request.</small></div></li>
+            <li data-bs-row="2"><span class="rung">2</span><div><b>Name chosen in this browser</b><small data-bs="r2">“Jo Park”, which is no longer in the directory.</small></div></li>
+            <li data-bs-row="3"><span class="rung">3</span><div><b>Fallback email</b><small data-bs="r3">Skipped. A stale choice never falls through to the fallback.</small></div></li>
+            <li data-bs-row="4"><span class="rung">=</span><div><b data-bs="result">Anonymous</b><small data-bs="r4">Threads you start show no starter.</small></div></li>
+          </ol>
+          <p class="tiny muted">Your choice is a signed cookie in this browser only. Identity keeps no list of browsers, so it can't show or revoke anyone else's choice. Rotating the signing key clears every browser at once.</p>
+        </div>
+        <div class="card stack">
+          <h5 class="h5" id="d-pick-l">Choose a name for this browser</h5>
+          <p class="small muted" data-bs="picknote">Choose a name for attribution in this browser. This does not verify who you are.</p>
+          <div class="plist radios" role="radiogroup" aria-labelledby="d-pick-l">
+            <label><input type="radio" name="d-pick"><span class="av" style="--c:#3f7d33" aria-hidden="true">AR</span> Alex Rivera</label>
+            <label><input type="radio" name="d-pick"><span class="av" style="--c:#96379a" aria-hidden="true">EE</span> Erin Example</label>
+            <label><input type="radio" name="d-pick"><span class="av" style="--c:#2a6fc0" aria-hidden="true">PS</span> Priya Shah</label>
+            <label><input type="radio" name="d-pick"><span class="av" style="--c:#2f6bb8" aria-hidden="true">SO</span> Sam Okafor</label>
+          </div>
+          <div class="row"><button class="btn primary" type="button" data-toast="Mockup only: the picker flow (prepare selection → commit) exists today.">Use this name</button><button class="btn" type="button" data-toast="Mockup only: /forget-identity exists today.">Forget this browser's choice</button><span class="cap now">picker exists today</span></div>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- D · Directory error -->
+<div class="screen" data-screen="d-direrror" data-name="Directory is invalid JSON: everyone anonymous">
+  <h3 class="screen-label">Screen · Directory error</h3>
+  <div data-tpl="tpl-hosttop" data-variant="broken"></div>
+  <div class="sec-head"><h4 class="sec-title">People &amp; machines</h4><p class="sec-desc">Who Identity recognises, which machines are theirs, and how each fact was worked out.</p></div>
+  <div class="plugin-zone"><span class="zone-tag">Rendered by Identity · <code>app.slots.settingsSection</code></span>
+    <div class="stack">
+      <div class="idbar" role="status">
+        <span class="av none" aria-hidden="true">?</span>
+        <div><b>You: anonymous</b><small>The people directory can't be read, so nobody is recognised.</small></div>
+        <span class="pill mode">Guardrail · Audit</span>
+      </div>
+      <div class="alert bad" role="alert">
+        <p class="t"><span class="ic" aria-hidden="true">✕</span> The people directory couldn't be read, so everyone shows as anonymous</p>
+        <p class="small">Parse error: <code>Expected ',' or ']' after array element in JSON at position 412 (line 14 column 3)</code>. BB also shows this plugin as “Needs configuration”.</p>
+        <p class="small">Effect: nobody is recognised, so the guardrail has no one to refuse. Every dispatch counts as identity-less and is allowed. Thread chips show “Unknown”.</p>
+        <p class="small"><b>Fix:</b> correct <code>ew_bb_people</code> in Ansible and redeploy. For an urgent local fix, run <code>bb plugin config identity set directory '&lt;json&gt;'</code> and then <code>bb plugin reload identity</code>. Ansible will overwrite that fix on the next deploy.</p>
+      </div>
+      <div class="card stack">
+        <div class="row" style="justify-content:space-between"><h5 class="h5">Last good directory <span class="muted small">· loaded 24 Sep 18:02, not in use</span></h5><span class="cap new">Proposal · needs an owner decision</span></div>
+        <p class="small muted">Proposal: keep using the last good directory until the new one parses, and say so here. Today Identity treats an invalid directory as empty on purpose.</p>
+        <ul class="plist dim" aria-label="Last good directory (not in use)">
+          <li><span class="av" style="--c:#3f7d33" aria-hidden="true">AR</span> Alex Rivera <span class="muted small">alex</span></li>
+          <li><span class="av" style="--c:#96379a" aria-hidden="true">EE</span> Erin Example <span class="muted small">erin</span></li>
+          <li><span class="av" style="--c:#2a6fc0" aria-hidden="true">PS</span> Priya Shah <span class="muted small">priya</span></li>
+          <li><span class="av" style="--c:#2f6bb8" aria-hidden="true">SO</span> Sam Okafor <span class="muted small">sam</span></li>
+        </ul>
+      </div>
+    </div>
+  </div>
+</div>
+
+        </div></div>
+      </div>
+    </div>
+  </div><p class="device-cap" data-cap></p></div>
+
+  <div class="notes">
+    <details open><summary>IA, journey and first run</summary><div>
+      <ul>
+        <li>Tabs: <b>People · Machines · This browser · Rules &amp; health</b>. The identity bar sits above them on every tab.</li>
+        <li>Primary journey: follow the “2 need attention” pill to a filtered Machines list, resolve the pin, and you're done.</li>
+        <li>First run: an empty People tab explains the directory lives in infra and offers “Copy an example entry”. The Machines tab already lists every BB host as unclaimed, which is the prompt to fix names or team machines.</li>
+        <li>Every fact carries provenance: <em>from</em> (Access email, picker, suffix rule, pin, teamMachines) and <em>counts for</em> (attribution, guardrail, machine owner).</li>
+      </ul></div></details>
+    <details><summary>Stale, conflicts, errors</summary><div>
+      <ul>
+        <li>Pin conflicts, stale pins (person gone) and missing team machines appear as rows with inline actions. Each names what happens next, and the destructive ones confirm.</li>
+        <li>The five browser states (valid, expired, stale, outranked, key rotated) each get plain words and show which rung of the ladder decided.</li>
+        <li>A broken directory takes over the section with the parse error, its effect, and both fixes (infra and local, with a warning about clobbering).</li>
+      </ul></div></details>
+    <details><summary>Responsive, accessibility, safety</summary><div>
+      <ul>
+        <li>People are master-detail on desktop and stack as list then detail when narrow. The machines table turns into labelled cards below 720px container width.</li>
+        <li>Tabs are real ARIA tabs. Colour swatches are a radiogroup with names, “used by” hints and a contrast floor. A clash only warns and is never refused.</li>
+        <li>Re-pin, unpin and remove-from-team confirm and spell out the guardrail consequence (for example, rule C refusing automations).</li>
+      </ul></div></details>
+    <details><summary>Trade-offs and migration</summary><div>
+      <div class="pc"><div><b>Advantages</b><ul><li>Direct answers to support questions.</li><li>A natural evolution of today's People roster.</li><li>Provenance is visible where the fact lives.</li></ul></div>
+      <div><b>Disadvantages</b><ul><li>First run is weaker, with no guided order.</li><li>Rules and health are secondary.</li><li>The most surface to build (tables, cards, detail).</li></ul></div></div>
+      <p><b>Complexity:</b> medium–high. Phase 1 reuses <code>identity_roster</code>, <code>identity_machines</code>, <code>/host-pins</code>, <code>/whoami</code> and the colour RPCs. Phase 2 adds re-pin, unpin and teamMachines writes. <b>Migration:</b> today's People list becomes the People tab unchanged, so the section id can stay <code>people</code>.</p></div></details>
+  </div>
+</section>
+
+<!-- ═══════════════════════════ DIRECTION 3 · TRUST CONSOLE ═══════════════════════════ -->
+<section id="opt-trust" class="option" role="tabpanel" aria-labelledby="tab-trust" tabindex="0" hidden>
+  <div class="thesis">
+    <h2>Direction 3 · Trust &amp; operations console</h2>
+    <p><strong>Thesis:</strong> the biggest risk with Identity is <em>overestimating</em> it. Admins switch on Enforce believing it's a lock, or trust a browser-chosen name. So this section leads with what Identity can and can't see. It explains any decision on demand: “why am I shown as…?” and “what would the guardrail do if…?”. Operational health is treated as a first-class screen. People and machines appear as inputs to those explanations and don't get their own screens.</p>
+  </div>
+  <div class="screenbar">
+    <span id="scr-trust-l">Screen</span>
+    <div class="seg" role="radiogroup" aria-labelledby="scr-trust-l">
+      <input type="radio" name="scr-trust" id="r-t-overview" value="t-overview" checked><label for="r-t-overview">Guardrail overview</label>
+      <input type="radio" name="scr-trust" id="r-t-why" value="t-why"><label for="r-t-why">Explain &amp; simulate</label>
+      <input type="radio" name="scr-trust" id="r-t-coverage" value="t-coverage"><label for="r-t-coverage">Coverage map</label>
+      <input type="radio" name="scr-trust" id="r-t-health" value="t-health"><label for="r-t-health">Health</label>
+    </div>
+  </div>
+  <p class="viewing" aria-live="polite" data-viewing="trust"></p>
+  <div class="stage"><div class="device" data-vp="desktop">
+    <div class="phonebar" aria-hidden="true"><span>9:41</span><span>5G ▮▮▮</span></div>
+    <div class="bb">
+      <aside class="bb-nav" data-tpl="tpl-nav" aria-label="BB settings navigation (host chrome, approximate)"></aside>
+      <div class="bb-col">
+        <div class="bb-mhead"><button class="back" type="button" aria-label="Back to Settings (host control, mockup only)">‹</button><span>Identity</span></div>
+        <div class="bb-main"><div class="bb-inner">
+
+<!-- T · Overview -->
+<div class="screen is-on" data-screen="t-overview" data-name="Guardrail overview: audit mode, evidence panel is conceptual">
+  <h3 class="screen-label">Screen · Guardrail overview</h3>
+  <div data-tpl="tpl-hosttop"></div>
+  <div class="sec-head"><h4 class="sec-title">Trust &amp; operations</h4><p class="sec-desc">What Identity can see, what it decides, and whether it is working.</p></div>
+  <div class="plugin-zone"><span class="zone-tag">Rendered by Identity · <code>app.slots.settingsSection</code></span>
+    <div class="stack">
+      <div class="trustband" role="note"><b>A guardrail, not a lock.</b> Identity takes the sign-in proxy's email as sent, treats names chosen in a browser as labels, and can't see Send-now, terminals or raw API calls. It catches honest mistakes, not determined ones.</div>
+      <div class="itabs" role="tablist" aria-label="Console sections">
+        <button role="tab" type="button" aria-selected="true" data-go="t-overview">Guardrail</button>
+        <button role="tab" type="button" aria-selected="false" tabindex="-1" data-go="t-why">Explain &amp; simulate</button>
+        <button role="tab" type="button" aria-selected="false" tabindex="-1" data-go="t-coverage">Coverage</button>
+        <button role="tab" type="button" aria-selected="false" tabindex="-1" data-go="t-health">Health <span class="pill warn" style="margin-left:4px"><span class="ic" aria-hidden="true">!</span>2</span></button>
+      </div>
+      <div class="card stack">
+        <div class="row" style="justify-content:space-between;align-items:flex-start">
+          <div><h5 class="h5" id="t-mode-l">Mode</h5><p class="small muted">All three modes make the same decision. Only what happens next differs.</p></div>
+          <span class="cap new">Writes via new Identity RPC</span>
+        </div>
+        <div class="modeseg" role="radiogroup" aria-labelledby="t-mode-l">
+          <label><input type="radio" name="t-mode" value="off"><span><b>Off</b><small>Label only. Nothing logged.</small></span></label>
+          <label><input type="radio" name="t-mode" value="audit" checked><span><b>Audit</b><small>Log would-refuse lines and allow everything.</small></span></label>
+          <label><input type="radio" name="t-mode" value="enforce" data-dialog-on-check="dlg-enforce"><span><b>Enforce</b><small>Refuse, with a message naming the rule.</small></span></label>
+        </div>
+        <p class="tiny muted">Audit since 18 Sep 2026. Emails appear in audit log lines by design.</p>
+      </div>
+      <div class="grid3">
+        <div class="card tile"><span class="pill">A</span><h5 class="h5">Start on another person's machine</h5><p class="small muted">A known person starting a thread on a machine that belongs to someone else. Team and unclaimed machines are fine.</p>
+          <p class="big core-zone"><span data-count>9</span><small>would-refuse in 7 days</small></p></div>
+        <div class="card tile"><span class="pill">B</span><h5 class="h5">Message into someone else's thread</h5><p class="small muted">A known person sending into a thread a different person started.</p>
+          <p class="big core-zone"><span data-count>3</span><small>would-refuse in 7 days</small></p></div>
+        <div class="card tile"><span class="pill">C</span><h5 class="h5">Automation off a team machine</h5><p class="small muted">Only the automations that create a new thread. <b>Blind spot:</b> automations sent into an existing thread arrive unstamped.</p>
+          <p class="big core-zone"><span data-count>0</span><small>would-refuse in 7 days</small></p></div>
+      </div>
+      <p class="tiny muted">Counts and the list below are <span class="cap core">BB core: plugin log query</span> <b>and</b> depend on the owner reversing the 18 Sep decision that audit lives only in <code>bb plugin logs</code>. The numbers shown are illustrative.</p>
+      <div class="card stack core-zone">
+        <h5 class="h5">Recent would-refuse</h5>
+        <ul class="events">
+          <li><time>25 Sep 08:41</time><span class="pill">B</span><span>Priya → “Fix retry backoff” (started by Alex)</span><span class="pill off">allowed · audit</span></li>
+          <li><time>24 Sep 16:03</time><span class="pill">A</span><span>Priya → start on <code>ew-lab-003-priya</code> (pinned to Erin)</span><span class="pill off">allowed · audit</span></li>
+          <li><time>24 Sep 11:27</time><span class="pill">A</span><span>Sam → start on <code>ew-lab-004-erin</code></span><span class="pill off">allowed · audit</span></li>
+        </ul>
+      </div>
+      <div class="grid2">
+        <div class="card stack"><h5 class="h5">Always allowed, in every mode</h5>
+          <ul class="small" style="margin:0;padding-left:18px"><li>Anything Identity can't tie to a person: agents' <code>bb thread tell</code>, retries, plugin follow-ups, the CLI.</li><li>Names from the fallback email or a browser choice.</li><li>Paths that never reach the guardrail: Send-now, terminals, raw API calls.</li></ul></div>
+        <div class="card stack"><h5 class="h5">Read the audit trail today</h5>
+          <pre class="mono" tabindex="0">bb plugin logs identity \
+  | jq -r 'select(.message|startswith("identity-audit")) | .message[15:]' \
+  | jq -c 'select(.kind=="dispatch" and .verdict=="reject")'</pre>
+          <div class="row"><button class="btn sm" type="button" data-copy>Copy command</button><span class="cap now">log lines exist today</span></div></div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- T · Explain & simulate -->
+<div class="screen" data-screen="t-why" data-name="Explain & simulate: resolution trace plus guardrail simulator">
+  <h3 class="screen-label">Screen · Explain &amp; simulate</h3>
+  <div data-tpl="tpl-hosttop"></div>
+  <div class="sec-head"><h4 class="sec-title">Trust &amp; operations</h4><p class="sec-desc">What Identity can see, what it decides, and whether it is working.</p></div>
+  <div class="plugin-zone"><span class="zone-tag">Rendered by Identity · <code>app.slots.settingsSection</code></span>
+    <div class="stack">
+      <div class="trustband" role="note"><b>A guardrail, not a lock.</b> Identity takes the sign-in proxy's email as sent, treats names chosen in a browser as labels, and can't see Send-now, terminals or raw API calls.</div>
+      <div class="itabs" role="tablist" aria-label="Console sections">
+        <button role="tab" type="button" aria-selected="false" tabindex="-1" data-go="t-overview">Guardrail</button>
+        <button role="tab" type="button" aria-selected="true" data-go="t-why">Explain &amp; simulate</button>
+        <button role="tab" type="button" aria-selected="false" tabindex="-1" data-go="t-coverage">Coverage</button>
+        <button role="tab" type="button" aria-selected="false" tabindex="-1" data-go="t-health">Health <span class="pill warn" style="margin-left:4px"><span class="ic" aria-hidden="true">!</span>2</span></button>
+      </div>
+      <div class="card stack">
+        <h5 class="h5">Why am I shown as Sam Okafor?</h5>
+        <ol class="trace">
+          <li class="win"><b>Cloudflare Access email</b> <code>sam@example.test</code><small>Present on this request. It matches Sam Okafor in the directory. <b>This decided.</b> It counts for the guardrail.</small></li>
+          <li class="skip"><b>Browser choice</b> “Priya Shah” (valid until 2 Oct)<small>Outranked by the sign-in email. Someone chose it in this browser earlier.</small></li>
+          <li class="skip"><b>Fallback email</b><small>Not set.</small></li>
+        </ol>
+        <p class="tiny muted">From <code>identity_whoami</code> <span class="cap now">Exists today</span>. The per-rung detail needs <span class="cap new">New Identity code</span>.</p>
+      </div>
+      <div class="card stack">
+        <div class="row" style="justify-content:space-between"><h5 class="h5">What would the guardrail do?</h5><span class="cap new">Runs decideGuardrail in the browser · no dispatch</span></div>
+        <div class="sim">
+          <label class="f">Who is asking
+            <select class="text" data-sim="who">
+              <option value="sam-access">Sam, via Access email</option>
+              <option value="priya-access">Priya, via Access email</option>
+              <option value="priya-browser">Priya, chosen in a browser</option>
+              <option value="fallback">Fallback email (laptop)</option>
+              <option value="agent">An agent (bb thread tell)</option>
+              <option value="automation">Automations plugin</option>
+            </select></label>
+          <label class="f">Doing
+            <select class="text" data-sim="what">
+              <option value="start">Start a new thread</option>
+              <option value="followup-alex">Send into a thread Alex started</option>
+              <option value="followup-own">Send into their own thread</option>
+            </select></label>
+          <label class="f">On machine
+            <select class="text" data-sim="host">
+              <option value="ew-lab-004-erin">ew-lab-004-erin · Erin's</option>
+              <option value="ew-lab-002-sam">ew-lab-002-sam · Sam's</option>
+              <option value="ew-lab-001-main">ew-lab-001-main · team</option>
+              <option value="scratch-7">scratch-7 · unclaimed</option>
+              <option value="ew-lab-003-priya">ew-lab-003-priya · pinned to Erin</option>
+            </select></label>
+        </div>
+        <div class="tablewrap"><table class="mini simout" aria-live="polite">
+          <caption class="sr-only">Outcome in each mode</caption>
+          <thead><tr><th scope="col">Off</th><th scope="col">Audit</th><th scope="col">Enforce</th></tr></thead>
+          <tbody><tr><td data-sim-out="off"></td><td data-sim-out="audit"></td><td data-sim-out="enforce"></td></tr></tbody>
+        </table></div>
+        <p class="small" data-sim-msg></p>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- T · Coverage -->
+<div class="screen" data-screen="t-coverage" data-name="Coverage map: which paths Identity checks, sees, logs, or cannot see">
+  <h3 class="screen-label">Screen · Coverage map</h3>
+  <div data-tpl="tpl-hosttop"></div>
+  <div class="sec-head"><h4 class="sec-title">Trust &amp; operations</h4><p class="sec-desc">What Identity can see, what it decides, and whether it is working.</p></div>
+  <div class="plugin-zone"><span class="zone-tag">Rendered by Identity · <code>app.slots.settingsSection</code></span>
+    <div class="stack">
+      <div class="trustband" role="note"><b>A guardrail, not a lock.</b> This map lists every path into BB and what Identity can do about it.</div>
+      <div class="itabs" role="tablist" aria-label="Console sections">
+        <button role="tab" type="button" aria-selected="false" tabindex="-1" data-go="t-overview">Guardrail</button>
+        <button role="tab" type="button" aria-selected="false" tabindex="-1" data-go="t-why">Explain &amp; simulate</button>
+        <button role="tab" type="button" aria-selected="true" data-go="t-coverage">Coverage</button>
+        <button role="tab" type="button" aria-selected="false" tabindex="-1" data-go="t-health">Health <span class="pill warn" style="margin-left:4px"><span class="ic" aria-hidden="true">!</span>2</span></button>
+      </div>
+      <div class="legend small"><span><span class="pill ok"><span class="ic" aria-hidden="true">✓</span>Checked</span> the guardrail can refuse</span><span><span class="pill mode"><span class="ic" aria-hidden="true">◐</span>Seen after</span> attributed after the fact</span><span><span class="pill off"><span class="ic" aria-hidden="true">≡</span>Logged only</span> request audit</span><span><span class="pill bad"><span class="ic" aria-hidden="true">∅</span>Blind</span> nothing reliable</span></div>
+      <div class="tablewrap"><table class="mt cov">
+        <caption class="sr-only">Coverage of BB paths</caption>
+        <thead><tr><th scope="col">Path</th><th scope="col">Who started it</th><th scope="col">Guardrail</th><th scope="col">What would close the gap</th></tr></thead>
+        <tbody>
+          <tr><th scope="row" data-l="Path">Browser start, fork, send</th><td data-l="Who">Request context when the patch matches</td><td data-l="Guardrail"><span class="pill ok"><span class="ic" aria-hidden="true">✓</span>Checked</span></td><td data-l="Gap">—</td></tr>
+          <tr><th scope="row" data-l="Path">Queued message, ordinary drain</th><td data-l="Who">Snapshot by row id at queue time</td><td data-l="Guardrail"><span class="pill ok"><span class="ic" aria-hidden="true">✓</span>Checked</span></td><td data-l="Gap">Capture misses show as unknown</td></tr>
+          <tr><th scope="row" data-l="Path">Send-now on a queued message</th><td data-l="Who">Enqueuer and presser, after the fact</td><td data-l="Guardrail"><span class="pill mode"><span class="ic" aria-hidden="true">◐</span>Seen after</span></td><td data-l="Gap"><span class="cap core">BB core: dispatch hook for Send-now</span></td></tr>
+          <tr><th scope="row" data-l="Path">Explicit queued-message insert</th><td data-l="Who">Insert attempt only, drain unknown</td><td data-l="Guardrail"><span class="pill off"><span class="ic" aria-hidden="true">≡</span>Logged only</span></td><td data-l="Gap"><span class="cap core">BB core: queue-row event</span></td></tr>
+          <tr><th scope="row" data-l="Path">Automation → new thread</th><td data-l="Who">Stamped as the automations plugin</td><td data-l="Guardrail"><span class="pill ok"><span class="ic" aria-hidden="true">✓</span>Checked (rule C)</span></td><td data-l="Gap">—</td></tr>
+          <tr><th scope="row" data-l="Path">Automation → existing thread</th><td data-l="Who">Arrives unstamped</td><td data-l="Guardrail"><span class="pill bad"><span class="ic" aria-hidden="true">∅</span>Blind</span></td><td data-l="Gap"><span class="cap core">BB core: stamp threads.send</span></td></tr>
+          <tr><th scope="row" data-l="Path">Approvals, Stop, Archive, terminals, host routes</th><td data-l="Who">Observed attempt only</td><td data-l="Guardrail"><span class="pill off"><span class="ic" aria-hidden="true">≡</span>Logged only</span></td><td data-l="Gap">No Identity policy hook</td></tr>
+          <tr><th scope="row" data-l="Path">CLI, agents, WebSockets</th><td data-l="Who">Unknown unless a header is present</td><td data-l="Guardrail"><span class="pill ok"><span class="ic" aria-hidden="true">✓</span>Allowed by design</span></td><td data-l="Gap">Identity-less is always allowed</td></tr>
+        </tbody>
+      </table></div>
+      <p class="tiny muted">Copied from the README coverage table. A static page <span class="cap new">New Identity code</span>, versioned with the plugin.</p>
+    </div>
+  </div>
+</div>
+
+<!-- T · Health -->
+<div class="screen" data-screen="t-health" data-name="Health: self-test, picker chain, ledgers, config lint">
+  <h3 class="screen-label">Screen · Health</h3>
+  <div data-tpl="tpl-hosttop"></div>
+  <div class="sec-head"><h4 class="sec-title">Trust &amp; operations</h4><p class="sec-desc">What Identity can see, what it decides, and whether it is working.</p></div>
+  <div class="plugin-zone"><span class="zone-tag">Rendered by Identity · <code>app.slots.settingsSection</code></span>
+    <div class="stack">
+      <div class="itabs" role="tablist" aria-label="Console sections">
+        <button role="tab" type="button" aria-selected="false" tabindex="-1" data-go="t-overview">Guardrail</button>
+        <button role="tab" type="button" aria-selected="false" tabindex="-1" data-go="t-why">Explain &amp; simulate</button>
+        <button role="tab" type="button" aria-selected="false" tabindex="-1" data-go="t-coverage">Coverage</button>
+        <button role="tab" type="button" aria-selected="true" data-go="t-health">Health <span class="pill warn" style="margin-left:4px"><span class="ic" aria-hidden="true">!</span>2</span></button>
+      </div>
+      <div class="row" style="justify-content:space-between"><p class="small muted">Last checked 25 Sep 09:12 (plugin start).</p>
+        <div class="row"><button class="btn sm" type="button" data-toast="Mockup only: GET …/http/request-context-self-test exists today. The button is new.">Re-run self-test</button><button class="btn sm" type="button" data-toast="Mockup only: would copy a JSON summary with emails, keys and origins redacted.">Copy redacted diagnostics</button><span class="cap new">buttons</span></div></div>
+      <div class="grid2">
+        <div class="card stack"><h5 class="h5">Request context self-test <span class="cap now">route exists</span></h5>
+          <ul class="checklist">
+            <li class="ok"><span class="ic" aria-hidden="true">✓</span> Patch live: “request context is live (probe saw its own tagged email)”</li>
+            <li class="ok"><span class="ic" aria-hidden="true">✓</span> Email leg passed</li>
+            <li class="ok"><span class="ic" aria-hidden="true">✓</span> Cookie leg: “named cookie reached request context”</li>
+          </ul></div>
+        <div class="card stack"><h5 class="h5">Browser picker <span class="cap now">pickerStatus()</span></h5>
+          <ul class="checklist">
+            <li class="ok"><span class="ic" aria-hidden="true">✓</span> Switched on</li>
+            <li class="ok"><span class="ic" aria-hidden="true">✓</span> Origin <code>https://bb.example.test</code></li>
+            <li class="ok"><span class="ic" aria-hidden="true">✓</span> Signing key [set] <button class="btn sm danger" type="button" data-dialog="dlg-rotate">Rotate…</button></li>
+            <li class="ok"><span class="ic" aria-hidden="true">✓</span> Cookie bridge → <b>ready</b></li>
+          </ul></div>
+        <div class="card stack"><h5 class="h5">Directory and machines</h5>
+          <ul class="checklist">
+            <li class="ok"><span class="ic" aria-hidden="true">✓</span> Directory: 4 people, 5 emails</li>
+            <li class="ok"><span class="ic" aria-hidden="true">✓</span> Machine list from BB: 7 hosts</li>
+            <li class="warn"><span class="ic" aria-hidden="true">!</span> 1 pin conflict, 1 stale pin <a href="#opt-directory" data-jump="d-machines">Open machines</a></li>
+            <li class="warn"><span class="ic" aria-hidden="true">!</span> Team machine <code>ew-lab-009-ci</code> not found</li>
+          </ul></div>
+        <div class="card stack"><h5 class="h5">Records Identity keeps</h5>
+          <div class="stack sm">
+            <div><div class="row" style="justify-content:space-between"><span class="small">Thread attribution</span><span class="small mono">1,842 / 2,000</span></div><div class="meter" role="meter" aria-label="Thread attribution records" aria-valuemin="0" aria-valuemax="2000" aria-valuenow="1842"><i style="width:92%"></i></div><p class="tiny muted">The oldest records are dropped first. “Seen” answers become less reliable for older threads.</p></div>
+            <div><div class="row" style="justify-content:space-between"><span class="small">Queued-message snapshots</span><span class="small mono">12 / 1,000</span></div><div class="meter ok" role="meter" aria-label="Queued-message snapshots" aria-valuemin="0" aria-valuemax="1000" aria-valuenow="12"><i style="width:1.2%"></i></div></div>
+          </div>
+          <p class="tiny muted"><span class="cap new">Needs a small read RPC</span></p></div>
+      </div>
+      <div class="card stack"><h5 class="h5">Configuration lint <span class="cap new">New Identity code</span></h5>
+        <ul class="checklist">
+          <li class="ok"><span class="ic" aria-hidden="true">✓</span> Fallback email is empty. That's right for a shared server behind Access.</li>
+          <li class="ok"><span class="ic" aria-hidden="true">✓</span> Origin has no path and matches this page.</li>
+          <li class="warn"><span class="ic" aria-hidden="true">!</span> The picker is on while every request carries an Access header, so browser choices will always be outranked. Consider turning it off.</li>
+          <li class="warn"><span class="ic" aria-hidden="true">!</span> Plugin built against SDK 0.4.104, host runs 0.4.84.</li>
+        </ul>
+        <div class="row"><button class="btn sm" type="button" data-dialog="dlg-fallback">Set a fallback email…</button><span class="tiny muted">(shows the shared-server warning)</span></div>
+      </div>
+    </div>
+  </div>
+</div>
+
+        </div></div>
+      </div>
+    </div>
+  </div><p class="device-cap" data-cap></p></div>
+
+  <div class="notes">
+    <details open><summary>IA, journey and first run</summary><div>
+      <ul>
+        <li>Tabs: <b>Guardrail · Explain &amp; simulate · Coverage · Health</b>, under a non-dismissible trust band.</li>
+        <li>Primary journey: “is it safe to turn on Enforce?” Check the rule tiles, simulate the edge cases, confirm Health is green, then switch.</li>
+        <li>First run lands on Health, with lint telling you what's missing (empty directory, no team machines). People are only mentioned as inputs.</li>
+      </ul></div></details>
+    <details><summary>Audit vs enforcement, honesty</summary><div>
+      <ul>
+        <li>The strongest honesty story of the three. Blind spots are listed as rows, not buried in footnotes.</li>
+        <li>The simulator mirrors <code>decideGuardrail</code>, including “fallback and browser names are untied” and “identity-less is always allowed”.</li>
+        <li>The evidence panel (counts, recent list) is the most valuable part, and also the part that conflicts with the owner's no-UI-log decision. It is drawn dashed.</li>
+      </ul></div></details>
+    <details><summary>Responsive, accessibility, safety</summary><div>
+      <ul>
+        <li>Tiles collapse from 3 columns to 1. The coverage table becomes labelled cards, and the simulator selects stack.</li>
+        <li>Simulator output is an <code>aria-live</code> table. Every status has an icon and text.</li>
+        <li>Choosing Enforce doesn't take effect until the dialog is confirmed. The radio reverts if you cancel.</li>
+      </ul></div></details>
+    <details><summary>Trade-offs and migration</summary><div>
+      <div class="pc"><div><b>Advantages</b><ul><li>Hardest to overstate security.</li><li>Great for support and debugging.</li><li>The simulator reuses pure code that already exists.</li></ul></div>
+      <div><b>Disadvantages</b><ul><li>Most of its value depends on log access, which is BB core plus an owner decision.</li><li>Intimidating for a single-user laptop setup.</li><li>People and colours are demoted.</li></ul></div></div>
+      <p><b>Complexity:</b> high if the evidence panel is included. Without it, medium. <b>Migration:</b> the People roster would need to live in a second section.</p></div></details>
+  </div>
+</section>
+
+<!-- ═══════════════════════════ COMPARE & RECOMMEND ═══════════════════════════ -->
+<section id="compare" class="option" role="tabpanel" aria-labelledby="tab-compare" tabindex="0" hidden>
+  <div class="thesis">
+    <h2>Compare &amp; recommend</h2>
+    <p>The baseline is what ships today. All three directions are measured against it. The recommendation combines them rather than picking one outright.</p>
+  </div>
+
+  <div class="grid-compare">
+    <div class="card stack">
+      <h3 class="h5">Today: the People section, below the generated form</h3>
+      <div class="device today" data-vp="fixed">
+        <div class="bb-main"><div class="stack sm">
+          <div class="host host-outline"><span class="host-tag">BB host</span><p class="small"><b>Configuration</b> · 8 generated fields, always expanded: directory JSON, team machines, shared user, enforcement, fallback email, picker switch, origin, key [set]</p></div>
+          <div><h4 class="sec-title">People</h4><p class="sec-desc">Who is registered on this server, and the colour associated with each of them.</p></div>
+          <ul class="plist today-list" aria-label="People today (illustration)">
+            <li><span class="av" style="--c:#3f7d33" aria-hidden="true">AR</span><span><b>Alex Rivera</b><small>alex · last started a thread 2 hours ago</small></span><span class="dots" aria-hidden="true"><i style="--c:#b4322e"></i><i style="--c:#3f7d33"></i><i style="--c:#2f6bb8"></i><i style="--c:#96379a"></i>…</span></li>
+            <li><span class="av" style="--c:#96379a" aria-hidden="true">EE</span><span><b>Erin Example</b><small>erin · last started a thread yesterday</small></span><span class="dots" aria-hidden="true"><i style="--c:#b4322e"></i><i style="--c:#3f7d33"></i><i style="--c:#2f6bb8"></i><i style="--c:#96379a"></i>…</span></li>
+            <li><span class="av" style="--c:#2a6fc0" aria-hidden="true">PS</span><span><b>Priya Shah</b><small>priya · no thread of theirs is on record</small></span><span class="dots" aria-hidden="true"><i style="--c:#b4322e"></i><i style="--c:#3f7d33"></i><i style="--c:#2f6bb8"></i><i style="--c:#96379a"></i>…</span></li>
+          </ul>
+          <p class="tiny muted">Plus the identity footer, e.g. “You are shown as Priya Shah, chosen in this browser for attribution only.”</p>
+        </div></div>
+      </div>
+      <p class="small"><b>What today does well:</b> honest, precise copy. Colours with a contrast floor. The picker, ownership chip and read-only banners already carry the attribution-only message.</p>
+      <p class="small"><b>What it leaves to the generated form or the CLI:</b> precedence, machine ownership and pins, team machines, picker readiness, self-test results, enforcement consequences, and the directory being managed by Ansible.</p>
+    </div>
+
+    <div class="card stack">
+      <h3 class="h5">Recommendation: Direction 2 as the backbone, plus the best of 1 and 3</h3>
+      <ol class="small reco">
+        <li><b>Backbone (Direction 2):</b> an object-first <em>People · Machines · This browser · Health</em> section. It grows out of today's People roster (the section id can stay <code>people</code>) and answers the questions admins actually bring back.</li>
+        <li><b>From Direction 1:</b> a compact <em>readiness strip</em> above the tabs (Profile · People · Machines · Browser names · Guardrail · Check), each with a live status that links to its tab. The <em>server-profile question</em> shows only on first run, while the directory is empty. The <em>precedence ladder</em> goes in This browser.</li>
+        <li><b>From Direction 3:</b> the <em>Health</em> tab (self-test legs, picker chain, ledgers, config lint, redacted diagnostics), the <em>coverage map</em> as a disclosure under Rules, and the <em>guardrail simulator</em>, which reuses the pure <code>decideGuardrail</code>.</li>
+        <li><b>Defer:</b> in-UI audit evidence (counts, recent would-refuse). It needs a BB core log-query API <em>and</em> the owner reversing the 18 Sep no-UI-log decision. Ship the copyable jq command meanwhile.</li>
+      </ol>
+      <p class="small muted">Why not Direction 1 alone? It's best on day one and worst on day thirty. Why not Direction 3 alone? Its best feature is the one that's blocked. The combination keeps Direction 3's honesty everywhere through the identity bar, provenance columns and the “Always allowed” card.</p>
+    </div>
+  </div>
+
+  <h3 class="h5" style="margin:18px 0 8px">Comparison matrix</h3>
+  <div class="tablewrap">
+  <table class="matrix">
+    <caption class="sr-only">Comparison of the three directions. Cells marked “strongest” are the best in their row.</caption>
+    <thead><tr><th scope="col">Criterion</th><th scope="col">1 · Setup path</th><th scope="col">2 · Directory</th><th scope="col">3 · Trust console</th></tr></thead>
+    <tbody>
+      <tr><th scope="row">Question it answers first</th><td>“What do I set up next?”</td><td class="best">“Who or what is this, and why?” <span class="sr-only">(strongest)</span></td><td>“Can I trust what it does?”</td></tr>
+      <tr><th scope="row">First run</th><td class="best">Profile question → recommendations <span class="sr-only">(strongest)</span></td><td>Empty states with pointers</td><td>Health lint lists what's missing</td></tr>
+      <tr><th scope="row">Returning admin</th><td>Rail doubles as a dashboard, but facts are buried in steps</td><td class="best">One click to the person or machine <span class="sr-only">(strongest)</span></td><td>Good for incidents, poor for “who owns X”</td></tr>
+      <tr><th scope="row">Precedence and the anonymous rule</th><td class="best">Ladder beside the picker <span class="sr-only">(strongest)</span></td><td>Per-browser trace with 5 states</td><td>“Why am I shown as…?” trace</td></tr>
+      <tr><th scope="row">Stale mappings and conflicts</th><td>Checklist items before Enforce</td><td class="best">Inline rows with safe actions <span class="sr-only">(strongest)</span></td><td>Counted in Health</td></tr>
+      <tr><th scope="row">Honesty about audit vs enforce</th><td>Stages of one decision</td><td>Rules tab (secondary)</td><td class="best">Trust band, blind spots, simulator <span class="sr-only">(strongest)</span></td></tr>
+      <tr><th scope="row">Diagnostics</th><td>Check step</td><td>Via Rules &amp; health</td><td class="best">Full Health screen <span class="sr-only">(strongest)</span></td></tr>
+      <tr><th scope="row">Narrow sidebar and mobile</th><td>Stepper scrolls sideways, and the panel works well</td><td>Tables become cards, and master-detail stacks</td><td>Tiles and cards stack well, but the simulator is dense</td></tr>
+      <tr><th scope="row">Blocked on BB core or decisions</th><td class="best">Low <span class="sr-only">(strongest)</span></td><td>Low–medium (setting provenance, host owner)</td><td>High (log query plus owner decision)</td></tr>
+      <tr><th scope="row">Build complexity</th><td class="best">Medium <span class="sr-only">(strongest)</span></td><td>Medium–high</td><td>Medium without evidence, high with it</td></tr>
+      <tr><th scope="row">Migration from today</th><td>Section re-purposed, People moves to step 2</td><td class="best">Today's roster becomes the People tab <span class="sr-only">(strongest)</span></td><td>Needs a second section for People</td></tr>
+    </tbody>
+  </table>
+  </div>
+
+  <div class="grid2" style="margin-top:14px">
+    <div class="card stack">
+      <h3 class="h5">Phased migration (recommended combination)</h3>
+      <ol class="small reco">
+        <li><b>Phase 1 · existing data only.</b> Identity bar. People tab (today's roster plus the “Recognised by” provenance). Machines tab read-only from <code>identity_machines</code> and <code>/host-pins</code>. This browser from <code>/whoami</code> and the picker. Health from <code>/request-context-self-test</code> and <code>pickerStatus</code>. Static coverage map. Simulator in the browser.</li>
+        <li><b>Phase 2 · new Identity code.</b> An RPC that writes settings through <code>experimental_set</code> (teamMachines, enforcement, picker, origin, key rotation). Pin resolution (keep, re-pin, unpin). Re-run self-test. Ledger counts. Redacted diagnostics. The readiness strip and first-run profile question. Every write confirms, and destructive ones name their consequence.</li>
+        <li><b>Phase 3 · BB core, asked for upstream.</b> Group, collapse or hide generated fields. Setting provenance or lock (“managed by Ansible”). An owner field on hosts. Composer visibility of the selected host. A Send-now dispatch hook. Stamping <code>threads.send</code>. A plugin log query, which only matters if the owner changes the no-UI-log decision.</li>
+      </ol>
+    </div>
+    <div class="card stack">
+      <h3 class="h5">Needs BB core API (conceptual in every direction)</h3>
+      <div class="tablewrap"><table class="mini">
+        <caption class="sr-only">BB core APIs these designs would need</caption>
+        <thead><tr><th scope="col">API</th><th scope="col">Unlocks</th></tr></thead>
+        <tbody>
+          <tr><td>Group, collapse or hide generated fields</td><td>One coherent page instead of form plus section</td></tr>
+          <tr><td>Setting provenance or lock</td><td>A “managed by Ansible” notice driven by data, with edits blocked</td></tr>
+          <tr><td>Host owner field</td><td>Ends name-suffix guessing and pin conflicts</td></tr>
+          <tr><td>Plugin log query</td><td>Would-refuse counts and the recent list (plus an owner decision)</td></tr>
+          <tr><td>Send-now dispatch hook</td><td>Moves Send-now from “Seen after” to “Checked”</td></tr>
+          <tr><td>Stamp <code>threads.send</code></td><td>Closes rule C's blind spot</td></tr>
+          <tr><td>Settings deep link or route</td><td>“Open Identity settings” from chips and banners</td></tr>
+          <tr><td>Composer visibility of the selected host</td><td>A rule A warning before sending, not a refusal after</td></tr>
+        </tbody>
+      </table></div>
+      <p class="tiny muted">Writing settings from a plugin section is possible today only through the plugin's own RPC calling <code>settings.experimental_set</code>. The API is experimental, and under the high-trust model anyone on the server could call it.</p>
+    </div>
+  </div>
+</section>
+</main>
+
+<!-- ═══════════════════════════ DIALOGS (mockup only) ═══════════════════════════ -->
+<dialog id="dlg-enforce" aria-labelledby="dlg-enforce-t" aria-describedby="dlg-enforce-d">
+  <div class="grab" aria-hidden="true"></div>
+  <form method="dialog">
+    <div class="dh"><h2 id="dlg-enforce-t">Switch the guardrail to Enforce?</h2><p id="dlg-enforce-d" class="small muted">Identity will start refusing real messages from teammates.</p></div>
+    <div class="db">
+      <p>From now on, Identity refuses:</p>
+      <ul><li><b>A</b>: a known person starting a thread on another person's machine.</li><li><b>B</b>: a known person sending into a thread someone else started.</li><li><b>C</b>: an automation starting a thread off a team machine.</li></ul>
+      <div class="alert warn small"><p class="t">Someone will be refused right away</p><p><b>Priya Shah</b> on <code>ew-lab-003-priya</code>: it's still pinned to Erin, so it counts as Erin's machine. Resolve the pin first, or tell Priya.</p></div>
+      <p class="small muted">This doesn't stop Send-now, terminals, raw API calls, or anything Identity can't tie to a person. You can switch back to Audit at any time.</p>
+      <label class="check"><input type="checkbox" data-require> I understand this refuses messages from teammates</label>
+    </div>
+    <div class="df"><button class="btn" value="cancel" autofocus>Cancel</button><button class="btn danger solid" value="confirm" data-confirm disabled>Switch to Enforce</button></div>
+  </form>
+</dialog>
+
+<dialog id="dlg-rotate" aria-labelledby="dlg-rotate-t" aria-describedby="dlg-rotate-d">
+  <div class="grab" aria-hidden="true"></div>
+  <form method="dialog">
+    <div class="dh"><h2 id="dlg-rotate-t">Rotate the picker signing key?</h2><p id="dlg-rotate-d" class="small muted">Every browser's chosen name stops working immediately.</p></div>
+    <div class="db">
+      <p>Everyone who picked a name in a browser will show as <b>anonymous</b> until they choose again. Identity keeps no list of browsers, so it can't tell you how many people this affects.</p>
+      <p class="small muted">Use this if a browser choice may have been copied. Access-header identities aren't affected.</p>
+      <label class="f">Type <code>rotate</code> to confirm<input class="text mono" data-require-text="rotate" autocomplete="off" spellcheck="false"></label>
+    </div>
+    <div class="df"><button class="btn" value="cancel" autofocus>Cancel</button><button class="btn danger solid" value="confirm" data-confirm disabled>Rotate key</button></div>
+  </form>
+</dialog>
+
+<dialog id="dlg-fallback" aria-labelledby="dlg-fallback-t" aria-describedby="dlg-fallback-d">
+  <div class="grab" aria-hidden="true"></div>
+  <form method="dialog">
+    <div class="dh"><h2 id="dlg-fallback-t">Set a fallback email?</h2><p id="dlg-fallback-d" class="small muted">Meant for a one-person server, like a laptop.</p></div>
+    <div class="db">
+      <p>Every request without an Access header, <b>including every agent, CLI call and automation</b>, will be attributed to this email.</p>
+      <p>The guardrail ignores fallback identities, so this adds labels, not protection.</p>
+      <div class="alert warn small"><p class="t">This server looks shared</p><p>Requests here carry Cloudflare Access headers from 4 people. A fallback would only apply to header-less traffic, which here is mostly agents.</p></div>
+      <label class="f">Fallback email<input class="text" type="email" value="sam@example.test"></label>
+      <label class="check"><input type="checkbox" data-require> Only one person uses this server</label>
+    </div>
+    <div class="df"><button class="btn" value="cancel" autofocus>Cancel</button><button class="btn primary" value="confirm" data-confirm disabled>Set fallback email</button></div>
+  </form>
+</dialog>
+
+<dialog id="dlg-repin" aria-labelledby="dlg-repin-t" aria-describedby="dlg-repin-d">
+  <div class="grab" aria-hidden="true"></div>
+  <form method="dialog">
+    <div class="dh"><h2 id="dlg-repin-t" data-v-unpin="Unpin ew-lab-005-jo?">Re-pin ew-lab-003-priya to Priya?</h2><p id="dlg-repin-d" class="small muted" data-v-unpin="Identity will work out its owner from the name again.">Erin will no longer be shown as its owner.</p></div>
+    <div class="db">
+      <p data-v-unpin="Its name ends in -jo, which matches nobody in the directory, so it becomes unclaimed. Anyone can start threads on an unclaimed machine.">Threads Erin starts there will count as starts on another person's machine (rule A). In Enforce they'd be refused. Priya can start there without a warning.</p>
+      <p class="small muted" data-v-unpin="Threads already on record keep their attribution. Unpinning needs new Identity code.">Threads already on record keep their attribution. Re-pinning needs new Identity code.</p>
+    </div>
+    <div class="df"><button class="btn" value="cancel" autofocus>Cancel</button><button class="btn primary" value="confirm" data-confirm data-v-unpin="Unpin">Re-pin to Priya</button></div>
+  </form>
+</dialog>
+
+<dialog id="dlg-removeteam" aria-labelledby="dlg-removeteam-t" aria-describedby="dlg-removeteam-d">
+  <div class="grab" aria-hidden="true"></div>
+  <form method="dialog">
+    <div class="dh"><h2 id="dlg-removeteam-t">Remove ew-lab-001-main from team machines?</h2><p id="dlg-removeteam-d" class="small muted">It will show as unclaimed.</p></div>
+    <div class="db">
+      <p>Its name ends in <code>-main</code>, which matches nobody, so it becomes <b>unclaimed</b>, not anyone's machine.</p>
+      <div class="alert warn small"><p class="t">Automations would stop being allowed there</p><p>It's the only team machine BB can find. Under rule C, every automation that starts a thread would count as off a team machine: a would-refuse in Audit, refused in Enforce.</p></div>
+    </div>
+    <div class="df"><button class="btn" value="cancel" autofocus>Cancel</button><button class="btn danger solid" value="confirm" data-confirm>Remove from team</button></div>
+  </form>
+</dialog>
+
+<div class="toast" id="toast" role="status" aria-live="polite"></div>
+
+<!-- ═══════════════════════════ HOST CHROME TEMPLATES ═══════════════════════════ -->
+<template id="tpl-nav">
+  <span class="host-tag">BB host · approximate</span>
+  <h3>Settings</h3>
+  <ul><li>General</li><li>Appearance</li><li>Hosts</li><li>Projects</li></ul>
+  <h3>Plugins</h3>
+  <ul><li>Attractor</li><li>Canvas</li><li>Fabro</li><li class="on" aria-current="page">Identity</li><li>Workflows</li></ul>
+</template>
+
+<template id="tpl-hosttop">
+  <div class="host host-outline">
+    <span class="host-tag">BB host</span>
+    <div class="plug-head">
+      <div class="plug-icon" aria-hidden="true">Id</div>
+      <div><h3>Identity</h3><p>bb-plugin-identity 0.1.0 · <span data-v-broken="Needs configuration">Running</span></p></div>
+      <label class="toggle-host"><span>Enabled</span><input type="checkbox" checked disabled></label>
+    </div>
+    <p class="alert warn small hostmsg" data-show="broken">Identity's “directory” setting is invalid (Expected ',' or ']' after array element in JSON at position 412). Presence stays anonymous until it is fixed: bb plugin config identity set directory '&lt;json&gt;' then bb plugin reload identity.</p>
+    <div class="host-cfg">
+      <h4 class="cfg">Configuration</h4>
+      <details class="genform">
+        <summary><span>8 fields generated from <code>bb.settings.define</code>. They autosave. Shown collapsed here, but BB always renders them expanded above the plugin section.</span> <span class="cap core">BB core: group / collapse / hide</span></summary>
+        <div class="gf">
+          <div class="gf-row"><div><b>People directory</b><p>JSON array of { "person", "github", "displayName", "emails": [...] }.</p></div><div class="gf-ctl mono" data-v-fresh="[]" data-v-broken='[ { "person": "alex", … } { "person": "erin", …'>[ { "person": "alex", "github": "alexr", … } ×4 ]</div></div>
+          <div class="gf-row"><div><b>Team machines</b><p>Host names of the shared team machines, one per line or comma separated.</p></div><div class="gf-ctl mono" data-v-fresh="(empty)">ew-lab-001-main, ew-lab-009-ci</div></div>
+          <div class="gf-row"><div><b>Shared machine user</b><p>The Linux account threads run as on team and unclaimed machines.</p></div><div class="gf-ctl mono">ensembleworks-agent</div></div>
+          <div class="gf-row"><div><b>Enforcement</b><p>off / audit / enforce. A dispatch Identity cannot tie to a person is always allowed.</p></div><div class="gf-ctl" data-v-fresh="off ▾">audit ▾</div></div>
+          <div class="gf-row"><div><b>Fallback email</b><p>Used when a request carries no Access header. Leave empty on a shared server.</p></div><div class="gf-ctl">(empty)</div></div>
+          <div class="gf-row"><div><b>Browser identity picker</b><p>Attribution-only browser selection. Never counts as policy identity.</p></div><div class="gf-ctl" data-v-fresh="○ Off">● On</div></div>
+          <div class="gf-row"><div><b>Identity picker public origin</b><p>Exact browser origin. No forwarded header is trusted.</p></div><div class="gf-ctl mono" data-v-fresh="(empty)">https://bb.example.test</div></div>
+          <div class="gf-row"><div><b>Identity picker signing key</b><p>32-byte base64url HMAC key. Rotating expires all selections.</p></div><div class="gf-ctl">[set]</div></div>
+        </div>
+      </details>
+    </div>
+  </div>
+</template>
+
+<script>
+(function () {
+  "use strict";
+  var doc = document, root = doc.documentElement;
+  var $ = function (s, el) { return (el || doc).querySelector(s); };
+  var $$ = function (s, el) { return Array.prototype.slice.call((el || doc).querySelectorAll(s)); };
+
+  /* Host chrome: clone the templates into every placeholder, then apply the screen's variant. */
+  $$("[data-tpl]").forEach(function (slot) {
+    var tpl = doc.getElementById(slot.getAttribute("data-tpl"));
+    if (!tpl) return;
+    var frag = tpl.content.cloneNode(true);
+    var variant = slot.getAttribute("data-variant");
+    var holder = doc.createElement("div");
+    holder.appendChild(frag);
+    $$("[data-show]", holder).forEach(function (el) { if (el.getAttribute("data-show") !== variant) el.remove(); });
+    if (variant) $$("[data-v-" + variant + "]", holder).forEach(function (el) { el.textContent = el.getAttribute("data-v-" + variant); });
+    if (slot.tagName === "ASIDE") { while (holder.firstChild) slot.appendChild(holder.firstChild); }
+    else { slot.replaceWith.apply(slot, Array.prototype.slice.call(holder.childNodes)); }
+  });
+
+  /* Announcements */
+  var toastEl = doc.getElementById("toast"), toastTimer = 0;
+  function toast(msg) {
+    toastEl.textContent = msg;
+    toastEl.classList.add("on");
+    clearTimeout(toastTimer);
+    toastTimer = setTimeout(function () { toastEl.classList.remove("on"); }, 4200);
+  }
+
+  /* Direction tabs, with arrow / Home / End keys and hash routing. */
+  var tabs = $$("#optTabs [role=tab]");
+  function selectOption(id, opts) {
+    opts = opts || {};
+    var found = false;
+    tabs.forEach(function (t) {
+      var on = t.getAttribute("aria-controls") === id;
+      if (on) found = true;
+      t.setAttribute("aria-selected", on ? "true" : "false");
+      t.tabIndex = on ? 0 : -1;
+      var panel = doc.getElementById(t.getAttribute("aria-controls"));
+      if (panel) panel.hidden = !on;
+      if (on && opts.focusTab) t.focus();
+    });
+    if (!found) return false;
+    if (opts.push !== false) { try { history.replaceState(null, "", "#" + id); } catch (e) { /* opaque-origin preview */ } }
+    return true;
+  }
+  tabs.forEach(function (t, i) {
+    t.addEventListener("click", function () { selectOption(t.getAttribute("aria-controls")); });
+    t.addEventListener("keydown", function (e) {
+      var n = null;
+      if (e.key === "ArrowRight") n = (i + 1) % tabs.length;
+      else if (e.key === "ArrowLeft") n = (i - 1 + tabs.length) % tabs.length;
+      else if (e.key === "Home") n = 0;
+      else if (e.key === "End") n = tabs.length - 1;
+      if (n === null) return;
+      e.preventDefault();
+      selectOption(tabs[n].getAttribute("aria-controls"), { focusTab: true });
+    });
+  });
+  function fromHash() {
+    var h = (location.hash || "").replace(/^#/, "");
+    if (h && selectOption(h, { push: false })) return;
+    var scr = h && doc.querySelector('[data-screen="' + h + '"]');
+    if (scr) goScreen(h);
+  }
+
+  /* Screens inside each direction. */
+  function optionOf(el) { return el.closest(".option"); }
+  function goScreen(name, opts) {
+    opts = opts || {};
+    var scr = doc.querySelector('[data-screen="' + name + '"]');
+    if (!scr) return;
+    var opt = optionOf(scr);
+    if (opt.hidden && !opts.init) selectOption(opt.id);
+    $$(".screen", opt).forEach(function (s) { s.classList.toggle("is-on", s === scr); });
+    var radio = opt.querySelector('.screenbar input[value="' + name + '"]');
+    if (radio) radio.checked = true;
+    var viewing = opt.querySelector("[data-viewing]");
+    if (viewing) viewing.innerHTML = "Showing: <b></b>";
+    if (viewing) viewing.querySelector("b").textContent = scr.getAttribute("data-name") || name;
+    if (opts.focusFrom) {
+      var twin = scr.querySelector('[role=tab][data-go="' + name + '"]');
+      var target = twin || scr.querySelector(".sec-title");
+      if (target) { if (!twin) target.tabIndex = -1; target.focus({ preventScroll: !opts.scroll }); }
+    }
+    if (opts.scroll) opt.querySelector(".stage").scrollIntoView({ block: "start", behavior: "auto" });
+  }
+  $$(".screenbar input[type=radio]").forEach(function (r) {
+    r.addEventListener("change", function () { if (r.checked) goScreen(r.value); });
+  });
+  doc.addEventListener("click", function (e) {
+    var go = e.target.closest("[data-go]");
+    if (go) { e.preventDefault(); goScreen(go.getAttribute("data-go"), { focusFrom: go }); return; }
+    var jump = e.target.closest("[data-jump]");
+    if (jump) { e.preventDefault(); goScreen(jump.getAttribute("data-jump"), { focusFrom: jump, scroll: true }); return; }
+    var t = e.target.closest("[data-toast]");
+    if (t) { toast(t.getAttribute("data-toast")); return; }
+    var d = e.target.closest("[data-dialog]");
+    if (d) { openDialog(d.getAttribute("data-dialog"), d.getAttribute("data-variant"), d); return; }
+    var c = e.target.closest("[data-copy]");
+    if (c) { copyFrom(c); return; }
+    var of = e.target.closest("[data-open-form]");
+    if (of) {
+      e.preventDefault();
+      var scr = of.closest(".screen"), det = scr && scr.querySelector("details.genform");
+      if (det) { det.open = true; det.querySelector("summary").focus(); det.scrollIntoView({ block: "center" }); }
+    }
+  });
+
+  /* Inner tablists: arrow keys move between tabs and switch screens. */
+  $$(".itabs[role=tablist]").forEach(function (list) {
+    list.addEventListener("keydown", function (e) {
+      var items = $$("[role=tab]", list), i = items.indexOf(doc.activeElement);
+      if (i < 0) return;
+      var n = null;
+      if (e.key === "ArrowRight") n = (i + 1) % items.length;
+      else if (e.key === "ArrowLeft") n = (i - 1 + items.length) % items.length;
+      else if (e.key === "Home") n = 0; else if (e.key === "End") n = items.length - 1;
+      if (n === null) return;
+      e.preventDefault();
+      var el = items[n];
+      if (el.hasAttribute("data-go")) goScreen(el.getAttribute("data-go"), { focusFrom: el });
+      else el.focus();
+    });
+  });
+
+  /* Copy */
+  function copyFrom(btn) {
+    var pre = btn.parentElement.querySelector("pre") || btn.closest(".card, details").querySelector("pre");
+    var text = pre ? pre.textContent : "";
+    var ok = function () { toast("Copied to the clipboard."); };
+    var no = function () { toast("Copy isn't available in this preview. Select the text instead."); };
+    try { if (navigator.clipboard && navigator.clipboard.writeText) navigator.clipboard.writeText(text).then(ok, no); else no(); }
+    catch (err) { no(); }
+  }
+
+  /* Viewport, theme, capability labels. */
+  var capText = { desktop: "Desktop · the settings page at full width", narrow: "Narrow sidebar · 360px container (BB's settings in a split pane)", mobile: "Mobile · 390px, BB's compact layout: settings list → detail page, dialogs become bottom sheets" };
+  function setViewport(vp) {
+    $$(".device[data-vp]").forEach(function (d) { if (d.getAttribute("data-vp") !== "fixed") d.setAttribute("data-vp", vp); });
+    $$("[data-cap]").forEach(function (c) { c.textContent = capText[vp]; });
+    doc.body.classList.toggle("vp-compact", vp !== "desktop");
+  }
+  $$('input[name=vp]').forEach(function (r) { r.addEventListener("change", function () { if (r.checked) setViewport(r.value); }); });
+  $("#theme").addEventListener("change", function (e) {
+    var v = e.target.value;
+    root.classList.remove("dark", "theme-auto");
+    if (v === "dark") root.classList.add("dark");
+    else if (v === "auto") root.classList.add("theme-auto");
+  });
+  $("#caps").addEventListener("change", function (e) { doc.body.classList.toggle("hide-caps", !e.target.checked); });
+
+  /* Dialogs: Cancel is focused first, confirm is gated, and confirming changes nothing. */
+  var lastOpener = null, lastVariant = null;
+  function openDialog(id, variant, opener) {
+    var dlg = doc.getElementById(id);
+    if (!dlg) return;
+    lastOpener = opener || null;
+    $$("[data-v-unpin]", dlg).forEach(function (el) {
+      if (!el.hasAttribute("data-v-default")) el.setAttribute("data-v-default", el.textContent);
+      el.textContent = variant === "unpin" ? el.getAttribute("data-v-unpin") : el.getAttribute("data-v-default");
+    });
+    $$("[data-require]", dlg).forEach(function (c) { c.checked = false; });
+    $$("[data-require-text]", dlg).forEach(function (c) { c.value = ""; });
+    gate(dlg);
+    dlg.returnValue = "";
+    if (typeof dlg.showModal === "function") dlg.showModal(); else dlg.setAttribute("open", "");
+    var cancel = dlg.querySelector("[autofocus]");
+    if (cancel) cancel.focus();
+  }
+  function gate(dlg) {
+    var btn = dlg.querySelector("[data-confirm]");
+    if (!btn) return;
+    var need = $$("[data-require]", dlg), needText = $$("[data-require-text]", dlg);
+    if (!need.length && !needText.length) return;
+    var ok = need.every(function (c) { return c.checked; }) &&
+      needText.every(function (i) { return i.value.trim().toLowerCase() === i.getAttribute("data-require-text"); });
+    btn.disabled = !ok;
+  }
+  $$("dialog").forEach(function (dlg) {
+    dlg.addEventListener("input", function () { gate(dlg); });
+    dlg.addEventListener("change", function () { gate(dlg); });
+    dlg.addEventListener("close", function () {
+      if (dlg.returnValue === "confirm") toast("Mockup only: nothing was changed.");
+      if (dlg.id === "dlg-enforce" && dlg.returnValue !== "confirm") {
+        $$('input[name=t-mode][value=audit]').forEach(function (r) { r.checked = true; if (lastOpener && lastOpener.name === r.name) lastOpener = r; });
+      }
+      if (lastOpener && doc.contains(lastOpener)) { try { lastOpener.focus(); } catch (e) {} }
+    });
+    dlg.addEventListener("click", function (e) { if (e.target === dlg) dlg.close("cancel"); });
+  });
+  $$("[data-dialog-on-check]").forEach(function (r) {
+    r.addEventListener("change", function () { if (r.checked) openDialog(r.getAttribute("data-dialog-on-check"), null, r); });
+  });
+
+  /* Direction 2 · colour swatches (radiogroup with roving focus) */
+  $$(".swatches").forEach(function (g) {
+    var items = $$("[role=radio]", g);
+    function pick(el, focus) {
+      items.forEach(function (b) { b.setAttribute("aria-checked", b === el ? "true" : "false"); b.tabIndex = b === el ? 0 : -1; });
+      if (focus) el.focus();
+    }
+    pick(items.filter(function (b) { return b.getAttribute("aria-checked") === "true"; })[0] || items[0], false);
+    items.forEach(function (b, i) {
+      b.addEventListener("click", function () { pick(b, false); toast("Mockup only: identity_set_person_color exists today. The change would be logged."); });
+      b.addEventListener("keydown", function (e) {
+        var n = null;
+        if (e.key === "ArrowRight" || e.key === "ArrowDown") n = (i + 1) % items.length;
+        if (e.key === "ArrowLeft" || e.key === "ArrowUp") n = (i - 1 + items.length) % items.length;
+        if (n === null) return;
+        e.preventDefault(); pick(items[n], true);
+      });
+    });
+  });
+  /* Direction 2 · people list (only Alex's detail is drawn) */
+  $$(".plist button[aria-pressed]").forEach(function (b) {
+    b.addEventListener("click", function () {
+      if (b.classList.contains("sel")) return;
+      toast("Only Alex Rivera's detail is drawn in this mockup.");
+    });
+  });
+  /* Direction 2 · machine filters */
+  $$('[aria-label="Filter machines"]').forEach(function (grp) {
+    var btns = $$("button", grp), table = grp.parentElement.querySelector("table.mt");
+    btns.forEach(function (b, i) {
+      b.addEventListener("click", function () {
+        btns.forEach(function (x) { x.setAttribute("aria-pressed", x === b ? "true" : "false"); });
+        $$("tbody tr", table).forEach(function (tr) {
+          var status = tr.querySelector('[data-l="Status"]').textContent;
+          var show = i === 0 || (i === 1 && tr.classList.contains("attn")) || (i === 2 && /Team/.test(status)) || (i === 3 && /Unclaimed/.test(status));
+          tr.hidden = !show;
+        });
+      });
+    });
+  });
+
+  /* Direction 2 · This browser: per-state copy. Wording follows the plugin's real strings. */
+  var BS = {
+    stale:    { title: "You: anonymous", sub: "Your earlier choice is no longer in the directory.", r1: "None on this request.", r2: "“Jo Park”, which is no longer in the directory.", r3: "Skipped. A stale choice never falls through to the fallback.", result: "Anonymous", r4: "Threads you start show no starter.", picknote: "Your earlier choice is no longer in the directory. Choose again.", win: 4 },
+    valid:    { title: "You: Priya Shah", sub: "Chosen in this browser, for attribution only.", r1: "None on this request.", r2: "“Priya Shah”, valid until 2 Oct. This decided.", r3: "Not reached.", result: "Priya Shah (attribution only)", r4: "The guardrail treats you as identity-less, so nothing you do is refused.", picknote: "Choose a name for attribution in this browser. This does not verify who you are.", win: 2 },
+    expired:  { title: "You: anonymous", sub: "Your browser choice expired.", r1: "None on this request.", r2: "Expired on 20 Sep.", r3: "Skipped. An expired choice never falls through to the fallback.", result: "Anonymous", r4: "Choose again to be named.", picknote: "Your choice expired. Choose again.", win: 4 },
+    override: { title: "You: Sam Okafor", sub: "From the Cloudflare Access email, read as-is and not verified.", r1: "sam@example.test matches Sam Okafor. This decided, and it counts for the guardrail.", r2: "“Priya Shah”, valid but outranked.", r3: "Not reached.", result: "Sam Okafor", r4: "A browser choice can't override a sign-in email.", picknote: "A sign-in email already names you here, so a browser choice would be ignored.", win: 1 },
+    invalid:  { title: "You: anonymous", sub: "The signing key was rotated, so your earlier choice is no longer valid.", r1: "None on this request.", r2: "Signature doesn't match the current key.", r3: "Skipped. An invalid choice never falls through to the fallback.", result: "Anonymous", r4: "Choose again to be named.", picknote: "Choose a name for attribution in this browser. This does not verify who you are.", win: 4 }
+  };
+  function applyBS(k) {
+    var s = BS[k], scr = doc.querySelector('[data-screen="d-browser"]');
+    if (!s || !scr) return;
+    $$("[data-bs]", scr).forEach(function (el) { var v = s[el.getAttribute("data-bs")]; if (v != null) el.textContent = v; });
+    $$("[data-bs-row]", scr).forEach(function (li) { li.classList.toggle("win", +li.getAttribute("data-bs-row") === s.win); });
+    var av = scr.querySelector(".idbar .av");
+    if (av) {
+      var named = s.win === 1 || s.win === 2;
+      av.className = named ? "av" : "av none";
+      av.textContent = s.win === 1 ? "SO" : s.win === 2 ? "PS" : "?";
+      av.style.setProperty("--c", s.win === 1 ? "#2f6bb8" : "#2a6fc0");
+    }
+  }
+  $$('input[name=bstate]').forEach(function (r) { r.addEventListener("change", function () { if (r.checked) applyBS(r.value); }); });
+  applyBS("stale");
+
+  /* Direction 3 · simulator. Mirrors decideGuardrail (guardrail.ts); refusal text abridged. */
+  var HOSTS = {
+    "ew-lab-004-erin": { kind: "person", person: "erin", desc: "Erin Example's machine" },
+    "ew-lab-002-sam": { kind: "person", person: "sam", desc: "Sam Okafor's machine" },
+    "ew-lab-001-main": { kind: "team", desc: "the team machine" },
+    "scratch-7": { kind: "unclaimed", desc: "unclaimed" },
+    "ew-lab-003-priya": { kind: "person", person: "erin", desc: "Erin Example's machine (renamed since it was pinned)" }
+  };
+  var WHO = {
+    "sam-access": { person: "sam", name: "Sam Okafor" },
+    "priya-access": { person: "priya", name: "Priya Shah" },
+    "priya-browser": { person: null, note: "A name chosen in a browser is attribution only, so the guardrail sees no identity." },
+    "fallback": { person: null, note: "An identity from the fallback email counts as untied." },
+    "agent": { person: null, note: "An agent's own dispatch carries no identity, and that is always allowed." },
+    "automation": { person: null, automation: true }
+  };
+  var MINE = { sam: ["ew-lab-002-sam"], priya: [] };
+  function decide(who, what, hostName) {
+    var w = WHO[who], h = HOSTS[hostName];
+    if (w.automation) {
+      if (what !== "start") return { verdict: "proceed", why: "An automation sending into an existing thread arrives unstamped (origin null), so rule C can't see it. This is a known blind spot." };
+      if (h.kind !== "team") return { verdict: "reject", rule: "C", msg: "Automations run on a team machine only. This one is headed for " + hostName + " (" + h.desc + "). Move it to a team machine (ew-lab-001-main, ew-lab-009-ci), or add " + hostName + " to Identity's teamMachines setting." };
+      return { verdict: "proceed", why: "Automation on a team machine." };
+    }
+    if (!w.person) return { verdict: "proceed", why: w.note };
+    if (what === "followup-alex") return { verdict: "reject", rule: "B", msg: "This thread was started by Alex Rivera, and other people's threads are read-only. Ask Alex Rivera to send it, or start a thread of your own." };
+    if (what === "start" && h.kind === "person" && h.person !== w.person) {
+      var mine = MINE[w.person] || [];
+      var fix = mine.length ? "Pick one of yours (" + mine.join(", ") + "), or the team machine (ew-lab-001-main, ew-lab-009-ci), and start the thread there."
+        : "Identity knows no machine of your own yet; start the thread on the team machine (ew-lab-001-main, ew-lab-009-ci) instead.";
+      return { verdict: "reject", rule: "A", msg: hostName + " is " + h.desc + ". " + fix };
+    }
+    return { verdict: "proceed", why: what === "start" ? (h.kind === "person" ? "Their own machine." : "Team and unclaimed machines are always fine.") : "Their own thread." };
+  }
+  function runSim() {
+    var box = doc.querySelector('[data-screen="t-why"]');
+    if (!box) return;
+    var g = function (k) { return box.querySelector('[data-sim="' + k + '"]').value; };
+    var r = decide(g("who"), g("what"), g("host"));
+    var cell = function (k) { return box.querySelector('[data-sim-out="' + k + '"]'); };
+    cell("off").innerHTML = '<span class="pill ok"><span class="ic" aria-hidden="true">✓</span>Proceeds</span> <span class="tiny muted">not logged</span>';
+    cell("audit").innerHTML = r.verdict === "reject"
+      ? '<span class="pill warn"><span class="ic" aria-hidden="true">!</span>Proceeds</span> <span class="tiny muted">logged as would-refuse · rule ' + r.rule + '</span>'
+      : '<span class="pill ok"><span class="ic" aria-hidden="true">✓</span>Proceeds</span> <span class="tiny muted">logged</span>';
+    cell("enforce").innerHTML = r.verdict === "reject"
+      ? '<span class="pill bad"><span class="ic" aria-hidden="true">✕</span>Refused · rule ' + r.rule + '</span>'
+      : '<span class="pill ok"><span class="ic" aria-hidden="true">✓</span>Proceeds</span>';
+    var msg = box.querySelector("[data-sim-msg]");
+    msg.textContent = "";
+    var b = doc.createElement("b");
+    b.textContent = r.verdict === "reject" ? "Refusal they would see (abridged): " : "Why: ";
+    msg.appendChild(b);
+    msg.appendChild(doc.createTextNode(r.verdict === "reject" ? "“" + r.msg + "”" : r.why));
+  }
+  $$("[data-sim]").forEach(function (s) { s.addEventListener("change", runSim); });
+  runSim();
+
+  /* Label table.mini cells with their column header for the stacked narrow layout. */
+  $$("table.mini").forEach(function (t) {
+    var heads = $$("thead th", t).map(function (th) { return th.textContent.trim(); });
+    $$("tbody tr", t).forEach(function (tr) {
+      Array.prototype.forEach.call(tr.children, function (cell, i) { if (cell.tagName === "TD" && heads[i]) cell.setAttribute("data-l", heads[i]); });
+    });
+  });
+
+  /* Initial state */
+  $$(".option").forEach(function (opt) { var on = opt.querySelector(".screen.is-on"); if (on) goScreen(on.getAttribute("data-screen"), { init: true }); });
+  selectOption("opt-guided", { push: false });
+  setViewport("desktop");
+  fromHash();
+  window.addEventListener("hashchange", fromHash);
+})();
+</script>
+</body>
+</html>
