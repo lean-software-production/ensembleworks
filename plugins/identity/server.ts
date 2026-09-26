@@ -3,6 +3,7 @@ import { randomBytes } from "node:crypto";
 import { z } from "zod";
 import {
   AttributionLedger,
+  MAX_STARTER_RECORDS,
   attributeDispatch,
   starterSummarySchema,
   type StarterRecord,
@@ -12,6 +13,7 @@ import {
   HostPins,
   classifyHost,
   parseTeamMachines,
+  personFromHostName,
   type HostClassification,
 } from "./hosts.js";
 import { makeGuardrail } from "./guardrail.js";
@@ -26,21 +28,41 @@ import {
   parseEnforcement,
   postDispatchAuditLine,
   colorChangeAuditLine,
+  pinChangeAuditLine,
+  settingsChangeAuditLine,
   type AuditLine,
   type EnforcementMode,
+  type SettingsChange,
 } from "./audit.js";
 import { parseDirectory, resolveRequester, type Person, type ResolvedIdentity } from "./people.js";
 import { identityMutationAllowed, mintSelection, readNamedCookie, SELECTION_COOKIE, SelectionCommitStore, selectionCookie, selectionCookieName, verifySelection } from "./selection.js";
-import { QueuedRequesterLedger, digestQueuedContent } from "./queued-requester.js";
+import { MAX_QUEUED_REQUESTERS, QueuedRequesterLedger, digestQueuedContent } from "./queued-requester.js";
 import { PersonColorStore, SeenPeople } from "./person-store.js";
 import { buildRoster, SEEN_UNKNOWN_CAVEAT } from "./roster.js";
 import {
   ACCESS_EMAIL_HEADER,
   installRequestContext,
   normalizeEmail,
+  SELF_TEST_EMAIL,
   selfTestRequestContext,
   type SelfTestResult,
 } from "./request-context.js";
+import {
+  AUDIT_JQ_COMMAND,
+  PICKER_STATUSES,
+  checkSettingsPatch,
+  enforceRisks,
+  lintConfig,
+  readiness,
+  redactDiagnostics,
+  settingsPatchSchema,
+  validateSelectionOrigin,
+  type AdminFacts,
+  type LedgerFill,
+  type PickerStatus,
+  type SigningKeyStatus,
+  type WritableSettings,
+} from "./settings-admin.js";
 
 export const LEASE_TTL_MS = 25_000;
 export const TYPING_TTL_MS = 3_000;
@@ -284,6 +306,76 @@ const colorWrite = z.discriminatedUnion("ok", [
   z.object({ ok: z.literal(false), person: z.string(), reason: z.string() }).strict(),
 ]);
 
+const selfTestSchema = z.object({
+  ok: z.boolean(),
+  detail: z.string(),
+  cookie: z.object({ ok: z.boolean(), detail: z.string() }).strict(),
+}).strict();
+const lintIssue = z.object({
+  id: z.string(),
+  severity: z.enum(["error", "warning", "info"]),
+  message: z.string(),
+  fix: z.string(),
+}).strict();
+const readinessItem = z.object({
+  id: z.enum(["profile", "people", "machines", "browser", "guardrail", "check"]),
+  label: z.string(),
+  status: z.enum(["ok", "attention", "off", "problem"]),
+  text: z.string(),
+  tab: z.enum(["profile", "people", "machines", "browser", "rules", "health"]),
+}).strict();
+const ledgerCount = z.object({ count: z.number().int().nonnegative().nullable(), max: z.number().int() }).strict();
+
+/**
+ * Everything the settings section reads in one call. It carries the signing key's
+ * STATUS only — never the key — and the directory as a count and an error, since the
+ * directory itself is owned by Ansible and edited in the infra repo, not here.
+ */
+const settingsOverview = z.object({
+  settings: z.object({
+    teamMachines: z.string(),
+    sharedMachineUser: z.string(),
+    enforcement: z.enum(ENFORCEMENT_MODES),
+    fallbackEmail: z.string(),
+    selfSelectedIdentity: z.boolean(),
+    selectionPublicOrigin: z.string(),
+    signingKey: z.enum(["valid", "invalid", "missing"]),
+  }).strict(),
+  directory: z.object({ ok: z.boolean(), error: z.string().nullable(), people: z.number().int().nonnegative() }).strict(),
+  /** Nobody registered and every writable setting at its default: the page shows its first-run path. */
+  firstRun: z.boolean(),
+  /** This request, or any since load, carried the Access header (the self-test's never counts). */
+  accessSeen: z.boolean(),
+  pickerStatus: z.enum(PICKER_STATUSES),
+  selfTest: selfTestSchema.nullable(),
+  ledgers: z.object({ starters: ledgerCount, queued: ledgerCount }).strict(),
+  conflicts: z.number().int().nonnegative(),
+  enforceRisks: z.array(z.string()),
+  readiness: z.array(readinessItem).length(6),
+  lint: z.array(lintIssue),
+  auditCommand: z.string(),
+}).strict();
+
+/** What a settings write did. A refusal is an ANSWER, not a thrown RPC error. */
+const settingsWrite = z.discriminatedUnion("ok", [
+  z.object({ ok: z.literal(true), changed: z.array(z.string()) }).strict(),
+  z.object({ ok: z.literal(false), reason: z.string() }).strict(),
+]);
+const rotateAnswer = z.discriminatedUnion("ok", [
+  z.object({ ok: z.literal(true) }).strict(),
+  z.object({ ok: z.literal(false), reason: z.string() }).strict(),
+]);
+const pinResolution = z.discriminatedUnion("ok", [
+  z.object({ ok: z.literal(true), machine: hostClassification.nullable() }).strict(),
+  z.object({
+    ok: z.literal(false),
+    reason: z.enum(["unknown-host", "no-pin", "not-in-directory", "no-person", "write-failed"]),
+  }).strict(),
+]);
+
+export type SettingsOverview = z.infer<typeof settingsOverview>;
+export type SettingsWriteAnswer = z.infer<typeof settingsWrite>;
+export type PinResolution = z.infer<typeof pinResolution>;
 export type RosterAnswer = z.infer<typeof roster>;
 export type ColorWriteAnswer = z.infer<typeof colorWrite>;
 
@@ -363,6 +455,43 @@ export const rpcContract = defineRpcContract({
   identity_clear_person_color: {
     input: z.object({ person: z.string().min(1).max(128) }).strict(),
     output: colorWrite,
+  },
+  /** The settings section's whole picture: settings, readiness, lint, ledgers, self-test. */
+  identity_settings_overview: {
+    input: z.object({}).strict().nullish(),
+    output: settingsOverview,
+  },
+  /**
+   * Write the settings the section owns. `directory` and `selectionSigningKey` are NOT
+   * in the schema: the directory is Ansible's, and the key only ever changes by rotation.
+   * Every write that changes something logs one `settings.change` line.
+   */
+  identity_update_settings: {
+    input: settingsPatchSchema,
+    output: settingsWrite,
+  },
+  /** Mint a fresh signing key. Every existing browser selection expires at once. */
+  identity_rotate_signing_key: {
+    input: z.object({ confirm: z.literal("rotate") }).strict(),
+    output: rotateAnswer,
+  },
+  /** An operator's answer to a pin conflict: keep the pin, move it, or forget it. */
+  identity_resolve_pin: {
+    input: z.object({
+      hostId: z.string().min(1).max(200),
+      action: z.enum(["keep", "repin", "unpin"]),
+      person: z.string().min(1).max(200).optional(),
+    }).strict(),
+    output: pinResolution,
+  },
+  identity_rerun_self_test: {
+    input: z.object({}).strict().nullish(),
+    output: z.object({ selfTest: selfTestSchema, pickerStatus: z.enum(PICKER_STATUSES) }).strict(),
+  },
+  /** A redacted support bundle: counts and statuses, never an email or a key. */
+  identity_diagnostics: {
+    input: z.object({}).strict().nullish(),
+    output: z.object({ text: z.string() }).strict(),
   },
   presence_heartbeat: {
     input: z.object({ tabId: opaqueId, viewerId: opaqueId, location }).strict(),
@@ -646,6 +775,11 @@ export default async function plugin(bb: BbPluginApi) {
   let selfSelectedIdentity = false;
   let selectionPublicOrigin = "";
   let selectionKey: Buffer | null = null;
+  /** For the settings section: why the directory did not parse, and the key's state. */
+  let directoryError: string | null = null;
+  let signingKeyStatus: SigningKeyStatus = "missing";
+  /** Whether any request since load carried the Access header — a hint the server is shared. */
+  let accessSeen = false;
   const applySettings = (
     values: {
       directory: string;
@@ -662,19 +796,18 @@ export default async function plugin(bb: BbPluginApi) {
     fallbackEmail = values.fallbackEmail;
     enforcement = parseEnforcement(values.enforcement);
     selfSelectedIdentity = values.selfSelectedIdentity;
-    try {
-      const parsedOrigin = new URL(values.selectionPublicOrigin);
-      const localHttp = parsedOrigin.protocol === "http:"
-        && ["localhost", "127.0.0.1", "[::1]"].includes(parsedOrigin.hostname);
-      selectionPublicOrigin = parsedOrigin.origin === values.selectionPublicOrigin
-        && (parsedOrigin.protocol === "https:" || localHttp) ? parsedOrigin.origin : "";
-    } catch { selectionPublicOrigin = ""; }
+    selectionPublicOrigin = validateSelectionOrigin(values.selectionPublicOrigin) ?? "";
     requestContext.setCookieName(selectionPublicOrigin ? selectionCookieName(selectionPublicOrigin) : SELECTION_COOKIE);
     const decoded = values.selectionSigningKey ? Buffer.from(values.selectionSigningKey, "base64url") : null;
     selectionKey = decoded?.length === 32 ? decoded : null;
+    signingKeyStatus = !values.selectionSigningKey ? "missing" : selectionKey ? "valid" : "invalid";
     teamMachines = parseTeamMachines(values.teamMachines);
     sharedMachineUser = values.sharedMachineUser.trim() || "ensembleworks-agent";
+    // A settings change can reclassify every machine (the team list, the directory), so
+    // the next read lists them afresh rather than serving a stale label for 30 seconds.
+    machineCache = null;
     const parsed = parseDirectory(values.directory);
+    directoryError = parsed.ok ? null : parsed.error;
     if (parsed.ok) {
       people = parsed.people;
       pins.setPeople(people);
@@ -717,7 +850,7 @@ export default async function plugin(bb: BbPluginApi) {
   };
   const auditing = () => enforcement !== "off";
   let selfTest: SelfTestResult | null = null;
-  const pickerStatus = () => !selfSelectedIdentity ? "off"
+  const pickerStatus = (): PickerStatus => !selfSelectedIdentity ? "off"
     : selectionPublicOrigin === "" ? "origin-not-configured"
       : selectionKey === null ? "signing-key-unavailable"
         : selfTest?.cookie.ok !== true ? "cookie-bridge-unavailable" : "ready";
@@ -742,6 +875,7 @@ export default async function plugin(bb: BbPluginApi) {
    */
   const requestAuditor = new RequestAuditor({ emit: auditLine, now: () => Date.now() });
   const stopObserving = requestContext.observe((facts) => {
+    if (facts.email && facts.email !== SELF_TEST_EMAIL) accessSeen = true;
     if (!auditing()) return;
     requestAuditor.observe({
       id: facts.id,
@@ -1030,16 +1164,22 @@ export default async function plugin(bb: BbPluginApi) {
    *
    * A refused write logs nothing: nothing changed, so there is nothing to account for.
    */
-  const auditColorChange = (written: { ok: boolean; person: string; from?: string | null; to?: string | null }) => {
-    if (!written.ok) return;
+  /** Who is making an admin change right now, as the colour/settings/pin lines name them. */
+  const adminActor = () => {
     const identity = currentIdentity();
-    emitAudit(auditLine, colorChangeAuditLine({
+    return {
       at: Date.now(),
       ...currentRequestFields(),
       mode: enforcement,
       by: summarize(identity.person),
       byEmail: identity.email,
       byProvenance: identity.provenance,
+    };
+  };
+  const auditColorChange = (written: { ok: boolean; person: string; from?: string | null; to?: string | null }) => {
+    if (!written.ok) return;
+    emitAudit(auditLine, colorChangeAuditLine({
+      ...adminActor(),
       subject: written.person,
       from: written.from ?? null,
       to: written.to ?? null,
@@ -1138,6 +1278,59 @@ export default async function plugin(bb: BbPluginApi) {
     );
   };
   let selfTestTimer: ReturnType<typeof setTimeout> | undefined = setTimeout(() => void runSelfTest(5), 500);
+  /** An operator's re-run, shared by every caller that asks while it is in flight. */
+  let selfTestRun: Promise<SelfTestResult> | null = null;
+  const rerunSelfTest = (): Promise<SelfTestResult> => {
+    if (selfTestTimer !== undefined) clearTimeout(selfTestTimer);
+    selfTestTimer = undefined;
+    selfTestRun ??= runSelfTest(0).then(() => selfTest!).finally(() => { selfTestRun = null; });
+    return selfTestRun;
+  };
+
+  // ── The settings section (2026-09-26): read the whole picture, write what it owns. ──
+  const WRITABLE_DEFAULTS: WritableSettings = {
+    teamMachines: "",
+    sharedMachineUser: "ensembleworks-agent",
+    enforcement: "off",
+    fallbackEmail: "",
+    selfSelectedIdentity: false,
+    selectionPublicOrigin: "",
+  };
+  const WRITABLE_KEYS = Object.keys(WRITABLE_DEFAULTS) as Array<keyof WritableSettings>;
+  const adminFacts = async (): Promise<AdminFacts & { stored: WritableSettings }> => {
+    const current = await settings.get();
+    const listed = await machines();
+    const email = requestContext.current()?.email ?? null;
+    return {
+      stored: {
+        teamMachines: current.teamMachines,
+        sharedMachineUser: current.sharedMachineUser,
+        enforcement: parseEnforcement(current.enforcement),
+        fallbackEmail: current.fallbackEmail,
+        selfSelectedIdentity: current.selfSelectedIdentity,
+        selectionPublicOrigin: current.selectionPublicOrigin,
+      },
+      directoryError,
+      people,
+      teamMachines,
+      machines: listed.machines,
+      machinesUnavailable: listed.unavailable,
+      enforcement,
+      fallbackEmail,
+      selfSelectedIdentity,
+      selectionPublicOrigin: current.selectionPublicOrigin,
+      signingKey: signingKeyStatus,
+      pickerStatus: pickerStatus(),
+      selfTest,
+      accessSeen: accessSeen || (email !== null && email !== SELF_TEST_EMAIL),
+    };
+  };
+  const ledgerFill = async (): Promise<LedgerFill> => ({
+    starters: { count: await ledger.count(), max: MAX_STARTER_RECORDS },
+    queued: { count: await queuedRequesters.count(), max: MAX_QUEUED_REQUESTERS },
+  });
+  /** Re-read and re-apply at once, rather than trusting `onChange` to have run by now. */
+  const reapply = async () => applySettings(await settings.get(), false);
 
   bb.rpc.register(rpcContract, {
     identity_whoami: () => whoamiFor(requestContext.current()?.email ?? null),
@@ -1202,6 +1395,89 @@ export default async function plugin(bb: BbPluginApi) {
       const written = await colors.clear(person);
       auditColorChange(written);
       return written;
+    },
+    identity_settings_overview: async () => {
+      const { stored, ...facts } = await adminFacts();
+      const lint = lintConfig(facts);
+      return {
+        settings: { ...stored, signingKey: signingKeyStatus },
+        directory: { ok: directoryError === null, error: directoryError, people: people.length },
+        firstRun: people.length === 0 && WRITABLE_KEYS.every((key) => stored[key] === WRITABLE_DEFAULTS[key]),
+        accessSeen: facts.accessSeen,
+        pickerStatus: facts.pickerStatus,
+        selfTest,
+        ledgers: await ledgerFill(),
+        conflicts: facts.machines.filter((machine) => machine.conflict !== null).length,
+        enforceRisks: enforceRisks(facts),
+        readiness: readiness(facts, lint),
+        lint,
+        auditCommand: AUDIT_JQ_COMMAND,
+      };
+    },
+    identity_update_settings: async (input) => {
+      const verdict = checkSettingsPatch(input, { enforcement });
+      if (!verdict.ok) return verdict;
+      const current = await settings.get();
+      const changes: SettingsChange[] = [];
+      for (const key of WRITABLE_KEYS) {
+        const to = verdict.values[key];
+        if (to !== undefined && to !== current[key]) changes.push({ key, from: current[key], to });
+      }
+      if (changes.length === 0) return { ok: true as const, changed: [] };
+      try {
+        await settings.experimental_set(Object.fromEntries(changes.map(({ key, to }) => [key, to])));
+      } catch (error) {
+        bb.log.warn(`identity: a settings write failed: ${(error as Error).message}`);
+        return { ok: false as const, reason: "write-failed" };
+      }
+      await reapply();
+      emitAudit(auditLine, settingsChangeAuditLine({ ...adminActor(), changes }));
+      return { ok: true as const, changed: changes.map(({ key }) => key) };
+    },
+    identity_rotate_signing_key: async () => {
+      try {
+        await settings.experimental_set({ selectionSigningKey: randomBytes(32).toString("base64url") });
+      } catch (error) {
+        bb.log.warn(`identity: rotating the signing key failed: ${(error as Error).message}`);
+        return { ok: false as const, reason: "write-failed" };
+      }
+      await reapply();
+      emitAudit(auditLine, settingsChangeAuditLine({ ...adminActor(),
+        changes: [{ key: "selectionSigningKey", from: "[secret]", to: "[rotated]" }] }));
+      return { ok: true as const };
+    },
+    identity_resolve_pin: async ({ hostId, action, person: wanted }) => {
+      const find = async () => {
+        machineCache = null;
+        return (await machines()).machines.find((machine) => machine.hostId === hostId) ?? null;
+      };
+      const found = await find();
+      if (found === null) return { ok: false as const, reason: "unknown-host" as const };
+      const host = { id: found.hostId, name: found.hostName };
+      const before = await pins.get(hostId);
+      let to: string | null;
+      if (action === "repin") {
+        const person = wanted ?? personFromHostName(host.name, people)?.person;
+        if (person === undefined) return { ok: false as const, reason: "no-person" as const };
+        if (!people.some((entry) => entry.person === person)) return { ok: false as const, reason: "not-in-directory" as const };
+        if (await pins.repin(host, person) === null) return { ok: false as const, reason: "write-failed" as const };
+        to = person;
+      } else {
+        if (before === null) return { ok: false as const, reason: "no-pin" as const };
+        const written = action === "keep" ? await pins.keep(host) !== null : await pins.unpin(hostId);
+        if (!written) return { ok: false as const, reason: "write-failed" as const };
+        to = action === "keep" ? before.person : null;
+      }
+      const machine = await find();
+      emitAudit(auditLine, pinChangeAuditLine({ ...adminActor(), hostId, hostName: host.name, action,
+        from: before?.person ?? null, to }));
+      return { ok: true as const, machine };
+    },
+    identity_rerun_self_test: async () => ({ selfTest: await rerunSelfTest(), pickerStatus: pickerStatus() }),
+    identity_diagnostics: async () => {
+      const { stored: _stored, ...facts } = await adminFacts();
+      return { text: redactDiagnostics({ ...facts, generatedAt: Date.now(), ledgers: await ledgerFill(),
+        sharedMachineUser, lint: lintConfig(facts) }) };
     },
     presence_heartbeat: ({ tabId, viewerId, location }) => {
       const person = summarizePresence(currentIdentity());

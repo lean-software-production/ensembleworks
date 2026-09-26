@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { QueuedRequesterLedger, digestQueuedContent, type QueuedRequester } from "./queued-requester.js";
 import type { KvLike } from "./kv.js";
 
@@ -56,5 +56,39 @@ describe("queued requester ledger", () => {
     await ledger.forget("q2");
     expect(await ledger.lookup("q2")).toBeNull();
     expect(await ledger.record(snapshot("q2", "matt"))).toBe(false);
+  });
+});
+
+describe("queued requester ledger count", () => {
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  it("answers how many rows the index holds, from one index read", async () => {
+    const kv = fakeKv();
+    const ledger = new QueuedRequesterLedger(kv);
+    await ledger.record(snapshot("q1", "matt"));
+    await ledger.record(snapshot("q2", null));
+    const get = vi.spyOn(kv, "get");
+    expect(await ledger.count()).toBe(2);
+    expect(get).toHaveBeenCalledTimes(1);
+    expect(get).toHaveBeenCalledWith("identity/queued-requester/v1/index");
+  });
+
+  it("answers zero for an empty ledger", async () => {
+    expect(await new QueuedRequesterLedger(fakeKv()).count()).toBe(0);
+  });
+
+  it("answers null rather than throwing when the index cannot be read", async () => {
+    const broken: KvLike = { ...fakeKv(), get: async () => { throw new Error("index down"); } };
+    expect(await new QueuedRequesterLedger(broken).count()).toBeNull();
+  });
+
+  it("answers null rather than hanging when storage never answers", async () => {
+    vi.useFakeTimers();
+    const wedged: KvLike = { ...fakeKv(), get: () => new Promise(() => undefined) };
+    const answer = new QueuedRequesterLedger(wedged).count();
+    await vi.advanceTimersByTimeAsync(1_000);
+    expect(await answer).toBeNull();
   });
 });

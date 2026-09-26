@@ -9,8 +9,10 @@ import {
   formatAuditLine,
   normalizeAuditPath,
   parseEnforcement,
+  pinChangeAuditLine,
   postDispatchAuditLine,
   requestStreamChoice,
+  settingsChangeAuditLine,
   type AuditLine,
 } from "./audit.js";
 import type { StarterSummary } from "./attribution.js";
@@ -345,5 +347,80 @@ describe("formatAuditLine / emitAudit", () => {
     cyclic.self = cyclic;
     const sink = vi.fn();
     expect(() => emitAudit(sink, cyclic)).not.toThrow();
+  });
+});
+
+describe("settingsChangeAuditLine", () => {
+  const request = { at: 7, requestId: "req_1", requestMethod: "POST", requestPath: "/api/v1/plugins/identity/rpc" };
+
+  it("names who changed which settings, from what to what", () => {
+    expect(settingsChangeAuditLine({
+      ...request, mode: "audit", by: david, byEmail: "david@example.com", byProvenance: "upstream-header",
+      changes: [
+        { key: "enforcement", from: "audit", to: "enforce" },
+        { key: "selfSelectedIdentity", from: false, to: true },
+      ],
+    })).toEqual({
+      v: AUDIT_SCHEMA_VERSION,
+      kind: "settings.change",
+      at: 7,
+      req: "req_1",
+      method: "POST",
+      path: "/api/v1/plugins/identity/rpc",
+      mode: "audit",
+      by: "mrdavidlaing",
+      email: "david@example.com",
+      provenance: "upstream-header",
+      changes: [
+        { key: "enforcement", from: "audit", to: "enforce" },
+        { key: "selfSelectedIdentity", from: false, to: true },
+      ],
+    });
+  });
+
+  it("never writes a signing key, whatever it is handed", () => {
+    const line = settingsChangeAuditLine({
+      ...request, mode: "off", by: null, byEmail: null,
+      changes: [{ key: "selectionSigningKey", from: "old-key-material", to: "new-key-material" }],
+    });
+    expect(line.changes).toEqual([{ key: "selectionSigningKey", from: "[secret]", to: "[rotated]" }]);
+    expect(line.by).toBeNull();
+    expect(line.provenance).toBe("unknown");
+    expect(formatAuditLine(line)).not.toContain("key-material");
+  });
+});
+
+describe("pinChangeAuditLine", () => {
+  it("names who acted on which machine's pin, from whom to whom", () => {
+    expect(pinChangeAuditLine({
+      at: 9, requestId: null, requestMethod: null, requestPath: null, mode: "enforce",
+      by: david, byEmail: "david@example.com",
+      hostId: "h1", hostName: "ew-lsp-001-mattwynne", action: "repin", from: "mrdavidlaing", to: "mattwynne",
+    })).toEqual({
+      v: AUDIT_SCHEMA_VERSION,
+      kind: "host.pin",
+      at: 9,
+      req: null,
+      method: null,
+      path: null,
+      mode: "enforce",
+      by: "mrdavidlaing",
+      email: "david@example.com",
+      provenance: "upstream-header",
+      hostId: "h1",
+      hostName: "ew-lsp-001-mattwynne",
+      action: "repin",
+      from: "mrdavidlaing",
+      to: "mattwynne",
+    });
+  });
+
+  it("carries a null person for an unpin", () => {
+    const line = pinChangeAuditLine({
+      at: 9, requestId: null, requestMethod: null, requestPath: null, mode: "off",
+      by: null, byEmail: null, byProvenance: "self-selected",
+      hostId: "h1", hostName: "ew-lsp-001-x", action: "unpin", from: "mrdavidlaing", to: null,
+    });
+    expect(line).toMatchObject({ action: "unpin", from: "mrdavidlaing", to: null, provenance: "self-selected" });
   });
 });
