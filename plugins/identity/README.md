@@ -55,7 +55,7 @@ restoring `emit` would remove the live patch.
 `selfSelectedIdentity` defaults to `false`. Set `selectionPublicOrigin` to the exact
 browser origin (for example `https://bb.example.test`, or a local HTTP origin with its
 port) and enable `selfSelectedIdentity` to offer the picker in the compact thread
-popover and People settings. The picker is an ordinary labelled select with Switch and
+popover and on the **This browser** tab of the People & machines settings section. The picker is an ordinary labelled select with Switch and
 Forget controls. An app-wide modal opens on any BB screen the first time an unidentified
 tab sees a ready picker. Dismissing it suppresses further automatic opens for that tab's
 page session; the ownership bubble still opens the picker on demand from a thread. It
@@ -67,8 +67,9 @@ ephemeral WebView needs a fresh choice.
 Identity creates a random 256-bit `selectionSigningKey` through the SDK's secret
 setting. The SDK stores secret settings in a 0600 file under the plugin data directory,
 outside `bb.db`, and does not send them to the app. The key is read back before issuance.
-To rotate, set a new 32-byte base64url key in the secret setting; all old selections
-immediately become invalid. The token is bounded, versioned, HMAC-SHA256 signed,
+To rotate, use **Rotate signing key** on the settings section's This browser tab (or set a
+new 32-byte base64url key in the secret setting); all old selections immediately become
+invalid. The token is bounded, versioned, HMAC-SHA256 signed,
 origin-bound and expires after 30 days. Verification uses a timing-safe comparison.
 The cookie name contains a short hash of the configured origin, so two BB servers
 on the same host at different ports do not overwrite each other's choice. The
@@ -276,6 +277,97 @@ audit | jq -c 'select(.kind=="dispatch" and .verdict=="reject") | {req,threadId,
 audit | jq -c 'select(.kind|startswith("message.")) | {kind,threadId,access,person}'
 ```
 
+## The settings section: People & machines
+
+BB's settings page carries one Identity section, **People & machines** (section id
+`people`). It explains who and what Identity recognises, why, and what it does about it,
+and it is where the settings below are meant to be changed. From the top:
+
+- **The identity bar** — who this browser is (`You: Alex Rivera · from your Access email,
+  read as-is · counts for Attribution and the guardrail`), and the standing reminder that
+  Identity is a guardrail against mistakes, not a lock.
+- **The readiness strip** — six items (profile, people, machines, browser names,
+  guardrail, check), each an icon plus text; activating one opens the tab that fixes it.
+- **The server profile question** — on a fresh server (nobody in the directory and every
+  writable setting at its default), and on demand from the readiness strip: *How do
+  people reach this BB server?* (Cloudflare Access / Direct, without Access / Only me). It shows each
+  setting it would change, from → to, before **Apply** writes them.
+- **Five tabs** (the WAI-ARIA tabs pattern: ←/→ move, Home/End jump):
+  - **People** — the directory, read-only, with each person's colour, machines, whether a
+    thread of theirs is on record, and *How Identity recognises* them (their Access
+    emails, a browser name, a machine name suffix, a pin). **Copy directory entry** copies
+    the JSON to paste into the infra repo: the directory is rendered by Ansible
+    (`ew_bb_people`), and nothing in the UI or any RPC writes it. Colours are the one
+    thing editable here, by anyone, for anyone, as before.
+  - **Machines** — every host BB knows, classified `person` / `team` / `unclaimed` and
+    why, problems first. A pin conflict offers **Keep pin**, **Re-pin** or **Unpin**;
+    any machine can be made a team machine or removed from the team; a team machine can
+    be added by name; the shared machine user is edited here. Each action on a listed
+    machine confirms first, and re-pin, unpin and remove-from-team spell out the rule A
+    / rule C consequence.
+  - **This browser** — *Why am I shown as …?* (the precedence ladder, with the deciding
+    rung marked), the browser-name picker, the browser-names switch and public origin
+    (with the picker's readiness chain), the fallback email, and the signing key's
+    status (`valid`, `invalid` or `missing` — never the key) with **Rotate signing key**.
+  - **Rules** — the enforcement mode, the audit `jq` command with a copy button, a
+    simulator that runs the real `decideGuardrail` in your browser (who × what × which
+    machine → the outcome in off, audit and enforce), and a map of which BB paths the
+    guardrail can see.
+  - **Health** — the self-test (re-runnable), the picker's readiness chain, how full the
+    thread-starter and queued-requester records are, configuration checks with the fix
+    for each, and **Copy diagnostics**.
+
+### What each write does
+
+Every write goes through `settings.experimental_set` (pins through the host-pin store),
+and each one that changes something writes exactly one audit line through `bb.log`
+naming who asked (person, email, provenance) and what changed, from → to. These lines are
+written whatever `enforcement` is.
+
+| Action | RPC | Audit line | Safeguard |
+|---|---|---|---|
+| Apply a server profile | `identity_update_settings` | `settings.change` | Shows every change first |
+| Change `enforcement` | `identity_update_settings` | `settings.change` | Turning on **Enforce** opens a dialog naming who Identity can tell would be refused and needs an acknowledgement ticked; cancelling leaves the mode unchanged |
+| Browser names on/off, public origin | `identity_update_settings` | `settings.change` | Switching browser names either way is confirmed; so is changing a set origin, which forgets every browser's choice |
+| Set `fallbackEmail` | `identity_update_settings` | `settings.change` | A non-empty value needs *Only one person uses this server* ticked; the server refuses it otherwise |
+| Team machines, shared machine user | `identity_update_settings` | `settings.change` | Making a listed machine a team machine, or removing one, is confirmed (rule C); adding one by name is not |
+| Rotate the signing key | `identity_rotate_signing_key` | `settings.change` (`[secret]` → `[rotated]`) | Type `rotate`; every browser's chosen name expires at once |
+| Keep / re-pin / unpin a machine | `identity_resolve_pin` | `host.pin` | Confirmed; re-pin and unpin spell out the rule A consequence |
+| A person's colour | `identity_set_person_color` / `identity_clear_person_color` | `person.color` | None — cosmetic, as before |
+| Re-run the self-test | `identity_rerun_self_test` | — | Read-only |
+| Copy diagnostics | `identity_diagnostics` | — | Read-only; emails shortened, names and the key left out |
+
+Every confirm dialog opens with **Cancel** focused, names its consequence, and returns
+focus to whatever opened it. The section reads through `identity_settings_overview`,
+which returns the signing key's status only, and the directory as a count and an error.
+
+### The trust model is unchanged
+
+The section can change things, but it verifies no one: any caller may write, exactly as
+BB's generated settings form and the colour picker already allow. That is the trade the
+rest of Identity makes — a guardrail against mistakes, not a lock — and the audit line is
+what makes a write accountable. Precedence stays fixed (Access header → valid browser
+name → `fallbackEmail` → anonymous; a stale, expired or invalid name is anonymous and
+never falls through to the fallback), and only an Access identity can ever be refused.
+
+### Audit evidence stays out of the UI
+
+By decision there is no log viewer and no count of would-refuse decisions in the
+section. The Rules tab shows, and copies, this command instead:
+
+```
+bb plugin logs identity | sed -n 's/.*identity-audit //p' | jq -c 'select(.kind == "dispatch" and .verdict == "reject") | {at, mode, rule, person, host: .host.name, action}'
+```
+
+### What still needs BB core
+
+The section labels these "Needs BB core" where it mentions them; none is attempted here:
+grouping or hiding BB's generated settings form (it still lists every setting beside the
+section), setting provenance or locks, a host owner field, a plugin log query (and so any
+in-UI would-refuse evidence), a Send-now dispatch hook, stamping `threads.send` so rule C
+can see automation follow-ups, a deep link to the section, and showing the composer's
+selected host.
+
 ## Settings
 
 ### `enforcement`
@@ -318,6 +410,9 @@ Default `ensembleworks-agent`: the account team and unclaimed machines run as, s
 the header chip. Display only — Identity never sets or checks it.
 
 ### Setting them
+
+Prefer the People & machines section above: it confirms the risky changes and logs every
+one. The CLI still works, and is the only way to set `directory`:
 
 ```
 bb plugin config identity set directory '<json>'

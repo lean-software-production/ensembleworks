@@ -1,4 +1,4 @@
-# Ownership and presence header interaction check
+# Identity browser interaction checks
 
 This fixture mounts the **registered header component from app.tsx**, with real
 React and Radix Popover and a read-only SDK/RPC substitute. It never contacts a
@@ -18,6 +18,40 @@ with `IDENTITY_SCREENSHOTS`).
 The picker check also mounts Identity's app-wide overlay on a fixture screen with no
 thread header. It verifies the prompt at 320px and 390px, dismissal across a reload,
 and the thread-details picker as a manual fallback.
+
+The settings check mounts the People & machines settings section; see below.
+
+## Settings section (`?screen=settings`)
+
+`?screen=settings` mounts the **registered People & machines settings section** alone,
+over fixture answers for its reads (`identity_settings_overview`, `identity_roster`,
+`identity_whoami`, `identity_machines`) and its writes, which all succeed without
+changing anything. The overview is built with the real `readiness`, `lintConfig` and
+`enforceRisks`, and the fixture carries a pin conflict, an unclaimed host with a long
+unbreakable name, a long display name and a long unbreakable email, so the layout is
+tested against the text that breaks it.
+
+At 320px and 390px (touch) and 1280px, plus 390px with a dark colour scheme, the smoke:
+
+- opens each of the five tabs (with every disclosure opened) and requires the page to be
+  exactly the viewport wide, no element inside `.identity-settings` to be wider than its
+  box (except a `pre`/`code` that scrolls on purpose), and every button, input and select
+  to be at least 40px tall (a checkbox or radio is measured by its label, which is the
+  target);
+- focuses the selected tab and checks ArrowRight, End and Home move both the selection
+  and focus;
+- selects **Enforce**: the dialog opens with Cancel focused and inside the viewport, and
+  Escape closes it with **Audit** still checked and focused;
+- opens **Rotate signing key**: the confirm button stays disabled until `rotate` is typed;
+- requires no page errors.
+
+Screenshots: `settings-<width>-<tab>.png` per width and tab (`people`, `machines`,
+`browser`, `rules`, `health`), `settings-<width>-enforce-dialog.png`,
+`settings-<width>-rotate-dialog.png`, and the same names prefixed `settings-dark-` for the
+dark pass. To see the RED this catches, set `overflow-wrap: normal` in `identity.css`:
+the 320px Machines tab then fails `page width` (the unclaimed host name overflows).
+
+## Running it
 
 From this checkout, with workspace dependencies and Chromium installed:
 
@@ -43,7 +77,7 @@ therefore run in Chromium, without mocking Radix or Floating UI.
 
 ux-contract: none — The canvas interaction-contract runners seed canvas scenes
 and observe the canvas editor/room. They cannot mount BB plugin header slots or
-supply Identity RPC context. This surface is covered by the standalone browser
+supply Identity RPC context. These surfaces are covered by the standalone browser
 interaction contract above; no shared Obs member is added.
 
 ## Red/green evidence (2026-09-19)
@@ -79,8 +113,8 @@ git restore -- plugins/identity/app.tsx
 (cd plugins/identity && npm run test:browser) # GREEN
 ```
 
-This verifies the standalone slot, not the surrounding production BB header or
-multi-plugin layout. No installed plugin or production settings are changed.
+This verifies the standalone slots, not the surrounding production BB header, settings
+page or multi-plugin layout. No installed plugin or production settings are changed.
 
 ## Combined ownership/presence RED (2026-09-19)
 

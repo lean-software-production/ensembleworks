@@ -94,8 +94,11 @@
 }
 .identity-settings-pill[data-trust="guardrail"] { border-color: var(--ring, #2563eb); }
 
-/* Status badge: the glyph repeats the text, never replaces it. */
-.identity-settings-badge { display: inline-flex; align-items: center; gap: 6px; min-width: 0; }
+/*
+ * Status badge: the glyph repeats the text, never replaces it. Its words break only where
+ * they would overflow, so a table column never shrinks one mid-word ("Unclai med").
+ */
+.identity-settings-badge { display: inline-flex; align-items: center; gap: 6px; min-width: 0; overflow-wrap: break-word; }
 .identity-settings-badge-icon {
   display: inline-flex;
   align-items: center;
