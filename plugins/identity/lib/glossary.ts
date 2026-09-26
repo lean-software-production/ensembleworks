@@ -59,7 +59,7 @@ export const GLOSSARY: Record<GlossaryId, GlossaryEntry> = {
   "rule-own-thread": {
     title: "Own-thread rule",
     body: [
-      "Someone identified by their Access email may not send into a thread whose recorded starter is another person identified the same way. That includes a thread an agent started from theirs, which inherits its starter. A thread with no recorded starter, or one recorded from a browser name or the fallback email, is open to anyone.",
+      "Someone identified by their Access email may not send into a thread whose recorded starter is another person identified the same way. An agent's child thread inherits its starter. A thread recorded from a browser name or the fallback email is open to anyone. A thread with no record, such as one begun with Send now, counts as a new start: the own-machine rule applies.",
       "In the log: follow-up-by-non-starter.",
     ],
     more: "rules",
@@ -77,7 +77,7 @@ export const GLOSSARY: Record<GlossaryId, GlossaryEntry> = {
     title: "When the machine is checked",
     body: [
       "BB doesn't tell Identity which machine you pick here, so this banner can't check it.",
-      "When you press Send, Identity checks the machine. In Enforce, a start on someone else's machine is refused with a message naming whose it is. In Audit it is logged and goes ahead. Off only records who started the thread.",
+      "When you press Send, Identity checks the machine. If you are identified by your Access email, Enforce refuses a start on someone else's machine and names whose it is. In Audit it is logged and goes ahead. A browser name or the fallback email is never refused. Off only records who started the thread.",
     ],
     more: "rules",
   },

@@ -48,4 +48,19 @@ describe("the glossary", () => {
     expect(text("rule-own-thread")).toContain("inherits its starter");
     expect(text("rule-own-thread")).toContain("recorded from a browser name or the fallback email");
   });
+
+  it("tells a thread with no record apart from one with no person on it", () => {
+    // A Send-now start leaves no record, so the next dispatch is judged as a start and the
+    // own-machine rule can refuse it (guardrail.ts rule A); only a record carries rule B's "open".
+    expect(text("rule-own-thread")).not.toContain("no recorded starter");
+    expect(text("rule-own-thread")).toContain("A thread with no record, such as one begun with Send now, counts as a new start");
+    expect(text("rule-own-thread")).toContain("own-machine rule");
+  });
+
+  it("limits the composer's refusal to someone identified by their Access email", () => {
+    // makeGuardrail passes no requester for a browser name or the fallback email, and rule A
+    // needs one; only a stamped automation is refused without a person.
+    expect(text("composer-check")).toContain("If you are identified by your Access email, Enforce refuses");
+    expect(text("composer-check")).toContain("A browser name or the fallback email is never refused");
+  });
 });
