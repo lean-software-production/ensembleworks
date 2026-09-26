@@ -342,7 +342,10 @@ export function redactDiagnostics(input: DiagnosticsInput): string {
     picker: {
       status: input.pickerStatus,
       enabled: input.selfSelectedIdentity,
-      origin: input.selectionPublicOrigin,
+      // The stored value is free text (the generated Configuration form skips validation),
+      // so only a validated origin is copied; anything else could carry an email or a name.
+      origin: input.selectionPublicOrigin === "" ? ""
+        : validateSelectionOrigin(input.selectionPublicOrigin) ?? "invalid",
       signingKey: input.signingKey,
     },
     enforcement: input.enforcement,

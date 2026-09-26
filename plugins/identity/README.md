@@ -303,8 +303,8 @@ and it is where the settings below are meant to be changed. From the top:
     why, problems first. A pin conflict offers **Keep pin**, **Re-pin** or **Unpin**;
     any machine can be made a team machine or removed from the team; a team machine can
     be added by name; the shared machine user is edited here. Each action on a listed
-    machine confirms first, and re-pin, unpin and remove-from-team spell out the rule A
-    / rule C consequence.
+    machine confirms first: re-pin and remove-from-team spell out the rule A / rule C
+    consequence, and unpin that the owner is re-derived from the name.
   - **This browser** — *Why am I shown as …?* (the precedence ladder, with the deciding
     rung marked), the browser-name picker, the browser-names switch and public origin
     (with the picker's readiness chain), the fallback email, and the signing key's
@@ -335,7 +335,7 @@ written whatever `enforcement` is.
 | Keep / re-pin / unpin a machine | `identity_resolve_pin` | `host.pin` | Confirmed; re-pin spells out the rule A consequence, unpin that the owner is re-derived from the name |
 | A person's colour | `identity_set_person_color` / `identity_clear_person_color` | `person.color` | None — cosmetic, as before |
 | Re-run the self-test | `identity_rerun_self_test` | — | Read-only |
-| Copy diagnostics | `identity_diagnostics` | — | Read-only; emails shortened, names and the key left out |
+| Copy diagnostics | `identity_diagnostics` | — | Read-only; emails shortened, names and the key left out, a public origin that fails validation shown as `invalid` |
 
 Every confirm dialog opens with **Cancel** focused, names its consequence, and returns
 focus to whatever opened it. The section reads through `identity_settings_overview`,

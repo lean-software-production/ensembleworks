@@ -498,6 +498,24 @@ describe("redactDiagnostics", () => {
     }
   });
 
+  it("emits only a validated picker origin, never a raw invalid value", () => {
+    const origins: Array<[string, string]> = [
+      ["https://alex@example.com", "invalid"],
+      ["https://Alex Rivera@bb.example.com", "invalid"],
+      ["https://bb.example.com/Alex%20Rivera?alex@example.com", "invalid"],
+      ["", ""],
+    ];
+    for (const [origin, expected] of origins) {
+      const stored = healthy({ selfSelectedIdentity: true, selectionPublicOrigin: origin });
+      const out = redactDiagnostics({
+        ...stored, generatedAt: 0, sharedMachineUser: "u", lint: lintConfig(stored),
+        ledgers: { starters: { count: 0, max: 2000 }, queued: { count: 0, max: 1000 } },
+      });
+      for (const leak of ["alex@example.com", "Alex Rivera", "Alex%20Rivera"]) expect(out).not.toContain(leak);
+      expect(JSON.parse(out).picker.origin).toBe(expected);
+    }
+  });
+
   it("redacts an email the self-test probe saw unexpectedly", () => {
     const failed = healthy({ selfTest: {
       ok: false, detail: `the probe's request context had email ${JSON.stringify("alex@example.com")}`,
