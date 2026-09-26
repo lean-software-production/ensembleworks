@@ -19,7 +19,7 @@ export const GLOSSARY: Record<GlossaryId, GlossaryEntry> = {
     title: "Attribution only",
     body: [
       "A name chosen in a browser, or the fallback email, labels who started a thread and who sent a message. That is all it does.",
-      "The guardrail ignores it: it is never refused, and threads it starts are open to anyone. Only an Access email counts for the guardrail.",
+      "It is never refused. A thread recorded as started by it is open to anyone; one begun with Send now has no record and counts as a new start. Only an Access email counts for the person rules; the automation rule covers stamped automations.",
     ],
     more: "browser",
   },
@@ -43,7 +43,7 @@ export const GLOSSARY: Record<GlossaryId, GlossaryEntry> = {
     title: "What the guardrail can't see",
     body: [
       "BB doesn't tell Identity which machine the new-thread composer has selected. In Audit and Enforce, the check comes when you press Send; Off checks nothing.",
-      "Send now skips the check; Identity records who sent it afterwards.",
+      "Send now skips the check. In Audit and Enforce, Identity logs it afterwards, naming the sender when it can.",
       "Terminals, Stop, Archive and approvals are never refused. An automation sending into an existing thread isn't checked.",
     ],
     more: "rules",
@@ -104,7 +104,7 @@ export const GLOSSARY: Record<GlossaryId, GlossaryEntry> = {
   "logged-changes": {
     title: "Which changes are logged",
     body: [
-      "Settings, colour and machine changes made here write a line to BB's log naming who made them, and risky ones ask first.",
+      "Settings, colour and machine changes made here write a line to BB's log with the requester's identity, which may be unknown. Risky ones ask first.",
       "Choosing a browser name logs the name chosen; forgetting one logs no name. Neither says who did it.",
       "BB's generated Configuration form and `bb plugin config` change the same settings without asking and without a log line.",
     ],

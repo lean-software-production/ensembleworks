@@ -76,7 +76,32 @@ describe("the glossary", () => {
     // Settings, colour and pin lines carry adminActor(); a browser name's select line carries
     // the chosen person and its forget line no person (server.ts /select- and /forget-identity).
     expect(text("logged-changes")).not.toContain("Every change made in this section");
-    expect(text("logged-changes")).toContain("Settings, colour and machine changes made here write a line to BB's log naming who made them");
+    expect(text("logged-changes")).toContain("Settings, colour and machine changes made here write a line to BB's log");
     expect(text("logged-changes")).toContain("Choosing a browser name logs the name chosen; forgetting one logs no name. Neither says who did it.");
+  });
+
+  it("does not promise the log always knows who made a change", () => {
+    // adminActor() takes currentIdentity(), which can be anonymous; audit.ts then writes
+    // by: null, email: null, provenance: "unknown".
+    expect(text("logged-changes")).not.toContain("naming who made them");
+    expect(text("logged-changes")).toContain("with the requester's identity, which may be unknown");
+  });
+
+  it("limits attribution-only's claims to the person rules and to recorded threads", () => {
+    // Rule C refuses a stamped automation, which has no Access email; and a Send-now start
+    // leaves no record, so its next dispatch is judged as a start by rule A.
+    expect(text("attribution-only")).not.toContain("Only an Access email counts for the guardrail");
+    expect(text("attribution-only")).toContain("Only an Access email counts for the person rules");
+    expect(text("attribution-only")).toContain("stamped automation");
+    expect(text("attribution-only")).not.toContain("threads it starts are open to anyone");
+    expect(text("attribution-only")).toContain("A thread recorded as started by it is open to anyone");
+    expect(text("attribution-only")).toContain("one begun with Send now has no record");
+  });
+
+  it("does not say Send now leaves a record of who sent it", () => {
+    // Stream (c) only logs Send now, only in Audit and Enforce, and may not know who; the
+    // thread gets no starter record (guardrail.ts GuardrailFacts.recorded).
+    expect(text("blind-spots")).not.toContain("Identity records who sent it afterwards");
+    expect(text("blind-spots")).toContain("In Audit and Enforce, Identity logs it afterwards");
   });
 });

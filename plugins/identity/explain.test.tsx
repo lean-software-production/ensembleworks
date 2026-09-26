@@ -22,7 +22,7 @@ describe("Explain", () => {
     const dialog = await screen.findByRole("dialog", { name: "Attribution only" });
     expect(trigger.getAttribute("aria-expanded")).toBe("true");
     expect(dialog.textContent).toContain("That is all it does.");
-    expect(dialog.textContent).toContain("Only an Access email counts for the guardrail.");
+    expect(dialog.textContent).toContain("Only an Access email counts for the person rules;");
   });
 
   it("outside settings, says where to look instead of linking", async () => {
