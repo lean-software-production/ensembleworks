@@ -129,6 +129,31 @@ describe("People & machines settings section", () => {
     expect(bar.querySelector("[role=status]")).toBeNull();
   });
 
+  it("updates the bar when this browser selects or forgets a name", async () => {
+    const readyPicker = { enabled: true, status: "ready", people: [alex] };
+    const anonymous: WhoAmI = { email: null, person: null, provenance: "unknown", selection: null, picker: readyPicker };
+    const chosen: WhoAmI = { email: null, person: alex, provenance: "self-selected", selection: { status: "valid" },
+      picker: readyPicker };
+    let current = anonymous;
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue({ ok: true }));
+    mount({
+      identity_whoami: () => current,
+      identity_prepare_selection: (input) => {
+        current = (input as { action: string }).action === "select" ? chosen : anonymous;
+        return { ok: true, url: "/commit-selection" };
+      },
+    });
+    const bar = await screen.findByRole("region", { name: "Who you are here" });
+    const you = () => bar.querySelector("p")!.textContent;
+    await waitFor(() => expect(you()).toBe("You: Anonymous · anonymous · Nothing is refused for anonymous requests"));
+    fireEvent.change(await screen.findByRole("combobox", { name: "Your name" }), { target: { value: "alex" } });
+    fireEvent.click(screen.getByRole("button", { name: "Use this name" }));
+    await waitFor(() => expect(you()).toBe(
+      "You: Alex Rivera · from the name this browser chose · counts for Attribution only — never the guardrail"));
+    fireEvent.click(await screen.findByRole("button", { name: "Forget" }));
+    await waitFor(() => expect(you()).toBe("You: Anonymous · anonymous · Nothing is refused for anonymous requests"));
+  });
+
   it("shows six readiness items in order, each an icon and text", async () => {
     mount();
     const items = within(await readinessList()).getAllByRole("button");
@@ -392,12 +417,13 @@ describe("first-run server profile", () => {
     expect(screen.getByRole("radiogroup", { name: question })).toBeTruthy();
   });
 
-  it("names that turning the guardrail off means nothing is refused", async () => {
+  it("names that turning the guardrail off stops request verdicts but keeps change logging", async () => {
     mount({ identity_settings_overview: () => overview({}, { firstRun: true }) });
     fireEvent.click(await screen.findByRole("radio", { name: "Direct, without Access" }));
     fireEvent.click(screen.getByRole("button", { name: "Apply" }));
     const dialog = await screen.findByRole("dialog", { name: "Apply the Direct, without Access profile?" });
-    expect(within(dialog).getByText(/The guardrail turns off: nothing will be refused/)).toBeTruthy();
+    expect(within(dialog).getByText("The guardrail turns off: no request will be refused, and request verdicts "
+      + "stop being audited. Settings and pin changes are still logged.")).toBeTruthy();
   });
 
   it("prefills the Only me email when who-you-are arrives after the settings", async () => {

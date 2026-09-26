@@ -14,6 +14,8 @@ export type SettingsData = {
   overview: SettingsOverview | null; roster: RosterAnswer | null; whoami: WhoAmI | null; machines: MachineList | null;
   errors: Partial<Record<ReadKey, string>>;
   reload: () => void;
+  /** Takes a fresher who-you-are answer (the picker's), so the bar follows a browser-name change. */
+  adoptWhoami: (whoami: WhoAmI) => void;
 };
 
 /** One sentence per read, so a failure names what is missing instead of blanking the page. */
@@ -58,8 +60,13 @@ export function useSettingsData(): SettingsData {
     read("machines", () => rpcRef.current.call("identity_machines"), setMachines);
   }, []);
 
+  const adoptWhoami = useCallback((fresh: WhoAmI) => {
+    setWhoami(fresh);
+    setErrors((current) => { const { whoami: _gone, ...rest } = current; return rest; });
+  }, []);
+
   useEffect(reload, [reload]);
-  return { overview, roster, whoami, machines, errors, reload };
+  return { overview, roster, whoami, machines, errors, reload, adoptWhoami };
 }
 
 /** What each tab not built yet will show, under its real title. */

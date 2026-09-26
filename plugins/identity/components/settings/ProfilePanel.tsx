@@ -151,7 +151,12 @@ export function ProfilePanel({ overview, whoami, closable, onApplied, onClose }:
                     ))}
                   </ul>
                 )}
-              {guardrailOff && <p>The guardrail turns off: nothing will be refused or audited.</p>}
+              {guardrailOff && (
+                <p>
+                  The guardrail turns off: no request will be refused, and request verdicts stop being audited.
+                  Settings and pin changes are still logged.
+                </p>
+              )}
               {fallback !== null && (
                 <p>Every request without an Access email or a browser name, agents included, will be attributed to {fallback}.</p>
               )}
