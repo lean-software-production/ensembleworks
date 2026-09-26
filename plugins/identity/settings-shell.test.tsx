@@ -13,6 +13,7 @@ import {
   type AdminFacts,
 } from "./settings-admin.js";
 import { ConfirmDialog } from "./components/settings/ConfirmDialog.js";
+import { stubPopoverDom } from "./popover-test-dom.js";
 
 const app = await loadPluginApp(() => import("./app.js"));
 const section = app.settingsSections.find((entry) => entry.id === "people")!;
@@ -112,23 +113,36 @@ describe("People & machines settings section", () => {
   // "Counts for" is a sentence-case pill (as in the mockup), so the bar never repeats the
   // picker's own lowercase "attribution only" disclaimer word for word.
   it.each([
-    [headerAlex, "You: Alex Rivera · from your Access email, read as-is · counts for Attribution and the guardrail"],
+    [headerAlex, "You: Alex Rivera · from your Access email · counts for Attribution and the guardrail"],
     [{ ...headerAlex, email: null, provenance: "self-selected" } as WhoAmI,
-      "You: Alex Rivera · from the name this browser chose · counts for Attribution only — never the guardrail"],
+      "You: Alex Rivera · chosen in this browser · counts for Attribution only"],
     [{ ...headerAlex, provenance: "configured-fallback" } as WhoAmI,
-      "You: Alex Rivera · from the Fallback email setting · counts for Attribution only — never the guardrail"],
+      "You: Alex Rivera · from the fallback email · counts for Attribution only"],
     [{ ...headerAlex, email: null, person: null, provenance: "unknown" } as WhoAmI,
-      "You: Anonymous · anonymous · Never refused as a person (rules A and B)"],
+      "You: Anonymous · anonymous · Never refused"],
     [{ ...headerAlex, email: "stranger@example.test", person: null } as WhoAmI,
-      "You: stranger@example.test · from your Access email, read as-is · counts for Attribution and the guardrail"],
+      "You: stranger@example.test · from your Access email · counts for Attribution and the guardrail"],
   ])("says who you are and what that counts for (%#)", async (whoami, text) => {
     mount({ identity_whoami: () => whoami });
     const bar = await screen.findByRole("region", { name: "Who you are here" });
     const [you, trust] = bar.querySelectorAll("p");
     expect(you!.textContent).toBe(text);
-    expect(trust!.textContent).toBe("Identity is a guardrail against mistakes, not a lock.");
+    expect(trust!.textContent).toBe("Changes here are logged.");
     expect(bar.getAttribute("role")).toBeNull();
     expect(bar.querySelector("[role=status]")).toBeNull();
+  });
+
+  it("jumps from a popover's More to that tab and focuses it", async () => {
+    stubPopoverDom();
+    mount({ identity_whoami: () => ({ ...headerAlex, email: null, provenance: "self-selected" }) as WhoAmI });
+    const bar = await screen.findByRole("region", { name: "Who you are here" });
+    fireEvent.click(within(bar).getByRole("button", { name: "Attribution only" }));
+    const dialog = await screen.findByRole("dialog", { name: "Attribution only" });
+    fireEvent.click(within(dialog).getByRole("button", { name: "More in This browser" }));
+    const tab = screen.getByRole("tab", { name: "This browser" });
+    await waitFor(() => expect(tab.getAttribute("aria-selected")).toBe("true"));
+    await waitFor(() => expect(document.activeElement).toBe(tab));
+    expect(screen.queryByRole("dialog")).toBeNull();
   });
 
   it("updates the bar when this browser selects or forgets a name", async () => {
@@ -148,13 +162,13 @@ describe("People & machines settings section", () => {
     await openBrowserTab();
     const bar = await screen.findByRole("region", { name: "Who you are here" });
     const you = () => bar.querySelector("p")!.textContent;
-    await waitFor(() => expect(you()).toBe("You: Anonymous · anonymous · Never refused as a person (rules A and B)"));
+    await waitFor(() => expect(you()).toBe("You: Anonymous · anonymous · Never refused"));
     fireEvent.change(await screen.findByRole("combobox", { name: "Your name" }), { target: { value: "alex" } });
     fireEvent.click(screen.getByRole("button", { name: "Use this name" }));
     await waitFor(() => expect(you()).toBe(
-      "You: Alex Rivera · from the name this browser chose · counts for Attribution only — never the guardrail"));
+      "You: Alex Rivera · chosen in this browser · counts for Attribution only"));
     fireEvent.click(await screen.findByRole("button", { name: "Forget" }));
-    await waitFor(() => expect(you()).toBe("You: Anonymous · anonymous · Never refused as a person (rules A and B)"));
+    await waitFor(() => expect(you()).toBe("You: Anonymous · anonymous · Never refused"));
   });
 
   // An identity_whoami read started before the picker changed the name must not win when it lands later.
@@ -181,7 +195,7 @@ describe("People & machines settings section", () => {
     const you = () => bar.querySelector("p")!.textContent;
     fireEvent.change(await screen.findByRole("combobox", { name: "Your name" }), { target: { value: "alex" } });
     fireEvent.click(screen.getByRole("button", { name: "Use this name" }));
-    const named = "You: Alex Rivera · from the name this browser chose · counts for Attribution only — never the guardrail";
+    const named = "You: Alex Rivera · chosen in this browser · counts for Attribution only";
     await waitFor(() => expect(you()).toBe(named));
     await act(async () => { land(settle as never, anonymous); await late.catch(() => {}); });
     expect(you()).toBe(named);
@@ -212,7 +226,7 @@ describe("People & machines settings section", () => {
     hold = false;
     fireEvent.change(combo, { target: { value: "alex" } });
     fireEvent.click(screen.getByRole("button", { name: "Use this name" }));
-    const named = "You: Alex Rivera · from the name this browser chose · counts for Attribution only — never the guardrail";
+    const named = "You: Alex Rivera · chosen in this browser · counts for Attribution only";
     await waitFor(() => expect(you()).toBe(named));
     expect(screen.getByText("Shown as Alex Rivera (chosen here; attribution only).")).toBeTruthy();
     await act(async () => { release(anonymous); await late; });

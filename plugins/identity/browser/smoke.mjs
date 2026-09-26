@@ -144,15 +144,39 @@ try {
       }, describe.toString());
       expect(overflowing, `${width}px ${name}: elements wider than their box`).toEqual([]);
       // A checkbox or radio is reached through its label, so the label is the target measured.
+      // An explained term is as tall as its text; its hit area is the ::before, measured below.
       const small = await section.evaluate((root, describeSource) => {
         const label = new Function(`return ${describeSource}`)();
-        return [...root.querySelectorAll('button, input, select')]
+        return [...root.querySelectorAll('button:not(.identity-explain), input, select')]
           .filter((el) => el.getClientRects().length > 0)
           .map((el) => (el.matches('[type="checkbox"], [type="radio"]') ? el.closest('label') ?? el : el))
           .filter((el) => el.getBoundingClientRect().height < 40)
           .map((el) => `${label(el)} ${el.getBoundingClientRect().height}px`);
       }, describe.toString());
       expect(small, `${width}px ${name}: targets under 40px`).toEqual([]);
+      // Every explained term has a 44px hit area that nothing covers, and covers no control.
+      const hits = await page.evaluate(() => {
+        const failures = [];
+        const visible = (el) => el.getClientRects().length > 0 && getComputedStyle(el).visibility !== 'hidden';
+        for (const el of document.querySelectorAll('.identity-explain')) {
+          if (!visible(el)) continue;
+          el.scrollIntoView({ block: 'center' });
+          if (getComputedStyle(el, '::before').height !== '44px') failures.push(`hit area: ${el.textContent}`);
+          const r = el.getBoundingClientRect();
+          const top = document.elementFromPoint(r.left + r.width / 2, r.top + r.height / 2);
+          if (top?.closest('.identity-explain') !== el) failures.push(`covered: ${el.textContent}`);
+        }
+        for (const el of document.querySelectorAll('button:not(.identity-explain), input, select, summary, a')) {
+          if (!visible(el)) continue;
+          el.scrollIntoView({ block: 'center' });
+          const r = el.getBoundingClientRect();
+          const top = document.elementFromPoint(r.left + r.width / 2, r.top + r.height / 2);
+          const explain = top?.closest('.identity-explain');
+          if (explain && !el.contains(explain)) failures.push(`control under a term: ${el.textContent || el.tagName}`);
+        }
+        return failures;
+      });
+      expect(hits, `${width}px ${name}: explained terms' hit areas`).toEqual([]);
       await page.screenshot({ path: shot(key), fullPage: true });
     }
 
@@ -168,6 +192,29 @@ try {
     await page.keyboard.press('Home');
     await expect(people).toBeFocused();
     await expect(people).toHaveAttribute('aria-selected', 'true');
+
+    // An explained term: its popover stays on screen, Escape hands focus back, Enter reopens
+    // it, and "More in …" selects and focuses the tab that holds the controls.
+    const term = page.getByRole('region', { name: 'Who you are here' }).getByRole('button', { name: 'Attribution only' });
+    if (width < 600) await term.tap(); else await term.click();
+    const explain = page.getByRole('dialog', { name: 'Attribution only' });
+    await expect(explain).toBeVisible();
+    const explainBounds = await explain.boundingBox();
+    expect(explainBounds.x).toBeGreaterThanOrEqual(8);
+    expect(explainBounds.x + explainBounds.width).toBeLessThanOrEqual(width - 8);
+    await page.screenshot({ path: shot('explain') });
+    await page.keyboard.press('Escape');
+    await expect(explain).toHaveCount(0);
+    await expect(term).toBeFocused();
+    await page.keyboard.press('Enter');
+    await expect(explain).toBeVisible();
+    const more = explain.getByRole('button', { name: 'More in This browser' });
+    expect((await more.boundingBox()).height).toBeGreaterThanOrEqual(44);
+    if (width < 600) await more.tap(); else await more.click();
+    await expect(explain).toHaveCount(0);
+    const browserTab = page.getByRole('tab', { name: 'This browser', exact: true });
+    await expect(browserTab).toHaveAttribute('aria-selected', 'true');
+    await expect(browserTab).toBeFocused();
 
     await page.getByRole('tab', { name: 'Rules', exact: true }).click();
     const enforce = page.getByRole('radio', { name: 'Enforce' });
@@ -203,7 +250,7 @@ try {
     await expect(rotate).toBeFocused();
 
     expect(errors).toEqual([]);
-    console.log(`PASS ${width}px ${scheme} settings: five tabs without overflow, 40px targets, tab keys, Enforce and rotate dialogs`);
+    console.log(`PASS ${width}px ${scheme} settings: five tabs without overflow, 40px targets, 44px term hit areas, tab keys, explain popover and More, Enforce and rotate dialogs`);
     await context.close();
   }
 } finally {

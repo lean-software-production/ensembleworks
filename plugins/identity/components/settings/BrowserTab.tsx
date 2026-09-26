@@ -8,8 +8,9 @@ import {
   type SettingsPatch,
   type SigningKeyStatus,
 } from "../../settings-admin.js";
-import { precedenceLadder, type RungState } from "../../lib/precedence.js";
+import { pickerSummary, precedenceLadder, type RungState } from "../../lib/precedence.js";
 import { IdentityPicker } from "../IdentityPicker.js";
+import { ChecklistSummary } from "./ChecklistSummary.js";
 import { ConfirmDialog, focusOpener } from "./ConfirmDialog.js";
 import { PickerChain } from "./PickerChain.js";
 import { refusalSentence } from "./ProfilePanel.js";
@@ -93,6 +94,8 @@ export function BrowserTab({ data }: { data: SettingsData }) {
     else setPending({ kind: "fallback", value: fallback });
   };
   // People seen using this server, not merely listed: a directory names everyone the team might add.
+  // Shown only once the overview has loaded; the "off" stand-in is never rendered.
+  const picker = pickerSummary(overview?.pickerStatus ?? "off");
   const looksShared = (overview?.accessSeen ?? false) || (roster?.people.filter((row) => row.seen).length ?? 0) > 1;
 
   return (
@@ -134,7 +137,9 @@ export function BrowserTab({ data }: { data: SettingsData }) {
               </button>
             </div>
             {sentenceFor("origin")}
-            <PickerChain status={overview.pickerStatus} />
+            <ChecklistSummary status={picker.status} summary={picker.text} open={picker.open}>
+              <PickerChain status={overview.pickerStatus} />
+            </ChecklistSummary>
           </section>
 
           <section className="identity-settings-stack" aria-labelledby={`${base}-fallback`}>

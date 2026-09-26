@@ -14,6 +14,8 @@ import {
 import { COVERAGE_ROWS } from "./lib/coverage.js";
 
 const app = await loadPluginApp(() => import("./app.js"));
+// After loadPluginApp: HealthTab imports the SDK, whose test runtime loadPluginApp installs.
+const { selfTestSummary } = await import("./components/settings/HealthTab.js");
 const section = app.settingsSections.find((entry) => entry.id === "people")!;
 afterEach(() => { cleanup(); vi.unstubAllGlobals(); });
 
@@ -471,5 +473,17 @@ describe("Health tab", () => {
     fireEvent.click(await within(panel).findByRole("button", { name: "Copy diagnostics" }));
     expect(await within(panel).findByText(/copy it from here/i)).toBeTruthy();
     expect(panel.querySelector("pre")?.textContent).toBe("{\"plugin\":\"identity\"}");
+  });
+});
+
+describe("selfTestSummary", () => {
+  it("is one line: not run, passed, or the first failing check", () => {
+    expect(selfTestSummary(null)).toEqual({ status: "off", text: "Not run yet", open: false });
+    expect(selfTestSummary({ ok: true, detail: "", cookie: { ok: true, detail: "" } }))
+      .toEqual({ status: "ok", text: "Passed · 3 checks", open: false });
+    expect(selfTestSummary({ ok: true, detail: "", cookie: { ok: false, detail: "no cookie" } }))
+      .toEqual({ status: "problem", text: "Failed: Cookie bridge", open: true });
+    expect(selfTestSummary({ ok: false, detail: "no header", cookie: { ok: true, detail: "" } }))
+      .toEqual({ status: "problem", text: "Failed: Patch live", open: true });
   });
 });
