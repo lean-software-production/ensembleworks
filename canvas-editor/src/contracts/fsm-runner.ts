@@ -323,7 +323,7 @@ function seedScene(doc: LoroCanvasDoc, contract: Contract): void {
     const v = validateShape({
       id: s.id, kind: s.kind, parentId: s.parentId ?? 'page:p', index: 'a1',
       x: s.x, y: s.y, rotation: 0, isLocked: false, opacity: 1, meta: {},
-      props: { w: s.w, h: s.h },
+      props: { w: s.w, h: s.h, ...s.props },
     })
     if (!v.ok) throw new Error(`seedScene: invalid SceneShape ${JSON.stringify(s.id)} (kind ${JSON.stringify(s.kind)}): ${v.error}`)
     doc.putShape(v.shape)

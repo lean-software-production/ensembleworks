@@ -13,7 +13,7 @@ import { createFakePluginHost } from "@get-bb/plugin-sdk/testing";
 import type { FakePluginHost } from "@get-bb/plugin-sdk/testing";
 import { CanvasRoomHost } from "../canvas/room.js";
 import { CANVAS_MIGRATIONS, CanvasStore } from "../canvas/store.js";
-import { CANVAS_CHANNEL } from "../canvas/wire.js";
+import { CANVAS_CHANNEL, CANVAS_SCHEMA_VERSION } from "../canvas/wire.js";
 import { createPresencePublisher } from "../canvas/presence-publisher.js";
 import {
   createBbTransport,
@@ -58,6 +58,14 @@ function threadFrame(id: string, threadId: string) {
   } as never;
 }
 
+function githubIssue(id: string) {
+  return {
+    id, kind: "github-issue", parentId: "page:p", index: "a2", x: 20, y: 30,
+    rotation: 0, isLocked: false, opacity: 1, meta: {},
+    props: { w: 470, h: 256, schemaVersion: 1, repo: "owner/repo", number: 42 },
+  } as never;
+}
+
 /**
  * Couples one client transport to a fake host: drains new realtime signals
  * addressed to this client into `transport.deliver`, and keeps going while the
@@ -99,7 +107,7 @@ async function connect(host: FakePluginHost, id: string): Promise<Connected> {
       throw error;
     },
   });
-  await host.harness.behavior.callRpc("canvas_join", { clientId: id });
+  await host.harness.behavior.callRpc("canvas_join", { clientId: id, schemaVersion: CANVAS_SCHEMA_VERSION });
   const peer = new SyncClientPeer({ peerId: newPeerId(), transport });
   const pump = makePump(host, transport, id);
   await pump();
@@ -138,6 +146,37 @@ function standaloneRoom() {
 }
 
 describe("the room over bb rpc + realtime", () => {
+  it("refuses legacy bundles before sync repair and converges upgraded peers around an issue card", async () => {
+    const host = createFakePluginHost({ pluginId: "canvas" });
+    await plugin(host.bb);
+    const writer = await connect(host, "upgraded-writer");
+    writer.peer.doc.putPage({ id: "page:p", name: "P" });
+    writer.peer.putShape(githubIssue("shape:issue"));
+    writer.peer.putShape({ ...(githubIssue("shape:unlinked") as object), props: { w: 470, h: 256, schemaVersion: 2 } } as never);
+    await writer.pump();
+    expect((await debug(host)).shapeIds).toContain("shape:issue");
+
+    // A pre-card bundle sends neither version field. It must never be handed
+    // the snapshot: its old validProps repair would delete this unknown kind.
+    await expect(host.harness.behavior.callRpc("canvas_join", { clientId: "legacy" })).rejects.toThrow();
+    await expect(host.harness.behavior.callRpc("canvas_frame", { clientId: "legacy", data: "AA==" })).rejects.toThrow();
+    await expect(host.harness.behavior.callRpc("canvas_join", { clientId: "wrong", schemaVersion: 1 })).rejects.toThrow();
+    await expect(host.harness.behavior.callRpc("canvas_join", { clientId: "old-card-bundle", schemaVersion: 2 })).rejects.toThrow();
+    expect((await debug(host)).clientIds).toEqual(["upgraded-writer"]);
+    expect((await debug(host)).shapeIds).toContain("shape:issue");
+
+    const reader = await connect(host, "upgraded-reader");
+    expect(reader.peer.doc.getShape("shape:issue")?.props).toEqual({
+      w: 470, h: 256, schemaVersion: 1, repo: "owner/repo", number: 42,
+    });
+    expect(reader.peer.doc.getShape("shape:unlinked")?.props).toEqual({ w: 470, h: 256, schemaVersion: 2 });
+    writer.peer.putShape(shape("shape:later"));
+    await writer.pump();
+    await reader.pump();
+    expect(reader.peer.doc.listShapes().map((s) => s.id).sort()).toEqual(["shape:issue", "shape:later", "shape:unlinked"]);
+    expect((await debug(host)).shapeIds.sort()).toEqual(["shape:issue", "shape:later", "shape:unlinked"]);
+    await host.harness.lifecycle.dispose();
+  });
   it("reports whether the authoritative canvas document binds a thread", async () => {
     const host = createFakePluginHost({ pluginId: "canvas" });
     await plugin(host.bb);
@@ -231,7 +270,7 @@ describe("the room over bb rpc + realtime", () => {
     await plugin(host.bb);
 
     await host.harness.behavior.callRpc("canvas_join", {
-      clientId: "watcher",
+      clientId: "watcher", schemaVersion: CANVAS_SCHEMA_VERSION,
     });
     expect(
       await host.harness.behavior.callRpc("canvas_ping", {

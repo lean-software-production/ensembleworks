@@ -116,6 +116,8 @@ export interface SceneShape {
   readonly y: number
   readonly w: number
   readonly h: number
+  /** Extra identity props for shapes whose schema requires them. */
+  readonly props?: Readonly<Record<string, string | number | boolean>>
   /** Optional parent — the id of ANOTHER scene shape this one is seeded
    * UNDER (its x/y are then that parent's LOCAL coordinates, exactly as in
    * the doc), defaulting to the scene's page when absent. frame-membership

@@ -2,6 +2,7 @@ import { defineRpcContract } from "@get-bb/plugin-sdk";
 import { z } from "zod";
 import { MAX_PATH_LENGTH } from "./dock/where.js";
 import { MAX_NAME_LENGTH } from "./identity.js";
+import { githubPickerResponseSchema, githubRepoResponseSchema, githubRepoWithBodyResponseSchema, githubStatusResponseSchema } from "./github-issue.js";
 
 /** A client address minted by transport.ts's `newClientId()`. */
 const clientIdSchema = z.string().trim().min(1).max(128);
@@ -31,6 +32,10 @@ const pathSchema = z
 // Schemas run at the wire boundary. Handler input/output are inferred from
 // this shared contract; CanvasPanel.tsx imports only its type.
 export const rpcContract = defineRpcContract({
+  canvas_github_status: { input: z.null(), output: githubStatusResponseSchema },
+  canvas_github_repo: { input: z.object({ repo: z.string().regex(/^[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+$/) }).strict(), output: githubRepoResponseSchema },
+  canvas_github_repo_v2: { input: z.object({ repo: z.string().regex(/^[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+$/) }).strict(), output: githubRepoWithBodyResponseSchema },
+  canvas_github_picker: { input: z.object({ query: z.string().trim().max(120) }).strict(), output: githubPickerResponseSchema },
   // The client half of the canvas transport. Replies are never returned here:
   // every server -> client frame goes out over bb.realtime on CANVAS_CHANNEL,
   // because a SyncRequest can produce several frames and some server -> client
@@ -40,13 +45,13 @@ export const rpcContract = defineRpcContract({
   // fetch has ever succeeded — such a client simply has no cursor label.
   canvas_join: {
     input: z
-      .object({ clientId: clientIdSchema, name: nameSchema.optional() })
+      .object({ clientId: clientIdSchema, name: nameSchema.optional(), schemaVersion: z.number().int().optional() })
       .strict(),
     output: z.object({ room: z.string() }).strict(),
   },
   canvas_frame: {
     input: z
-      .object({ clientId: clientIdSchema, data: z.string().max(4_000_000) })
+      .object({ clientId: clientIdSchema, data: z.string().max(4_000_000), schemaVersion: z.number().int().optional() })
       .strict(),
     output: z.object({ ok: z.literal(true) }).strict(),
   },

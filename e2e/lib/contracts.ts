@@ -81,7 +81,7 @@ async function seedScene(page: Page, contract: Contract): Promise<void> {
       ew.doc.putShape({
         id: s.id, kind: s.kind, parentId: s.parentId ?? ew.editor.pageId, index: 'a1',
         x: s.x, y: s.y, rotation: 0, isLocked: false, opacity: 1, meta: {},
-        props: { w: s.w, h: s.h },
+        props: { w: s.w, h: s.h, ...s.props },
       })
       ew.doc.setText(s.id, `text for ${s.id}`)
     }
