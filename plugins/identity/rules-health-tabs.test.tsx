@@ -382,6 +382,21 @@ describe("Health tab", () => {
     await waitFor(() => expect(writeText).toHaveBeenCalledWith("{\"plugin\":\"identity\"}"));
   });
 
+  it("drops an earlier Copied. when a later diagnostics request fails", async () => {
+    vi.stubGlobal("navigator", { ...navigator, clipboard: { writeText: vi.fn(() => Promise.resolve()) } });
+    const diagnostics = vi.fn()
+      .mockReturnValueOnce({ text: "{\"plugin\":\"identity\"}" })
+      .mockImplementationOnce(() => { throw new Error("offline"); });
+    mount({ identity_diagnostics: diagnostics });
+    const panel = await openTab("Health");
+    const button = await within(panel).findByRole("button", { name: "Copy diagnostics" });
+    fireEvent.click(button);
+    expect(await within(panel).findByText("Copied.")).toBeTruthy();
+    fireEvent.click(button);
+    expect(await within(panel).findByText(/Identity could not build the diagnostics/)).toBeTruthy();
+    expect(within(panel).queryByText("Copied.")).toBeNull();
+  });
+
   it("shows the diagnostics to copy by hand when the clipboard refuses", async () => {
     vi.stubGlobal("navigator", { ...navigator, clipboard: { writeText: vi.fn().mockRejectedValue(new Error("denied")) } });
     mount({ identity_diagnostics: () => ({ text: "{\"plugin\":\"identity\"}" }) });

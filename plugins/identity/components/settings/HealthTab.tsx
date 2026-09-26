@@ -141,12 +141,15 @@ function Checks({ lint }: { lint: SettingsOverview["lint"] }) {
 function Diagnostics() {
   const rpc = useRpc<typeof rpcContract>();
   const base = useId();
-  const { state, copy } = useCopy();
+  const { state, copy, reset } = useCopy();
   const [text, setText] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
-  // Read only on request: the bundle is built fresh each time it is copied.
+  // Read only on request: the bundle is built fresh each time it is copied, so an
+  // earlier "Copied." or hand-copy text never stands in for this request's outcome.
   const collect = () => {
     setError(null);
+    setText(null);
+    reset();
     void rpc.call("identity_diagnostics", {}).then((answer) => {
       setText(answer.text);
       copy(answer.text);
