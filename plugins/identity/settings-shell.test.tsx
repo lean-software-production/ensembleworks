@@ -118,7 +118,7 @@ describe("People & machines settings section", () => {
     [{ ...headerAlex, provenance: "configured-fallback" } as WhoAmI,
       "You: Alex Rivera · from the Fallback email setting · counts for Attribution only — never the guardrail"],
     [{ ...headerAlex, email: null, person: null, provenance: "unknown" } as WhoAmI,
-      "You: Anonymous · anonymous · Nothing is refused for anonymous requests"],
+      "You: Anonymous · anonymous · Never refused as a person (rules A and B)"],
     [{ ...headerAlex, email: "stranger@example.test", person: null } as WhoAmI,
       "You: stranger@example.test · from your Access email, read as-is · counts for Attribution and the guardrail"],
   ])("says who you are and what that counts for (%#)", async (whoami, text) => {
@@ -148,13 +148,13 @@ describe("People & machines settings section", () => {
     await openBrowserTab();
     const bar = await screen.findByRole("region", { name: "Who you are here" });
     const you = () => bar.querySelector("p")!.textContent;
-    await waitFor(() => expect(you()).toBe("You: Anonymous · anonymous · Nothing is refused for anonymous requests"));
+    await waitFor(() => expect(you()).toBe("You: Anonymous · anonymous · Never refused as a person (rules A and B)"));
     fireEvent.change(await screen.findByRole("combobox", { name: "Your name" }), { target: { value: "alex" } });
     fireEvent.click(screen.getByRole("button", { name: "Use this name" }));
     await waitFor(() => expect(you()).toBe(
       "You: Alex Rivera · from the name this browser chose · counts for Attribution only — never the guardrail"));
     fireEvent.click(await screen.findByRole("button", { name: "Forget" }));
-    await waitFor(() => expect(you()).toBe("You: Anonymous · anonymous · Nothing is refused for anonymous requests"));
+    await waitFor(() => expect(you()).toBe("You: Anonymous · anonymous · Never refused as a person (rules A and B)"));
   });
 
   // An identity_whoami read started before the picker changed the name must not win when it lands later.
@@ -358,7 +358,7 @@ describe("People & machines settings section", () => {
       identity_whoami: () => ({ ...headerAlex, person: null }),
     });
     const alert = await screen.findByRole("alert");
-    expect(alert.textContent).toContain(`The People directory setting is invalid: ${error}. Everyone is anonymous and nothing is refused until it is fixed.`);
+    expect(alert.textContent).toContain(`The People directory setting is invalid: ${error}. Everyone is anonymous and no person is refused until it is fixed.`);
     expect(alert.textContent).toContain("Fix ew_bb_people in infrastructure and redeploy");
     expect(within(alert).getByText("bb plugin config identity set directory '<json>'").tagName).toBe("CODE");
     const people = within(await readinessList()).getByRole("button", { name: /^People:/ });

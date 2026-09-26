@@ -115,7 +115,7 @@ export function definePluginApp(setup: (app: {
   slots: { experimental_appOverlay: (slot: Slot) => void; settingsSection: (slot: Slot) => void; experimental_threadHeaderAction: (slot: Slot) => void };
 }) => void) {
   setup({ contentScripts: { register: ignore }, composer: { customize: ignore }, slots: {
-    experimental_appOverlay: (slot) => { if (slot.id === "identity-prompt") IdentityPrompt = slot.component; }, 
+    experimental_appOverlay: (slot) => { if (slot.id === "identity-prompt") IdentityPrompt = slot.component; },
     settingsSection: (slot) => { if (slot.id === "people") Settings = slot.component; },
     experimental_threadHeaderAction: (slot) => { if (slot.id === "thread-ownership") Header = slot.component; },
   } });

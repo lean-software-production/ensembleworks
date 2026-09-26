@@ -404,7 +404,8 @@ describe("Machines tab", () => {
     const row = rowsOf(panel).find((entry) => machineName(entry) === name)!;
     fireEvent.click(within(row).getByRole("button", { name: "Remove from team" }));
     const dialog = await dialogNamed(`Remove ${name} from the team?`);
-    expect(dialog.textContent).toContain(`Automations headed for ${name} would be refused (rule C) once enforcing.`);
+    expect(dialog.textContent).toContain(`An automation starting a thread on ${name} would be refused (rule C) once enforcing. `
+      + "Automations posting into an existing thread are not checked.");
     expect(within(dialog).getByRole("button", { name: "Remove from team" }).getAttribute("data-variant"))
       .toBe("destructive");
     fireEvent.click(within(dialog).getByRole("button", { name: "Remove from team" }));

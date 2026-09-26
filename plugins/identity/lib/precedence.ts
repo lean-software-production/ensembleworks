@@ -45,7 +45,7 @@ export function precedenceLadder(whoami: WhoAmI, context: { fallbackConfigured: 
       : context.fallbackConfigured ? "The fallback email did not apply to this request."
       : "No fallback email is set.",
     anonymous: decided === "anonymous"
-      ? "Threads you start show no starter, and nothing is refused for anonymous requests."
+      ? "Threads you start show no starter, and the person rules (A and B) never refuse you."
       : "Not reached.",
   };
 

@@ -144,7 +144,7 @@ export function ProfilePanel({ overview, whoami, closable, onApplied, onClose }:
           consequence={
             <>
               {recommendation.changes.length === 0
-                ? <p>Every setting already matches; applying writes the same values again.</p>
+                ? <p>Every setting already matches; applying makes no change.</p>
                 : (
                   <ul>
                     {recommendation.changes.map((change) => (

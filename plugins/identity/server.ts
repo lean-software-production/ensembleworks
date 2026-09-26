@@ -737,9 +737,11 @@ export default async function plugin(bb: BbPluginApi) {
         + "audit: take the SAME decision enforcement would, write it to the log (`bb plugin logs identity`) "
         + "as a would-refuse, and let the message through anyway. "
         + "enforce: act on that decision — refuse a known person's start on another person's machine, their "
-        + "message into someone else's thread, and an automation off a team machine. "
-        + "A dispatch Identity cannot tie to a person is ALWAYS allowed in every mode — that is the normal "
-        + "shape of every agent path — and an identity supplied by Fallback email counts as untied. "
+        + "message into someone else's thread, and an automation spawning a thread on a named machine that is "
+        + "not a team machine. A dispatch Identity cannot tie to a person is never refused by the person rules — "
+        + "that is the normal shape of every agent path — and an identity supplied by Fallback email or a browser "
+        + "name counts as untied. The automation rule needs no person, but sees only spawns bb stamps: an "
+        + "automation posting into an existing thread arrives unstamped and is allowed, as is a spawn naming no machine. "
         + "audit and enforce both log their verdicts; off logs no verdicts, but settings, pin and colour "
         + "changes are logged in every mode when made through the People & machines section — a change made "
         + "in this form or with bb plugin config is applied but not logged. Emails appear in those log lines by design.",
@@ -843,7 +845,7 @@ export default async function plugin(bb: BbPluginApi) {
   //
   // Three streams, all through `bb.log` and nothing else (owner's decision: no ring
   // buffer, no /audit route, no UI log page). One JSON object per line, prefixed so
-  // `bb plugin logs identity | sed -n 's/.*identity-audit //p' | jq` works.
+  // `AUDIT_JQ_COMMAND` can pick it out of `bb plugin logs identity`'s JSON envelopes.
   //
   // Nothing here may refuse or delay a dispatch: `emitAudit` swallows its own failures,
   // the dispatch stream runs inside the hook's existing 5s fail-open deadline, and the
@@ -1029,8 +1031,9 @@ export default async function plugin(bb: BbPluginApi) {
   /**
    * The guardrail (step 5). It refuses only a POSITIVELY IDENTIFIED requester — a known
    * person, or a dispatch bb stamped as the automations plugin — and only while
-   * `restrictStarts` is on. See guardrail.ts for why an identity-less dispatch is always
-   * allowed (S9: that is the shape of every agent path).
+   * `enforcement` is `enforce` (`audit` logs the same verdict). See guardrail.ts for why a
+   * dispatch with no identity and no automations stamp is always allowed (S9: that is the
+   * shape of every agent path).
    *
    * The machine names in a refusal come from memory only: the team-machines setting, and
    * the machine list IF it happens to be warm. A refusal must never wait on the network

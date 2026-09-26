@@ -28,7 +28,7 @@ describe("COVERAGE_ROWS", () => {
     expect(COVERAGE_ROWS.map((row) => row.note)).toEqual([
       "The dispatch hook sees it and the guardrail can refuse it.",
       "Skips the dispatch hook; Identity records the requester afterwards. A Send-now dispatch hook in BB core would move this to Checked.",
-      "Rule C applies to stamped automation spawns.",
+      "Rule C applies to stamped automation spawns headed for a named machine; a spawn with no machine named is allowed.",
       "Arrives unstamped, so rule C cannot see it. Needs BB core to stamp threads.send.",
       "Always allowed: no identity means nothing to refuse. Attributed to the fallback email when one is set.",
       "Seen by the request stream in audit/enforce modes; never refused.",

@@ -316,8 +316,9 @@ export type PinResolution = z.infer<typeof pinResolution>;
   `picker-signing-key` (error, picker on and key not `valid`) · `picker-cookie`
   (warning, picker on and `pickerStatus === "cookie-bridge-unavailable"`) ·
   `self-test-failed` (error, `selfTest?.ok === false`) · `enforcement-no-team-machines`
-  (warning, enforcement ≠ off and teamMachines empty: "every automation would be
-  refused") · `pin-conflicts` (warning, ≥1 conflict) · `machines-unavailable` (warning)
+  (warning, enforcement ≠ off and teamMachines empty: "an automation starting a
+  thread on a named machine would be refused (rule C)", naming that unstamped
+  existing-thread automations are not checked) · `pin-conflicts` (warning, ≥1 conflict) · `machines-unavailable` (warning)
   · `unclaimed-machines` (info, ≥1 unclaimed host). Each `fix` is one imperative
   sentence naming where to fix it (tab name or `ew_bb_people`).
 - `readiness` (exact order and rules):
@@ -337,8 +338,10 @@ export type PinResolution = z.infer<typeof pinResolution>;
   - check → `selfTest === null`: attention "Not run yet" · any error lint: problem
     "`N` problem(s)" · any warning: attention "`N` warning(s)" · else ok "All checks
     pass"; tab `health`.
-- `enforceRisks`: (a) teamMachines empty → "Every automation would be refused: no team
-  machine is configured (rule C)." (b) for each `person` machine with a conflict:
+- `enforceRisks`: (a) teamMachines empty → "An automation starting a thread on a named
+  machine would be refused: no team machine is configured (rule C). Automations posting
+  into an existing thread arrive unstamped, and a start with no machine named is not
+  judged, so neither is refused." (b) for each `person` machine with a conflict:
   "`<currentName>` is pinned to `<pinnedPerson>`, but its name now says
   `<derived displayName | "nobody">`: `<derived displayName>` starting a thread there
   would be refused (rule A)." (drop the second clause when derived is nobody).
@@ -353,13 +356,13 @@ export type PinResolution = z.infer<typeof pinResolution>;
   person display names, **no** signing key. A test asserts that none of the fixture's
   emails, display names or key appear in the output.
 - `AUDIT_JQ_COMMAND` is exactly:
-  `bb plugin logs identity | sed -n 's/.*identity-audit //p' | jq -c 'select(.kind == "dispatch" and .verdict == "reject") | {at, mode, rule, person, host: .host.name, action}'`
+  `bb plugin logs identity | jq -cR 'fromjson? | .message? | strings | select(startswith("identity-audit ")) | ltrimstr("identity-audit ") | fromjson | select(.kind == "dispatch" and .verdict == "reject") | {at, mode, rule, person, host: .host.name, action}'`
 - `profileRecommendation`:
   - `access` → `{ selfSelectedIdentity: false, fallbackEmail: "", enforcement: current.enforcement === "off" ? "audit" : current.enforcement }`; note "Access supplies identities; start in audit and read the log before enforcing."
   - `direct` → `{ selfSelectedIdentity: true, fallbackEmail: "", enforcement: "off" }`
     plus `selectionPublicOrigin: browserOrigin` when current origin is invalid and
     `validateSelectionOrigin(browserOrigin)` accepts it (else a note "Set the public
-    origin in This browser"); note "Without Access nobody can be refused — browser
+    origin in This browser"); note "Without Access no person can be refused — browser
     names are labels only."
   - `solo` → `{ fallbackEmail: myEmail ?? "", selfSelectedIdentity: false, enforcement: "off", confirmSoleUser: true }`; note "Every header-less caller, agents included, will be attributed to this email."
   - `changes` lists only settings whose recommended value differs from `current`.
@@ -469,8 +472,8 @@ Direction 1 readiness rail condensed to a strip):
   upstream-header → "from your Access email, read as-is" · counts for "attribution and
   the guardrail"; self-selected → "from the name this browser chose" · "attribution
   only — never the guardrail"; configured-fallback → "from the Fallback email setting"
-  · "attribution only — never the guardrail"; unknown → "anonymous" · "nothing is
-  refused for anonymous requests".
+  · "attribution only — never the guardrail"; unknown → "anonymous" · "never
+  refused as a person (rules A and B)" (rule C refuses stamped automation spawns, which carry no person).
 - **Readiness strip**: an `<ol aria-label="Identity readiness">` of six items; each is a
   button (≥ 40px) reading "{label}: {text}" with a `StatusBadge`; activating one selects
   its tab (profile → opens `ProfilePanel`). Wraps on narrow widths; never scrolls the
@@ -483,7 +486,7 @@ Direction 1 readiness rail condensed to a strip):
   the real panel title and a short description of what it will show).
 - **Directory-error takeover**: when `overview.directory.ok === false`, the People panel
   shows an alert (`role="alert"`) "The People directory setting is invalid: {error}.
-  Everyone is anonymous and nothing is refused until it is fixed." with both fixes:
+  Everyone is anonymous and no person is refused until it is fixed." with both fixes:
   "Fix `ew_bb_people` in infrastructure and redeploy" and the CLI line
   `bb plugin config identity set directory '<json>'` in a `<code>`. The readiness
   strip shows People as problem.
@@ -684,7 +687,7 @@ export const COVERAGE_ROWS: readonly CoverageRow[];
 `COVERAGE_ROWS` content (exact, in order):
 1. "Composer send (new thread or follow-up)" · checked · "The dispatch hook sees it and the guardrail can refuse it."
 2. "Send now (queued message)" · seen-after · "Skips the dispatch hook; Identity records the requester afterwards. A Send-now dispatch hook in BB core would move this to Checked."
-3. "Automation spawning a thread (threads.spawn)" · checked · "Rule C applies to stamped automation spawns."
+3. "Automation spawning a thread (threads.spawn)" · checked · "Rule C applies to stamped automation spawns headed for a named machine; a spawn with no machine named is allowed."
 4. "Automation sending into an existing thread (threads.send)" · blind · "Arrives unstamped, so rule C cannot see it. Needs BB core to stamp threads.send."
 5. "Agents and the CLI (no Access header)" · checked · "Always allowed: no identity means nothing to refuse. Attributed to the fallback email when one is set."
 6. "Terminals, Stop, Archive, approvals, host routes, plugin RPCs" · logged-only · "Seen by the request stream in audit/enforce modes; never refused."
@@ -695,7 +698,7 @@ export const COVERAGE_ROWS: readonly CoverageRow[];
   and label only; never refuse." Audit: "Take the same decision Enforce would and write
   it to the log — let everything through." Enforce: "Refuse a known person's start on
   someone else's machine, their message into someone else's thread, and an automation
-  off a team machine."). Choosing Off or Audit saves immediately. Choosing Enforce
+  spawning a thread on a named machine that is not a team machine."). Choosing Off or Audit saves immediately. Choosing Enforce
   opens `ConfirmDialog` (checkbox gate "I have read the audit log and understand who
   would be refused"; consequence lists `overview.enforceRisks` as a `<ul>`, or "Identity
   cannot predict anyone being refused from machine state alone." when empty; always adds

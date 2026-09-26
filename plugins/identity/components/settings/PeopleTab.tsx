@@ -64,7 +64,7 @@ export function PeopleTab({ data }: { data: SettingsData }) {
         ? (
           <div role="alert" className="identity-settings-card identity-settings-alert">
             <p>
-              The People directory setting is invalid: {overview.directory.error}. Everyone is anonymous and nothing
+              The People directory setting is invalid: {overview.directory.error}. Everyone is anonymous and no person
               is refused until it is fixed.
             </p>
             <p>Fix it either way:</p>

@@ -9,7 +9,7 @@ const PROVENANCE: Record<WhoAmI["provenance"], { phrase: string; counts: string 
   "upstream-header": { phrase: "from your Access email, read as-is", counts: "Attribution and the guardrail" },
   "self-selected": { phrase: "from the name this browser chose", counts: "Attribution only — never the guardrail" },
   "configured-fallback": { phrase: "from the Fallback email setting", counts: "Attribution only — never the guardrail" },
-  "unknown": { phrase: "anonymous", counts: "Nothing is refused for anonymous requests" },
+  "unknown": { phrase: "anonymous", counts: "Never refused as a person (rules A and B)" },
 };
 
 /** Static text, not a live region: it changes only when the page reloads its answers. */

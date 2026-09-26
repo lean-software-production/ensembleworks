@@ -184,7 +184,8 @@ export function lintConfig(facts: AdminFacts): LintIssue[] {
   }
   if (facts.enforcement !== "off" && facts.teamMachines.length === 0) {
     issue("enforcement-no-team-machines", "warning",
-      "No team machine is configured, so every automation would be refused.",
+      "No team machine is configured, so an automation starting a thread on a named machine would be refused (rule C). "
+        + "Automations posting into an existing thread arrive unstamped and are not checked.",
       "Add the team machine in the Machines tab.");
   }
   const conflicts = facts.machines.filter((machine) => machine.conflict !== null).length;
@@ -267,11 +268,17 @@ export function readiness(facts: AdminFacts, lint: readonly LintIssue[]): Readin
   ];
 }
 
-/** Sentences naming who/what Enforce would refuse, predictable from machine state alone. */
+/**
+ * Sentences naming who/what Enforce would refuse, predictable from machine state alone.
+ * Rule C sees only a spawn bb stamped as the automations plugin that names a machine, so
+ * its risk says what it cannot see rather than claiming every automation.
+ */
 export function enforceRisks(facts: Pick<AdminFacts, "people" | "teamMachines" | "machines">): string[] {
   const risks: string[] = [];
   if (facts.teamMachines.length === 0) {
-    risks.push("Every automation would be refused: no team machine is configured (rule C).");
+    risks.push("An automation starting a thread on a named machine would be refused: no team machine is configured (rule C). "
+      + "Automations posting into an existing thread arrive unstamped, and a start with no machine named is not judged, "
+      + "so neither is refused.");
   }
   // A team machine named for a person is no risk: teamMachines wins, so it is classified team.
   for (const machine of facts.machines) {
@@ -412,8 +419,15 @@ export function redactDiagnostics(input: DiagnosticsInput): string {
   }, names), null, 2);
 }
 
+/**
+ * `bb plugin logs identity` prints one `{ts, level, message}` JSON envelope per line, so the
+ * audit object is escaped inside `.message`: parse the envelope, keep the `identity-audit `
+ * messages, then parse their tail. Non-JSON lines are skipped rather than fatal.
+ */
 export const AUDIT_JQ_COMMAND =
-  "bb plugin logs identity | sed -n 's/.*identity-audit //p' | jq -c 'select(.kind == \"dispatch\" and .verdict == \"reject\") | {at, mode, rule, person, host: .host.name, action}'";
+  "bb plugin logs identity | jq -cR 'fromjson? | .message? | strings | select(startswith(\"identity-audit \"))"
+  + " | ltrimstr(\"identity-audit \") | fromjson | select(.kind == \"dispatch\" and .verdict == \"reject\")"
+  + " | {at, mode, rule, person, host: .host.name, action}'";
 
 export const SERVER_PROFILES = ["access", "direct", "solo"] as const;
 export type ServerProfile = (typeof SERVER_PROFILES)[number];
@@ -461,7 +475,7 @@ export function profileRecommendation(
       if (origin !== null) patch.selectionPublicOrigin = origin;
       else notes.push("Set the public origin in This browser");
     }
-    notes.push("Without Access nobody can be refused — browser names are labels only.");
+    notes.push("Without Access no person can be refused — browser names are labels only.");
   } else {
     patch = { fallbackEmail: context.myEmail ?? "", selfSelectedIdentity: false, enforcement: "off", confirmSoleUser: true };
     notes.push(fallbackReach("this email"));

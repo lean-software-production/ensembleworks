@@ -108,7 +108,7 @@ describe("Rules tab — enforcement", () => {
     expect(described(off())).toBe("Record and label only; never refuse.");
     expect(described(audit())).toBe("Take the same decision Enforce would and write it to the log — let everything through.");
     expect(described(enforce())).toBe("Refuse a known person's start on someone else's machine, their message into "
-      + "someone else's thread, and an automation off a team machine.");
+      + "someone else's thread, and an automation spawning a thread on a named machine that is not a team machine.");
   });
 
   it("saves Off and Audit immediately, without a dialog", async () => {
@@ -142,7 +142,7 @@ describe("Rules tab — enforcement", () => {
 
   it("confirms Enforce naming who would be refused, gated on the acknowledgement", async () => {
     const update = vi.fn(() => ({ ok: true, changed: ["enforcement"] }));
-    const risk = "Every automation would be refused: no team machine is configured (rule C).";
+    const risk = "An automation starting a thread on a named machine would be refused: no team machine is configured (rule C).";
     mount({ identity_settings_overview: () => overview({}, { enforceRisks: [risk] }), identity_update_settings: update });
     const panel = await openTab("Rules");
     const { enforce } = await modes(panel);

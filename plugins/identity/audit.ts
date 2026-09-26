@@ -23,9 +23,9 @@ import type { AttributionFacts, DispatchOrigin, GuardOutcome, StarterSummary, Vi
 export const AUDIT_SCHEMA_VERSION = 2;
 
 /**
- * Every audit line starts with this token. `bb plugin logs identity` prefixes each line
- * with its own timestamp and level, so a consumer needs something to cut on:
- * `bb plugin logs identity | sed -n 's/.*identity-audit //p' | jq`.
+ * Every audit line starts with this token. `bb plugin logs identity` wraps each line in a
+ * `{ts, level, message}` JSON envelope, so a consumer parses the envelope and cuts on the
+ * token inside `.message` (see `AUDIT_JQ_COMMAND` in settings-admin.ts).
  */
 export const AUDIT_LINE_PREFIX = "identity-audit";
 

@@ -1,4 +1,6 @@
+import { spawnSync } from "node:child_process";
 import { describe, expect, it } from "vitest";
+import { formatAuditLine } from "./audit.js";
 import {
   AUDIT_JQ_COMMAND,
   PICKER_STATUSES,
@@ -65,10 +67,28 @@ describe("constants", () => {
     expect(SERVER_PROFILES).toEqual(["access", "direct", "solo"]);
   });
 
-  it("ships the exact jq command for would-refuse lines", () => {
-    expect(AUDIT_JQ_COMMAND).toBe(
-      "bb plugin logs identity | sed -n 's/.*identity-audit //p' | jq -c 'select(.kind == \"dispatch\" and .verdict == \"reject\") | {at, mode, rule, person, host: .host.name, action}'",
-    );
+  it("ships a jq command that pulls would-refuse lines out of bb's JSON log envelopes", () => {
+    const source = "bb plugin logs identity | ";
+    expect(AUDIT_JQ_COMMAND.startsWith(source)).toBe(true);
+    const dispatch = (verdict: string, rule: string | null) => formatAuditLine({
+      v: 2, kind: "dispatch", at: 1_700_000_000_000, mode: "audit", person: "alex@example.com",
+      host: { id: "h1", name: "ew-lsp-001-main", kind: "person" }, verdict, rule, action: "proceed",
+    });
+    // What `bb plugin logs identity` prints: one `{ts, level, message}` envelope per line,
+    // the audit object escaped inside `.message`, interleaved with the plugin's other logs.
+    const logs = [
+      { ts: "2026-09-26T10:00:00.000Z", level: "info", message: "identity: settings applied" },
+      { ts: "2026-09-26T10:00:01.000Z", level: "info", message: dispatch("proceed", null) },
+      { ts: "2026-09-26T10:00:02.000Z", level: "info", message: dispatch("reject", "start-on-another-persons-machine") },
+      { ts: "2026-09-26T10:00:03.000Z", level: "info", message: formatAuditLine({ v: 2, kind: "request", at: 1 }) },
+    ].map((envelope) => JSON.stringify(envelope)).join("\n") + "\nnot json at all\n";
+    const run = spawnSync("sh", ["-c", `cat | ${AUDIT_JQ_COMMAND.slice(source.length)}`], { input: logs, encoding: "utf8" });
+    expect(run.stderr).toBe("");
+    expect(run.status).toBe(0);
+    expect(run.stdout.trim().split("\n").map((line) => JSON.parse(line))).toEqual([{
+      at: 1_700_000_000_000, mode: "audit", rule: "start-on-another-persons-machine",
+      person: "alex@example.com", host: "ew-lsp-001-main", action: "proceed",
+    }]);
   });
 });
 
@@ -278,7 +298,8 @@ describe("lintConfig", () => {
   it("enforcement-no-team-machines", () => {
     const issue = lintConfig(healthy({ teamMachines: [] })).find((entry) => entry.id === "enforcement-no-team-machines");
     expect(issue?.severity).toBe("warning");
-    expect(issue?.message).toContain("every automation would be refused");
+    expect(issue?.message).toBe("No team machine is configured, so an automation starting a thread on a named machine would be "
+      + "refused (rule C). Automations posting into an existing thread arrive unstamped and are not checked.");
     expect(ids(lintConfig(healthy({ teamMachines: [], enforcement: "off" })))).not.toContain("enforcement-no-team-machines");
   });
 
@@ -379,9 +400,10 @@ describe("enforceRisks", () => {
     expect(enforceRisks(healthy())).toEqual([]);
   });
 
-  it("(a) every automation would be refused without a team machine", () => {
+  it("(a) an automation spawn on a named machine would be refused without a team machine", () => {
     expect(enforceRisks(healthy({ teamMachines: [] }))).toEqual([
-      "Every automation would be refused: no team machine is configured (rule C).",
+      "An automation starting a thread on a named machine would be refused: no team machine is configured (rule C). "
+      + "Automations posting into an existing thread arrive unstamped, and a start with no machine named is not judged, so neither is refused.",
     ]);
   });
 
@@ -565,7 +587,7 @@ describe("profileRecommendation", () => {
     expect(recommended.patch).toEqual({ selfSelectedIdentity: true, fallbackEmail: "", enforcement: "off",
       selectionPublicOrigin: "https://bb.example.com" });
     expect(recommended.changes.map((change) => change.setting)).toEqual(["selfSelectedIdentity", "selectionPublicOrigin"]);
-    expect(recommended.notes).toContain("Without Access nobody can be refused — browser names are labels only.");
+    expect(recommended.notes).toContain("Without Access no person can be refused — browser names are labels only.");
     expect(recommended.notes).not.toContain("Set the public origin in This browser");
   });
 

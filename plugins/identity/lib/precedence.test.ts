@@ -51,6 +51,8 @@ describe("precedenceLadder", () => {
     const rungs = precedenceLadder(whoami({}), { fallbackConfigured: false });
     expect(states(rungs)).toEqual(["access:skipped", "selection:skipped", "fallback:skipped", "anonymous:decided"]);
     expect(detail(rungs, "fallback")).toBe("No fallback email is set.");
+    expect(detail(rungs, "anonymous"))
+      .toBe("Threads you start show no starter, and the person rules (A and B) never refuse you.");
   });
 
   it.each(["stale", "expired", "invalid"] as const)(

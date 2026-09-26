@@ -18,7 +18,7 @@ const MODES: Record<EnforcementMode, { label: string; sentence: string }> = {
   enforce: {
     label: "Enforce",
     sentence: "Refuse a known person's start on someone else's machine, their message into someone else's thread, "
-      + "and an automation off a team machine.",
+      + "and an automation spawning a thread on a named machine that is not a team machine.",
   },
 };
 

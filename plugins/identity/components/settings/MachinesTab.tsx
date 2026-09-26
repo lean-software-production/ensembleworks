@@ -325,7 +325,8 @@ function PendingDialog({ pending: { action, row }, busy, onConfirm, onCancel }: 
     },
     "team-remove": {
       title: `Remove ${host} from the team?`, confirmLabel: "Remove from team", destructive: true,
-      consequence: `Automations headed for ${host} would be refused (rule C) once enforcing.`,
+      consequence: `An automation starting a thread on ${host} would be refused (rule C) once enforcing. `
+        + "Automations posting into an existing thread are not checked.",
     },
   };
   const { title, confirmLabel, destructive = false, consequence } = copy[action];

@@ -205,10 +205,13 @@ The rules `audit` reports and `enforce` acts on (`guardrail.ts`): **A** a known 
 start on another *person's* machine (team and unclaimed machines are always fine); **B** a
 known person's message into a thread a different known person started; **C** an automation
 (`origin: plugin`, `originPluginId: automations`) headed for a machine that is not a team
-machine. A dispatch Identity cannot tie to a person is **always allowed, in every mode** —
-that is the normal shape of every agent path (see the design note's S9) — and an identity
-that came from a browser name or from `fallbackEmail` counts as untied: only an Access
-identity can ever be refused.
+machine. A dispatch Identity cannot tie to a person is **never refused by rules A or B, in
+any mode** — that is the normal shape of every agent path (see the design note's S9) — and
+an identity that came from a browser name or from `fallbackEmail` counts as untied: only an
+Access identity can be refused as a person. Rule C needs no person, and sees only what bb
+stamps: a `threads.spawn` from the automations plugin that names a machine. An automation
+posting into an existing thread (`threads.send`) arrives unstamped, and a spawn that names
+no machine is not judged, so rule C allows both.
 
 `audit` and `enforce` run the *same* `decideGuardrail` call; only the returned action
 differs. A test drives the same facts through both modes and asserts the verdicts are
@@ -261,7 +264,7 @@ Four more kinds record changes rather than traffic, and are written in **every**
 `off` included: `settings.change` and `host.pin` (the People & machines section's writes,
 below), `person.color` (a colour set or cleared) and `identity.selection` (a browser
 choosing or forgetting a name). A setting changed directly — through BB's generated
-Configuration form or `bb plugin config identity set` — writes no line at all.
+Configuration form or `bb plugin config identity set` — writes no `settings.change` line.
 
 **Emails appear in these lines by design** — "which actions carried identity, and whose" is
 the question being answered. Message bodies and thread content never do; identity facts
@@ -366,7 +369,9 @@ what makes a section write accountable. A change made through the generated form
 CLI carries no such line (see *What each write does*), so while that form stays visible
 the log is not a complete record of who changed a setting. Precedence stays fixed (Access header → valid browser
 name → `fallbackEmail` → anonymous; a stale, expired or invalid name is anonymous and
-never falls through to the fallback), and only an Access identity can ever be refused.
+never falls through to the fallback). Only an Access identity can be refused as a person
+(rules A and B); rule C refuses a stamped automation spawn headed for a named machine that is
+not a team machine, with no person involved.
 
 ### Audit evidence stays out of the UI
 
@@ -374,7 +379,7 @@ By decision there is no log viewer and no count of would-refuse decisions in the
 section. The Rules tab shows, and copies, this command instead:
 
 ```
-bb plugin logs identity | sed -n 's/.*identity-audit //p' | jq -c 'select(.kind == "dispatch" and .verdict == "reject") | {at, mode, rule, person, host: .host.name, action}'
+bb plugin logs identity | jq -cR 'fromjson? | .message? | strings | select(startswith("identity-audit ")) | ltrimstr("identity-audit ") | fromjson | select(.kind == "dispatch" and .verdict == "reject") | {at, mode, rule, person, host: .host.name, action}'
 ```
 
 ### What still needs BB core
@@ -434,7 +439,7 @@ the header chip. Display only — Identity never sets or checks it.
 Prefer the People & machines section above: it confirms the risky changes and writes an
 audit line for each. The CLI still works, and is the only way to set `directory`, but a
 CLI (or generated Configuration form) change skips those confirmations and writes no
-audit line:
+`settings.change` line:
 
 ```
 bb plugin config identity set directory '<json>'
