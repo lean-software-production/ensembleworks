@@ -36,7 +36,8 @@ describe("precedenceLadder", () => {
     expect(states(rungs)).toEqual(["access:skipped", "selection:decided", "fallback:not-reached",
       "anonymous:not-reached"]);
     expect(detail(rungs, "selection")).toContain("Alex Rivera");
-    expect(detail(rungs, "selection")).toContain("never the guardrail");
+    expect(detail(rungs, "selection")).toContain("never the person rules");
+    expect(detail(rungs, "selection")).not.toContain("never the guardrail");
   });
 
   it("decides on the fallback email only when nothing above it applies", () => {
@@ -45,6 +46,24 @@ describe("precedenceLadder", () => {
     expect(states(rungs)).toEqual(["access:skipped", "selection:skipped", "fallback:decided",
       "anonymous:not-reached"]);
     expect(detail(rungs, "fallback")).toContain("solo@example.test");
+    // A stamped automation attributed to the fallback can still meet the automation rule.
+    expect(detail(rungs, "fallback")).toContain("never the person rules");
+    expect(detail(rungs, "fallback")).not.toContain("never the guardrail");
+  });
+
+  it("says an Access email the directory lacks counts for attribution only", () => {
+    // people.ts resolves it to no person, so makeGuardrail has no requester for the person rules.
+    const rungs = precedenceLadder(whoami({ email: "stranger@example.test", provenance: "upstream-header" }),
+      { fallbackConfigured: false });
+    expect(detail(rungs, "access")).toContain("not in the directory");
+    expect(detail(rungs, "access")).toContain("attribution only");
+    expect(detail(rungs, "access")).not.toContain("the guardrail");
+  });
+
+  it("says a directory person's Access email counts for the guardrail", () => {
+    const rungs = precedenceLadder(whoami({ email: "alex@example.test", person: alex, provenance: "upstream-header" }),
+      { fallbackConfigured: false });
+    expect(detail(rungs, "access")).toContain("It counts for attribution and the guardrail.");
   });
 
   it("decides anonymous when nothing names you", () => {

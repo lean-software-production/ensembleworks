@@ -19,7 +19,7 @@ export const GLOSSARY: Record<GlossaryId, GlossaryEntry> = {
     title: "Attribution only",
     body: [
       "A name chosen in a browser, or the fallback email, labels who started a thread and who sent a message. That is all it does.",
-      "It is never refused. A thread recorded as started by it is open to anyone; one begun with Send now has no record and counts as a new start. Only an Access email counts for the person rules; the automation rule covers stamped automations.",
+      "The person rules never refuse it. A thread recorded as started by it is open to anyone; one begun with Send now has no record. Only an Access email in the directory counts for the person rules; the automation rule covers stamped automations.",
     ],
     more: "browser",
   },
@@ -35,7 +35,7 @@ export const GLOSSARY: Record<GlossaryId, GlossaryEntry> = {
     title: "The guardrail",
     body: [
       "Identity's one check before a message runs. It catches mistakes, such as starting a thread on someone else's machine; it is not a lock.",
-      "Only two kinds of request can be refused: one from a person identified by their Access email, and a new thread from an automation BB has stamped. Anything else goes through.",
+      "Only two kinds of request can be refused: one from a person in the directory, identified by their Access email, and a new thread from an automation BB has stamped. Anything else goes through.",
     ],
     more: "rules",
   },
@@ -51,7 +51,7 @@ export const GLOSSARY: Record<GlossaryId, GlossaryEntry> = {
   "rule-own-machine": {
     title: "Own-machine rule",
     body: [
-      "Someone identified by their Access email may not start a thread on another person's machine. Team and unclaimed machines are open to every person; an automation still needs a team machine (the automation rule).",
+      "In Enforce, someone identified by their Access email can't start a thread on another person's machine; Audit logs it and lets it through. Team and unclaimed machines are open to every person; an automation still needs a team machine (the automation rule).",
       "In the log: start-on-another-persons-machine.",
     ],
     more: "rules",
@@ -59,7 +59,7 @@ export const GLOSSARY: Record<GlossaryId, GlossaryEntry> = {
   "rule-own-thread": {
     title: "Own-thread rule",
     body: [
-      "Someone identified by their Access email may not send into a thread whose recorded starter is another person identified the same way. An agent's child thread inherits its starter. A thread recorded from a browser name or the fallback email is open to anyone. A thread with no record, such as one begun with Send now, counts as a new start: the own-machine rule applies.",
+      "In Enforce, someone identified by their Access email can't send into a thread whose recorded starter is another such person; Audit logs it and lets it through. A child thread inherits its starter. One recorded from a browser name or the fallback email is open. A thread with no record, such as one begun with Send now, counts as a new start: the own-machine rule applies.",
       "In the log: follow-up-by-non-starter.",
     ],
     more: "rules",
@@ -67,7 +67,7 @@ export const GLOSSARY: Record<GlossaryId, GlossaryEntry> = {
   "rule-automation": {
     title: "Automation rule",
     body: [
-      "An automation may start a thread only on a team machine, or without naming a machine. It is checked only when BB stamps it as the automations plugin.",
+      "In Enforce, an automation can start a thread only on a team machine, or without naming one; Audit logs it and lets it through. It is checked only when BB stamps it as the automations plugin.",
       "An automation sending into an existing thread is not stamped, so it is never checked.",
       "In the log: automation-off-team-machine.",
     ],
@@ -77,7 +77,7 @@ export const GLOSSARY: Record<GlossaryId, GlossaryEntry> = {
     title: "When the machine is checked",
     body: [
       "BB doesn't tell Identity which machine you pick here, so this banner can't check it.",
-      "In Audit and Enforce, pressing Send checks the machine. If you are identified by your Access email, Enforce refuses a start on someone else's machine and names whose it is. In Audit it is logged and goes ahead. A browser name or the fallback email is never refused. Off only records the starter.",
+      "In Audit and Enforce, pressing Send checks the machine. If you are identified by your Access email, Enforce refuses a start on someone else's machine and names whose it is. In Audit it is logged and goes ahead. The person rules never refuse a browser name or the fallback email. Off only records the starter.",
     ],
     more: "rules",
   },
@@ -85,7 +85,7 @@ export const GLOSSARY: Record<GlossaryId, GlossaryEntry> = {
     title: "Fallback email",
     body: [
       "For a server only one person uses. A request with no Access email and no browser name, such as an agent or the CLI, is attributed to this email.",
-      "Attribution only: the guardrail never refuses on it. Leave it empty on a shared server.",
+      "Attribution only: the person rules never refuse it, though a stamped automation still meets the automation rule. Leave it empty on a shared server.",
     ],
     more: "browser",
   },
@@ -93,7 +93,7 @@ export const GLOSSARY: Record<GlossaryId, GlossaryEntry> = {
     title: "Whose machine it is",
     body: [
       "A machine whose name ends in -<name>, where <name> is someone's id or GitHub handle, is theirs. Identity pins it on first sight, so a rename doesn't change the owner; a rename that disagrees shows as a conflict.",
-      "Team-list machines are the team's, even with a person's name. Anything else is unclaimed: any person may start threads there, but an automation may not.",
+      "Team-list machines are the team's, even with a person's name. Anything else is unclaimed: any person may start there. In Enforce an automation may not; Audit logs it and lets it through.",
     ],
     more: "machines",
   },

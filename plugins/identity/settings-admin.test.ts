@@ -610,8 +610,7 @@ describe("profileRecommendation", () => {
       expect.objectContaining({ setting: "enforcement", now: "audit", recommended: "off" }),
     ]);
     expect(recommended.notes).toContain("Requests with no Access email and no browser name, agents included, will be "
-      + "attributed to this email. While browser names are on, a browser presenting a stale, expired or invalid name "
-      + "stays anonymous — the fallback never covers it.");
+      + "attributed to this email; a stale, expired or invalid name stays anonymous.");
   });
 
   it("changes lists only differences", () => {

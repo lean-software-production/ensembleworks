@@ -25,7 +25,7 @@ describe("the glossary", () => {
 
   it("states the facts the rest of the UI leans on", () => {
     expect(text("guardrail")).toContain("Only two kinds of request can be refused");
-    expect(text("attribution-only")).toContain("never refused");
+    expect(text("attribution-only")).toContain("The person rules never refuse it");
     expect(text("precedence")).toContain("never falls through to the fallback email");
     // Spike S3-lite: a new-thread composer customization never sees the selected machine.
     expect(text("composer-check")).toContain("doesn't tell Identity which machine");
@@ -61,7 +61,7 @@ describe("the glossary", () => {
     // makeGuardrail passes no requester for a browser name or the fallback email, and rule A
     // needs one; only a stamped automation is refused without a person.
     expect(text("composer-check")).toContain("If you are identified by your Access email, Enforce refuses");
-    expect(text("composer-check")).toContain("A browser name or the fallback email is never refused");
+    expect(text("composer-check")).toContain("The person rules never refuse a browser name or the fallback email");
   });
 
   it("checks the machine at Send only in Audit and Enforce", () => {
@@ -91,11 +91,35 @@ describe("the glossary", () => {
     // Rule C refuses a stamped automation, which has no Access email; and a Send-now start
     // leaves no record, so its next dispatch is judged as a start by rule A.
     expect(text("attribution-only")).not.toContain("Only an Access email counts for the guardrail");
-    expect(text("attribution-only")).toContain("Only an Access email counts for the person rules");
+    expect(text("attribution-only")).toContain("Only an Access email in the directory counts for the person rules");
     expect(text("attribution-only")).toContain("stamped automation");
     expect(text("attribution-only")).not.toContain("threads it starts are open to anyone");
     expect(text("attribution-only")).toContain("A thread recorded as started by it is open to anyone");
     expect(text("attribution-only")).toContain("one begun with Send now has no record");
+  });
+
+  it("never exempts a browser name, the fallback email or no identity from the whole guardrail", () => {
+    // guardrail.ts rule C refuses a stamped automation with no requester at all, and
+    // server.ts hands the fallback identity to header-less callers, automations included.
+    for (const id of Object.keys(GLOSSARY) as GlossaryId[]) {
+      expect(text(id), id).not.toMatch(/is never refused|guardrail never refuses|nothing to refuse/);
+    }
+    for (const id of ["attribution-only", "fallback-email", "composer-check"] as const) {
+      expect(text(id), id).toMatch(/person rules never refuse/);
+    }
+  });
+
+  it("names a person in the directory as the one the person rules can refuse", () => {
+    // people.ts resolves an Access email the directory lacks to no person.
+    expect(text("guardrail")).toContain("a person in the directory, identified by their Access email");
+  });
+
+  it("gives each refusal as Enforce's, and says Audit lets it through", () => {
+    // makeGuardrail decides nothing in Off and acts on nothing in Audit.
+    for (const id of ["rule-own-machine", "rule-own-thread", "rule-automation", "machine-owner"] as const) {
+      expect(text(id), id).toContain("In Enforce");
+      expect(text(id), id).toContain("Audit logs it and lets it through");
+    }
   });
 
   it("does not say Send now leaves a record of who sent it", () => {

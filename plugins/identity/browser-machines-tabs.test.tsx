@@ -13,6 +13,7 @@ import {
   removeTeamMachine,
   type AdminFacts,
 } from "./settings-admin.js";
+import { stubPopoverDom } from "./popover-test-dom.js";
 
 const app = await loadPluginApp(() => import("./app.js"));
 const section = app.settingsSections.find((entry) => entry.id === "people")!;
@@ -248,7 +249,8 @@ describe("This browser tab", () => {
     const dialog = await dialogNamed("Set a fallback email?");
     expect(dialog.textContent).toContain("s***@example.test");
     expect(dialog.textContent).not.toContain("solo@example.test");
-    expect(dialog.textContent).toContain("The guardrail never refuses on it.");
+    expect(dialog.textContent).toContain("stays anonymous. Attribution only.");
+    expect(within(dialog).getByRole("button", { name: "Attribution only" })).toBeTruthy();
     expect(dialog.textContent).not.toContain("This server looks shared.");
     const confirm = within(dialog).getByRole("button", { name: "Set fallback email" });
     expect(confirm.hasAttribute("disabled")).toBe(true);
@@ -258,6 +260,40 @@ describe("This browser tab", () => {
     await waitFor(() => expect(update).toHaveBeenCalledWith({ fallbackEmail: "solo@example.test", confirmSoleUser: true }));
     await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
     expect(document.activeElement).toBe(save);
+  });
+
+  // One explanation, one place: the dialog says the consequence in one sentence and leaves
+  // what the fallback email counts for to its glossary entry.
+  it("explains the fallback email from its dialog through the glossary", async () => {
+    stubPopoverDom();
+    mount();
+    const panel = await openTab("This browser");
+    fireEvent.change(await within(panel).findByRole("textbox", { name: "Fallback email" }),
+      { target: { value: "solo@example.test" } });
+    fireEvent.click(within(panel).getByRole("button", { name: "Save fallback email" }));
+    const dialog = await dialogNamed("Set a fallback email?");
+    const reach = within(dialog).getByText(/^Requests with no Access email/);
+    expect(reach.textContent).toBe("Requests with no Access email and no browser name, agents included, will be "
+      + "attributed to s***@example.test; a stale, expired or invalid name stays anonymous. Attribution only.");
+    fireEvent.click(within(dialog).getByRole("button", { name: "Attribution only" }));
+    const entry = await screen.findByRole("dialog", { name: "Fallback email" });
+    expect(entry.textContent).toContain("the person rules never refuse it");
+  });
+
+  it.each([
+    [false, "Let browsers choose a name?", "attribution only", "Attribution only"],
+    [true, "Stop browsers choosing a name?", "the next identity that applies", "Which name you are shown as"],
+  ])("says the browser-name consequence in one sentence and explains the rest (%#)", async (on, title, term, entry) => {
+    stubPopoverDom();
+    mount({ identity_settings_overview: () => overview(on ? {} : { selfSelectedIdentity: false, pickerStatus: "off" }) });
+    const panel = await openTab("This browser");
+    fireEvent.click(await within(panel).findByRole("checkbox", { name: /Let browsers choose a name/ }));
+    const dialog = await dialogNamed(title);
+    const sentence = within(dialog).getByRole("button", { name: term }).closest("p")!;
+    expect(sentence.textContent!.match(/[.;:]\s/g)).toBeNull();
+    expect(sentence.textContent).not.toContain("never the guardrail");
+    fireEvent.click(within(dialog).getByRole("button", { name: term }));
+    expect(await screen.findByRole("dialog", { name: entry })).toBeTruthy();
   });
 
   it("warns that a server where Access was seen looks shared", async () => {

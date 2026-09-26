@@ -33,14 +33,16 @@ export function precedenceLadder(whoami: WhoAmI, context: { fallbackConfigured: 
 
   const details: Record<RungId, string> = {
     access: decided === "access"
-      ? `Access sent ${whoami.email ?? "an email"}${name === null ? ", which is not in the directory" : `, which the directory names ${name}`}. It counts for attribution and the guardrail.`
+      ? `Access sent ${whoami.email ?? "an email"}${name === null
+        ? ", which is not in the directory. It counts for attribution only; the person rules need a directory match."
+        : `, which the directory names ${name}. It counts for attribution and the guardrail.`}`
       : "No Access email on this request.",
     selection: status === "overridden" ? "Your Access email outranks this browser's choice."
       : badChoice ? `This browser's choice is ${status}; Identity treats you as anonymous rather than falling back.`
-      : decided === "selection" ? `This browser chose ${name ?? "a name"}. It counts for attribution, never the guardrail.`
+      : decided === "selection" ? `This browser chose ${name ?? "a name"}. It counts for attribution, never the person rules.`
       : "This browser has not chosen a name.",
     fallback: decided === "fallback"
-      ? `The Fallback email setting names ${whoami.email ?? "someone"}${name === null ? "" : ` (${name})`}. It counts for attribution, never the guardrail.`
+      ? `The Fallback email setting names ${whoami.email ?? "someone"}${name === null ? "" : ` (${name})`}. It counts for attribution, never the person rules.`
       : badChoice && context.fallbackConfigured ? `Skipped: a ${status} choice never falls through to the fallback.`
       : context.fallbackConfigured ? "The fallback email did not apply to this request."
       : "No fallback email is set.",

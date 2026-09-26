@@ -119,9 +119,9 @@ describe("People & machines settings section", () => {
     [{ ...headerAlex, provenance: "configured-fallback" } as WhoAmI,
       "You: Alex Rivera · from the fallback email · counts for Attribution only"],
     [{ ...headerAlex, email: null, person: null, provenance: "unknown" } as WhoAmI,
-      "You: Anonymous · anonymous · Never refused"],
+      "You: Anonymous · anonymous · counts for Nothing"],
     [{ ...headerAlex, email: "stranger@example.test", person: null } as WhoAmI,
-      "You: stranger@example.test · from your Access email · counts for Attribution and the guardrail"],
+      "You: stranger@example.test · from your Access email · counts for Attribution only"],
   ])("says who you are and what that counts for (%#)", async (whoami, text) => {
     mount({ identity_whoami: () => whoami });
     const bar = await screen.findByRole("region", { name: "Who you are here" });
@@ -130,6 +130,17 @@ describe("People & machines settings section", () => {
     expect(trust!.textContent).toBe("Changes here are logged.");
     expect(bar.getAttribute("role")).toBeNull();
     expect(bar.querySelector("[role=status]")).toBeNull();
+  });
+
+  // people.ts resolves an email the directory lacks to no person, and makeGuardrail then has
+  // no requester, so neither person rule can refuse it: only a directory match earns the pill.
+  it.each([
+    [headerAlex, "guardrail"],
+    [{ ...headerAlex, email: "stranger@example.test", person: null } as WhoAmI, "attribution"],
+  ])("marks only a directory person's Access email as counting for the guardrail (%#)", async (whoami, trust) => {
+    mount({ identity_whoami: () => whoami });
+    const bar = await screen.findByRole("region", { name: "Who you are here" });
+    expect(bar.querySelector(".identity-settings-pill")!.getAttribute("data-trust")).toBe(trust);
   });
 
   it("jumps from a popover's More to that tab and focuses it", async () => {
@@ -162,13 +173,13 @@ describe("People & machines settings section", () => {
     await openBrowserTab();
     const bar = await screen.findByRole("region", { name: "Who you are here" });
     const you = () => bar.querySelector("p")!.textContent;
-    await waitFor(() => expect(you()).toBe("You: Anonymous · anonymous · Never refused"));
+    await waitFor(() => expect(you()).toBe("You: Anonymous · anonymous · counts for Nothing"));
     fireEvent.change(await screen.findByRole("combobox", { name: "Your name" }), { target: { value: "alex" } });
     fireEvent.click(screen.getByRole("button", { name: "Use this name" }));
     await waitFor(() => expect(you()).toBe(
       "You: Alex Rivera · chosen in this browser · counts for Attribution only"));
     fireEvent.click(await screen.findByRole("button", { name: "Forget" }));
-    await waitFor(() => expect(you()).toBe("You: Anonymous · anonymous · Never refused"));
+    await waitFor(() => expect(you()).toBe("You: Anonymous · anonymous · counts for Nothing"));
   });
 
   // An identity_whoami read started before the picker changed the name must not win when it lands later.

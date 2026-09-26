@@ -8,6 +8,7 @@ import {
   type ServerProfile,
   type WritableSettings,
 } from "../../settings-admin.js";
+import { Explain } from "../Explain.js";
 import { ConfirmDialog } from "./ConfirmDialog.js";
 
 const PROFILE_LABELS: Record<ServerProfile, string> = {
@@ -159,7 +160,7 @@ export function ProfilePanel({ overview, whoami, closable, onApplied, onClose }:
                 </p>
               )}
               {fallback !== null && (
-                <p>{fallbackReach(fallback)}</p>
+                <p>{fallbackReach(fallback)} <Explain term="fallback-email">Attribution only</Explain>.</p>
               )}
             </>
           }

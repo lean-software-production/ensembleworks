@@ -450,9 +450,8 @@ const SETTING_LABELS: Record<keyof WritableSettings, string> = {
  * and never falls through to the fallback.
  */
 export function fallbackReach(target: string): string {
-  return `Requests with no Access email and no browser name, agents included, will be attributed to ${target}. `
-    + "While browser names are on, a browser presenting a stale, expired or invalid name stays anonymous — "
-    + "the fallback never covers it.";
+  return `Requests with no Access email and no browser name, agents included, will be attributed to ${target}; `
+    + "a stale, expired or invalid name stays anonymous.";
 }
 
 export function profileRecommendation(

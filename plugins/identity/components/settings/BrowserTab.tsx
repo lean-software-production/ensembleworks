@@ -190,8 +190,8 @@ export function BrowserTab({ data }: { data: SettingsData }) {
           onConfirm={confirm}
           onCancel={() => { if (!busy) setPending(null); }}
           consequence={pending.on
-            ? <p>Anyone who opens BB can pick any name in the directory. A chosen name counts for attribution, never the guardrail.</p>
-            : <p>Every browser{"'"}s chosen name stops counting: those browsers show as anonymous, or as the fallback email if one is set.</p>}
+            ? <p>Anyone who opens BB can pick any name in the directory, as <Explain term="attribution-only">attribution only</Explain>.</p>
+            : <p>Every browser{"'"}s chosen name stops counting, so each shows as <Explain term="precedence">the next identity that applies</Explain>.</p>}
         />
       )}
       {pending?.kind === "origin" && (
@@ -225,7 +225,7 @@ export function BrowserTab({ data }: { data: SettingsData }) {
           onCancel={() => { if (!busy) setPending(null); }}
           consequence={
             <p>
-              {fallbackReach(redactEmail(pending.value))} The guardrail never refuses on it.
+              {fallbackReach(redactEmail(pending.value))} <Explain term="fallback-email">Attribution only</Explain>.
               {looksShared ? " This server looks shared." : ""}
             </p>
           }

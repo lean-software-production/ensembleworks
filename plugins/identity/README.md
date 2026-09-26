@@ -299,7 +299,8 @@ BB's settings page carries one Identity section, **People & machines** (section 
 and it is where the settings below are meant to be changed. From the top:
 
 - **The identity bar** — who this browser is (`You: Alex Rivera · from your Access email,
-  read as-is · counts for Attribution and the guardrail`), and the standing reminder that
+  read as-is · counts for Attribution and the guardrail`; an Access email the directory
+  lacks counts for Attribution only), and the standing reminder that
   Identity is a guardrail against mistakes, not a lock.
 - **The readiness strip** — six items (profile, people, machines, browser names,
   guardrail, check), each an icon plus text; activating one opens the tab that fixes it.
@@ -371,7 +372,7 @@ what makes a section write accountable. A change made through the generated form
 CLI carries no such line (see *What each write does*), so while that form stays visible
 the log is not a complete record of who changed a setting. Precedence stays fixed (Access header → valid browser
 name → `fallbackEmail` → anonymous; a stale, expired or invalid name is anonymous and
-never falls through to the fallback). Only an Access identity can be refused as a person
+never falls through to the fallback). Only an Access identity the directory knows can be refused as a person
 (rules A and B); rule C refuses a stamped automation spawn headed for a named machine that is
 not a team machine, with no person involved.
 
@@ -424,8 +425,9 @@ Optional, default empty. Used as the requester's email when a request carries
 neither an Access header nor a valid browser name, for a BB server that is not behind
 Cloudflare Access (e.g. a laptop). Such callers, agents and the CLI included, are then
 attributed to this email. With browser names on, a browser presenting a stale, expired
-or invalid name stays anonymous — it never falls through to the fallback. The guardrail
-never refuses on a fallback identity. Leave it empty on a shared server.
+or invalid name stays anonymous — it never falls through to the fallback. The person rules
+never refuse a fallback identity; a stamped automation still meets the automation rule.
+Leave it empty on a shared server.
 
 ### `teamMachines`
 
