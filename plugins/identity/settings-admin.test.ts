@@ -560,7 +560,9 @@ describe("profileRecommendation", () => {
       expect.objectContaining({ setting: "fallbackEmail", now: "", recommended: "me@example.com" }),
       expect.objectContaining({ setting: "enforcement", now: "audit", recommended: "off" }),
     ]);
-    expect(recommended.notes).toContain("Every header-less caller, agents included, will be attributed to this email.");
+    expect(recommended.notes).toContain("Requests with no Access email and no browser name, agents included, will be "
+      + "attributed to this email. While browser names are on, a browser presenting a stale, expired or invalid name "
+      + "stays anonymous — the fallback never covers it.");
   });
 
   it("changes lists only differences", () => {

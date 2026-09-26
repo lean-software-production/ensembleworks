@@ -29,13 +29,15 @@ const READ_FAILURES: Record<ReadKey, string> = {
 /**
  * The four reads the page is built from, fetched in parallel. Each failure is isolated —
  * a failed overview still renders the people — and a reload discards any answer that
- * arrives after a newer reload started.
+ * arrives after a newer reload started, or (for who-you-are) after the picker adopted one.
  */
 export function useSettingsData(): SettingsData {
   const rpc = useRpc<typeof rpcContract>();
   const rpcRef = useRef(rpc);
   rpcRef.current = rpc;
   const generation = useRef(0);
+  // Bumped when the picker hands over a fresher who-you-are, so an older read cannot undo it.
+  const whoamiVersion = useRef(0);
   const [overview, setOverview] = useState<SettingsOverview | null>(null);
   const [roster, setRoster] = useState<RosterAnswer | null>(null);
   const [whoami, setWhoami] = useState<WhoAmI | null>(null);
@@ -44,13 +46,15 @@ export function useSettingsData(): SettingsData {
 
   const reload = useCallback(() => {
     const mine = ++generation.current;
+    const whoamiAtStart = whoamiVersion.current;
     const read = <T,>(key: ReadKey, call: () => Promise<T>, store: (value: T) => void) => {
+      const stale = () => generation.current !== mine || (key === "whoami" && whoamiVersion.current !== whoamiAtStart);
       void call().then((value) => {
-        if (generation.current !== mine) return;
+        if (stale()) return;
         store(value);
         setErrors((current) => { const { [key]: _gone, ...rest } = current; return rest; });
       }, (failure: unknown) => {
-        if (generation.current !== mine) return;
+        if (stale()) return;
         setErrors((current) => ({ ...current, [key]: `${READ_FAILURES[key]}: ${String(failure)}` }));
       });
     };
@@ -61,6 +65,7 @@ export function useSettingsData(): SettingsData {
   }, []);
 
   const adoptWhoami = useCallback((fresh: WhoAmI) => {
+    whoamiVersion.current++;
     setWhoami(fresh);
     setErrors((current) => { const { whoami: _gone, ...rest } = current; return rest; });
   }, []);

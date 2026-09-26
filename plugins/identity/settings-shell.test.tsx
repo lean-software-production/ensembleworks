@@ -154,6 +154,36 @@ describe("People & machines settings section", () => {
     await waitFor(() => expect(you()).toBe("You: Anonymous · anonymous · Nothing is refused for anonymous requests"));
   });
 
+  // An identity_whoami read started before the picker changed the name must not win when it lands later.
+  it.each([
+    ["answer", (settle: { resolve: (whoami: WhoAmI) => void }, stale: WhoAmI) => settle.resolve(stale)],
+    ["rejection", (settle: { reject: (failure: Error) => void }) => settle.reject(new Error("offline"))],
+  ] as const)("keeps the picker's name when an older who-you-are %s lands late", async (_kind, land) => {
+    const readyPicker = { enabled: true, status: "ready", people: [alex] };
+    const anonymous: WhoAmI = { email: null, person: null, provenance: "unknown", selection: null, picker: readyPicker };
+    const chosen: WhoAmI = { email: null, person: alex, provenance: "self-selected", selection: { status: "valid" },
+      picker: readyPicker };
+    let current = anonymous;
+    let settle = { resolve: (_whoami: WhoAmI) => {}, reject: (_failure: Error) => {} };
+    const late = new Promise<WhoAmI>((resolve, reject) => { settle = { resolve, reject }; });
+    late.catch(() => {});
+    let calls = 0;
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue({ ok: true }));
+    mount({
+      identity_whoami: () => (calls++ === 0 ? late : current),
+      identity_prepare_selection: () => { current = chosen; return { ok: true, url: "/commit-selection" }; },
+    });
+    const bar = await screen.findByRole("region", { name: "Who you are here" });
+    const you = () => bar.querySelector("p")!.textContent;
+    fireEvent.change(await screen.findByRole("combobox", { name: "Your name" }), { target: { value: "alex" } });
+    fireEvent.click(screen.getByRole("button", { name: "Use this name" }));
+    const named = "You: Alex Rivera · from the name this browser chose · counts for Attribution only — never the guardrail";
+    await waitFor(() => expect(you()).toBe(named));
+    await act(async () => { land(settle as never, anonymous); await late.catch(() => {}); });
+    expect(you()).toBe(named);
+    expect(screen.queryByText(/Identity could not tell who you are/)).toBeNull();
+  });
+
   it("shows six readiness items in order, each an icon and text", async () => {
     mount();
     const items = within(await readinessList()).getAllByRole("button");
@@ -435,6 +465,20 @@ describe("first-run server profile", () => {
     expect(email.value).toBe("");
     await act(async () => { arrive(headerAlex); await late; });
     await waitFor(() => expect(email.value).toBe("alex@example.test"));
+  });
+
+  // Precedence: a stale, expired or invalid browser name is anonymous and never falls through to the fallback.
+  it("never promises the Only me fallback to a browser presenting a stale name", async () => {
+    mount({ identity_settings_overview: fresh });
+    fireEvent.click(await screen.findByRole("radio", { name: "Only me" }));
+    const limit = /no Access email and no browser name.*stale, expired or invalid name stays anonymous/;
+    expect(screen.getByText(limit)).toBeTruthy();
+    expect(screen.queryByText(/Every header-less caller|Every request without/)).toBeNull();
+    fireEvent.click(screen.getByRole("checkbox", { name: "Only one person uses this server" }));
+    fireEvent.click(screen.getByRole("button", { name: "Apply" }));
+    const dialog = await screen.findByRole("dialog", { name: "Apply the Only me profile?" });
+    expect(within(dialog).getByText(limit)).toBeTruthy();
+    expect(within(dialog).queryByText(/Every header-less caller|Every request without/)).toBeNull();
   });
 
   it("opens from the Profile readiness item with a Close button", async () => {

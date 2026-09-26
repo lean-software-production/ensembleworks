@@ -159,7 +159,8 @@ export function lintConfig(facts: AdminFacts): LintIssue[] {
   }
   if (facts.fallbackEmail.length > 0 && (facts.accessSeen || facts.people.length > 1)) {
     issue("fallback-on-shared", "warning",
-      "A fallback email is set on a server that looks shared; every header-less caller is attributed to it.",
+      "A fallback email is set on a server that looks shared; requests with no Access email and no browser name "
+        + "are attributed to it.",
       "Clear the fallback email in the This browser tab.");
   }
   if (facts.selfSelectedIdentity) {
@@ -385,6 +386,17 @@ const SETTING_LABELS: Record<keyof WritableSettings, string> = {
   selectionPublicOrigin: "Public origin",
 };
 
+/**
+ * Who a fallback email covers, in the fixed precedence: only requests with neither an
+ * Access email nor a browser name. A stale, expired or invalid browser name is anonymous
+ * and never falls through to the fallback.
+ */
+export function fallbackReach(target: string): string {
+  return `Requests with no Access email and no browser name, agents included, will be attributed to ${target}. `
+    + "While browser names are on, a browser presenting a stale, expired or invalid name stays anonymous — "
+    + "the fallback never covers it.";
+}
+
 export function profileRecommendation(
   profile: ServerProfile,
   current: WritableSettings,
@@ -409,7 +421,7 @@ export function profileRecommendation(
     notes.push("Without Access nobody can be refused — browser names are labels only.");
   } else {
     patch = { fallbackEmail: context.myEmail ?? "", selfSelectedIdentity: false, enforcement: "off", confirmSoleUser: true };
-    notes.push("Every header-less caller, agents included, will be attributed to this email.");
+    notes.push(fallbackReach("this email"));
   }
   const changes: ProfileChange[] = [];
   for (const [setting, value] of Object.entries(patch) as Array<[string, string | boolean]>) {

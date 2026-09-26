@@ -2,6 +2,7 @@ import { useId, useState } from "react";
 import { useRpc } from "@get-bb/plugin-sdk/app";
 import type { rpcContract, SettingsOverview, WhoAmI } from "../../server.js";
 import {
+  fallbackReach,
   profileRecommendation,
   SERVER_PROFILES,
   type ServerProfile,
@@ -158,7 +159,7 @@ export function ProfilePanel({ overview, whoami, closable, onApplied, onClose }:
                 </p>
               )}
               {fallback !== null && (
-                <p>Every request without an Access email or a browser name, agents included, will be attributed to {fallback}.</p>
+                <p>{fallbackReach(fallback)}</p>
               )}
             </>
           }
