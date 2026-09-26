@@ -57,10 +57,10 @@ describe("the glossary", () => {
     expect(text("rule-own-thread")).toContain("own-machine rule");
   });
 
-  it("limits the composer's refusal to someone identified by their Access email", () => {
+  it("limits the composer's refusal to someone whose Access email is in the directory", () => {
     // makeGuardrail passes no requester for a browser name or the fallback email, and rule A
     // needs one; only a stamped automation is refused without a person.
-    expect(text("composer-check")).toContain("If you are identified by your Access email, Enforce refuses");
+    expect(text("composer-check")).toContain("If your Access email is in the directory, Enforce refuses");
     expect(text("composer-check")).toContain("The person rules never refuse a browser name or the fallback email");
   });
 
@@ -112,6 +112,17 @@ describe("the glossary", () => {
   it("names a person in the directory as the one the person rules can refuse", () => {
     // people.ts resolves an Access email the directory lacks to no person.
     expect(text("guardrail")).toContain("a person in the directory, identified by their Access email");
+  });
+
+  it("qualifies every person-rule refusal with a directory match", () => {
+    // people.ts resolves an Access email the directory lacks to no person, so makeGuardrail
+    // hands decideGuardrail a null requester and neither person rule fires.
+    for (const id of ["rule-own-machine", "rule-own-thread"] as const) {
+      expect(text(id), id).toContain("In Enforce, someone whose Access email is in the directory can't");
+    }
+    for (const id of Object.keys(GLOSSARY) as GlossaryId[]) {
+      expect(text(id), id).not.toMatch(/(someone|you are) identified by (their|your) Access email/i);
+    }
   });
 
   it("gives each refusal as Enforce's, and says Audit lets it through", () => {

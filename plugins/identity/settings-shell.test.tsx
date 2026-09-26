@@ -389,7 +389,9 @@ describe("People & machines settings section", () => {
       identity_whoami: () => ({ ...headerAlex, person: null }),
     });
     const alert = await screen.findByRole("alert");
-    expect(alert.textContent).toContain(`The People directory setting is invalid: ${error}. Everyone is anonymous and no person is refused until it is fixed.`);
+    expect(alert.textContent).toContain(`The People directory setting is invalid: ${error}. Until it is fixed, no email matches a person, so the person rules refuse no one.`);
+    // whoamiFor still returns the raw Access email, and the bar shows it: nobody is anonymous.
+    expect(alert.textContent).not.toContain("anonymous");
     expect(alert.textContent).toContain("Fix ew_bb_people in infrastructure and redeploy");
     expect(within(alert).getByText("bb plugin config identity set directory '<json>'").tagName).toBe("CODE");
     const people = within(await readinessList()).getByRole("button", { name: /^People:/ });

@@ -10,7 +10,7 @@ export const COVERAGE_ROWS: readonly CoverageRow[] = [
   { path: "Composer send (new thread or follow-up)", status: "checked",
     note: "The dispatch hook sees it and the guardrail can refuse it." },
   { path: "Send now (queued message)", status: "seen-after",
-    note: "Skips the dispatch hook; Identity records the requester afterwards. "
+    note: "Skips the dispatch hook; in audit and enforce modes Identity logs it afterwards, naming the sender when it can. "
       + "A Send-now dispatch hook in BB core would move this to Checked." },
   { path: "Automation spawning a thread (threads.spawn)", status: "checked",
     note: "The automation rule applies to stamped automation spawns headed for a named machine; "

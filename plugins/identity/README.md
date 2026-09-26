@@ -111,7 +111,7 @@ starter rows retain their old strict shape; older code reads weak new rows as un
 | Ordinary future/busy/host-wait queue via `/threads` or `/:id/send` | `message.queued` snapshots the requester by row ID; a later drain reads that row. Capture misses and storage races are unknown. | Initial attempt and ordinary drain. |
 | Explicit `POST /threads/:id/queued-messages` | The request audit sees the insertion attempt, but no suitable queue event binds the row; the drain requester is unknown. | No insertion hook; normal drain hook later. |
 | Automatic/scheduled drain | Per-row ledger, never ambient async context; mixed or missing row identity is unknown. A changed content digest is attributed as unknown. | Yes, subject to core behavior. |
-| `POST .../queued-messages/:id/send` (Send-now) | Post-hoc `message.dispatched` names the stored enqueuer and the separate presser when observed. | **No**: core bypasses the dispatch hook. |
+| `POST .../queued-messages/:id/send` (Send-now) | In `audit` and `enforce` only, post-hoc `message.dispatched` names the stored enqueuer and the separate presser when observed; `off` logs nothing. | **No**: core bypasses the dispatch hook. |
 | Queue edits, reorder, group, cancel | HTTP request audit only; unobserved edits have no reliable editor binding. Cancel/dispatch cleanup is best effort. | No edit hook. |
 | Approvals, Stop, Archive, terminal and host HTTP routes | Request audit only. It records an observed attempt, not successful completion. | No Identity policy hook. |
 | Presence and Identity RPC reads | Current `whoami`/presence state; polling is rolled up in audit. | No. |
@@ -298,10 +298,10 @@ BB's settings page carries one Identity section, **People & machines** (section 
 `people`). It explains who and what Identity recognises, why, and what it does about it,
 and it is where the settings below are meant to be changed. From the top:
 
-- **The identity bar** — who this browser is (`You: Alex Rivera · from your Access email,
-  read as-is · counts for Attribution and the guardrail`; an Access email the directory
-  lacks counts for Attribution only), and the standing reminder that
-  Identity is a guardrail against mistakes, not a lock.
+- **The identity bar** — who this browser is (`You: Alex Rivera · from your Access email ·
+  counts for Attribution and the guardrail`; an Access email the directory lacks counts for
+  Attribution only), and a second line, `Changes here are logged.`, whose popover says
+  which changes write a log line and which do not.
 - **The readiness strip** — six items (profile, people, machines, browser names,
   guardrail, check), each an icon plus text; activating one opens the tab that fixes it.
 - **The server profile question** — on a fresh server (nobody in the directory and every
@@ -338,8 +338,9 @@ and it is where the settings below are meant to be changed. From the top:
 Settings writes from this section go through `settings.experimental_set`, pins through
 the host-pin store and colours through the colour store. Each of the section's write RPCs
 and colour/pin actions that changes something writes exactly one audit line through
-`bb.log` naming who asked (person, email, provenance) and what changed, from → to. These
-lines are written whatever `enforcement` is.
+`bb.log` with the requester's identity (person, email, provenance) and what changed,
+from → to. That identity can be unknown: an anonymous requester's line carries `by: null`,
+`email: null` and provenance `unknown`. These lines are written whatever `enforcement` is.
 
 That promise covers only the section. BB's generated Configuration form (still listed
 beside the section) and `bb plugin config identity set` write the settings directly; Identity

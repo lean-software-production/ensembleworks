@@ -51,7 +51,7 @@ export const GLOSSARY: Record<GlossaryId, GlossaryEntry> = {
   "rule-own-machine": {
     title: "Own-machine rule",
     body: [
-      "In Enforce, someone identified by their Access email can't start a thread on another person's machine; Audit logs it and lets it through. Team and unclaimed machines are open to every person; an automation still needs a team machine (the automation rule).",
+      "In Enforce, someone whose Access email is in the directory can't start a thread on another person's machine; Audit logs it and lets it through. Team and unclaimed machines are open to every person; an automation still needs a team machine (the automation rule).",
       "In the log: start-on-another-persons-machine.",
     ],
     more: "rules",
@@ -59,7 +59,7 @@ export const GLOSSARY: Record<GlossaryId, GlossaryEntry> = {
   "rule-own-thread": {
     title: "Own-thread rule",
     body: [
-      "In Enforce, someone identified by their Access email can't send into a thread whose recorded starter is another such person; Audit logs it and lets it through. A child thread inherits its starter. One recorded from a browser name or the fallback email is open. A thread with no record, such as one begun with Send now, counts as a new start: the own-machine rule applies.",
+      "In Enforce, someone whose Access email is in the directory can't send into a thread whose recorded starter is another such person; Audit logs it and lets it through. A child thread inherits its starter. One recorded from a browser name or the fallback email is open. A thread with no record, such as one begun with Send now, counts as a new start (own-machine rule).",
       "In the log: follow-up-by-non-starter.",
     ],
     more: "rules",
@@ -77,7 +77,7 @@ export const GLOSSARY: Record<GlossaryId, GlossaryEntry> = {
     title: "When the machine is checked",
     body: [
       "BB doesn't tell Identity which machine you pick here, so this banner can't check it.",
-      "In Audit and Enforce, pressing Send checks the machine. If you are identified by your Access email, Enforce refuses a start on someone else's machine and names whose it is. In Audit it is logged and goes ahead. The person rules never refuse a browser name or the fallback email. Off only records the starter.",
+      "In Audit and Enforce, pressing Send checks the machine. If your Access email is in the directory, Enforce refuses a start on someone else's machine and names whose it is. In Audit it is logged and goes ahead. The person rules never refuse a browser name or the fallback email. Off only records the starter.",
     ],
     more: "rules",
   },
