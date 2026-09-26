@@ -18,7 +18,7 @@ export const GLOSSARY: Record<GlossaryId, GlossaryEntry> = {
   "attribution-only": {
     title: "Attribution only",
     body: [
-      "A name chosen in a browser, or the fallback email, shows who you are here and records who started a thread.",
+      "A name chosen in a browser, or the fallback email, shows who you are. Either records who started a thread when it matches someone in the directory.",
       "The person rules never refuse it. A thread recorded as started by it is open to anyone; one begun with Send now has no record. Only an Access email in the directory counts for the person rules; the automation rule covers stamped automations.",
     ],
     more: "browser",

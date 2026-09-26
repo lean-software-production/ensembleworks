@@ -21,7 +21,7 @@ describe("Explain", () => {
     fireEvent.click(trigger);
     const dialog = await screen.findByRole("dialog", { name: "Attribution only" });
     expect(trigger.getAttribute("aria-expanded")).toBe("true");
-    expect(dialog.textContent).toContain("records who started a thread.");
+    expect(dialog.textContent).toContain("records who started a thread when it matches someone in the directory.");
     expect(dialog.textContent).toContain("Only an Access email in the directory counts for the person rules;");
   });
 

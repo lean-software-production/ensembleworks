@@ -1,6 +1,8 @@
 import { describe, expect, it } from "vitest";
 import { SETTINGS_TABS } from "../settings-admin.js";
 import type { GuardrailRule } from "../guardrail.js";
+import { decideAttribution } from "../attribution.js";
+import { resolveRequester } from "../people.js";
 import { GLOSSARY, RULE_NAMES, RULE_TERMS, type GlossaryId } from "./glossary.js";
 
 const RULES: GuardrailRule[] = ["start-on-another-persons-machine", "follow-up-by-non-starter", "automation-off-team-machine"];
@@ -114,6 +116,20 @@ describe("the glossary", () => {
     // keeps a thread's starter, not the sender of each follow-up.
     expect(text("attribution-only")).not.toContain("who sent a message");
     expect(text("attribution-only")).toContain("records who started a thread");
+  });
+
+  it("records a fallback email as the starter only when it matches someone in the directory", () => {
+    // resolveRequester resolves an unmatched fallback email to no person, and decideAttribution
+    // then records no starter (a child thread may still inherit one from its lineage).
+    const unmatched = resolveRequester({ people: [], email: null, selection: null,
+      fallbackEmail: "solo@example.test", verify: () => ({ status: "invalid" }) });
+    expect(unmatched).toMatchObject({ provenance: "configured-fallback", person: null });
+    const record = decideAttribution({ threadId: "t1", email: unmatched.email, person: null, viaFallback: true,
+      provenance: unmatched.provenance, origin: "cli", originPluginId: null, lineage: [], host: null, now: 1 },
+    () => null);
+    expect(record.starter).toBeNull();
+    expect(text("attribution-only")).not.toMatch(/fallback email, shows who you are (here )?and records/);
+    expect(text("attribution-only")).toContain("records who started a thread when it matches someone in the directory");
   });
 
   it("never exempts a browser name, the fallback email or no identity from the whole guardrail", () => {

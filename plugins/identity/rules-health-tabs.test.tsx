@@ -238,7 +238,8 @@ describe("Rules tab — simulator and coverage", () => {
     expect(enforce).toContain("Own-machine rule");
     const enforceCell = within(table).getAllByRole("cell")[2]!;
     expect(within(enforceCell).getByRole("button", { name: "Own-machine rule" })).toBeTruthy();
-    expect(panel.textContent).toContain("The message they would see:");
+    expect(panel.textContent).toContain("Enforce refusal message:");
+    expect(panel.textContent).not.toContain("The message they would see");
     expect(panel.textContent).toContain("(Refused by Identity's machine-ownership guardrail.)");
     expect(panel.textContent).toContain("Runs Identity's real guardrail in your browser. Alex and Sam are example people.");
     expect(table.querySelector("details")).toBeNull();

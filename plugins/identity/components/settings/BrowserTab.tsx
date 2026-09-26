@@ -190,7 +190,7 @@ export function BrowserTab({ data }: { data: SettingsData }) {
           onConfirm={confirm}
           onCancel={() => { if (!busy) setPending(null); }}
           consequence={pending.on
-            ? <p>Anyone who opens BB can pick any name in the directory, as <Explain term="attribution-only">attribution only</Explain>.</p>
+            ? <p>Once the picker is ready, anyone who opens BB can pick any name in the directory, as <Explain term="attribution-only">attribution only</Explain>.</p>
             : <p>Every browser{"'"}s chosen name stops counting, so each shows as <Explain term="precedence">the next identity that applies</Explain>.</p>}
         />
       )}

@@ -238,6 +238,18 @@ describe("This browser tab", () => {
     await waitFor(() => expect(update).toHaveBeenCalledWith({ selfSelectedIdentity: true }));
   });
 
+  it("makes turning browser names on conditional on the picker being ready", async () => {
+    // pickerStatus stays short of "ready" while the origin, signing key or cookie bridge is
+    // missing (server.ts), so no one can pick a name the moment the setting turns on.
+    mount({ identity_settings_overview: () => overview({ selfSelectedIdentity: false, pickerStatus: "off",
+      selectionPublicOrigin: "", signingKey: "missing" }) });
+    const panel = await openTab("This browser");
+    fireEvent.click(await within(panel).findByRole("checkbox", { name: /Let browsers choose a name/ }));
+    const dialog = await dialogNamed("Let browsers choose a name?");
+    expect(dialog.textContent).not.toMatch(/^Anyone who opens BB can pick/m);
+    expect(dialog.textContent).toContain("Once the picker is ready, anyone who opens BB can pick any name in the directory");
+  });
+
   it("confirms a fallback email behind the sole-user checkbox", async () => {
     const update = vi.fn(() => ({ ok: true, changed: ["fallbackEmail"] }));
     mount({ identity_update_settings: update });

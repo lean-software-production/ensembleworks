@@ -185,7 +185,7 @@ function Simulator() {
   const [what, setWhat] = useState<SimWhat>("start");
   const [machine, setMachine] = useState<SimMachine>("another-persons");
   const outcomes = simulate({ who, what, machine });
-  const message = outcomes.find((outcome) => outcome.message !== null)?.message ?? null;
+  const message = outcomes.find((outcome) => outcome.mode === "enforce")?.message ?? null;
   const select = <T extends string>(id: string, label: string, value: T, options: Record<T, string>, set: (next: T) => void) => (
     <div className="identity-settings-field">
       <label htmlFor={`${base}-${id}`}>{label}</label>
@@ -222,7 +222,7 @@ function Simulator() {
           </tr>
         </tbody>
       </table>
-      {message !== null && <p className="identity-settings-muted">The message they would see: “{message}”</p>}
+      {message !== null && <p className="identity-settings-muted">Enforce refusal message: “{message}”</p>}
       {who === "automation" && what !== "start" && (
         <p className="identity-settings-muted">
           An automation sending into an existing thread isn{"'"}t stamped, so the guardrail can{"'"}t tell it is one.
