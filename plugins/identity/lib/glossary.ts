@@ -42,7 +42,7 @@ export const GLOSSARY: Record<GlossaryId, GlossaryEntry> = {
   "blind-spots": {
     title: "What the guardrail can't see",
     body: [
-      "BB doesn't tell Identity which machine the new-thread composer has selected, so nothing is checked until you press Send.",
+      "BB doesn't tell Identity which machine the new-thread composer has selected. In Audit and Enforce, the check comes when you press Send; Off checks nothing.",
       "Send now skips the check; Identity records who sent it afterwards.",
       "Terminals, Stop, Archive and approvals are never refused. An automation sending into an existing thread isn't checked.",
     ],
@@ -77,7 +77,7 @@ export const GLOSSARY: Record<GlossaryId, GlossaryEntry> = {
     title: "When the machine is checked",
     body: [
       "BB doesn't tell Identity which machine you pick here, so this banner can't check it.",
-      "When you press Send, Identity checks the machine. If you are identified by your Access email, Enforce refuses a start on someone else's machine and names whose it is. In Audit it is logged and goes ahead. A browser name or the fallback email is never refused. Off only records who started the thread.",
+      "In Audit and Enforce, pressing Send checks the machine. If you are identified by your Access email, Enforce refuses a start on someone else's machine and names whose it is. In Audit it is logged and goes ahead. A browser name or the fallback email is never refused. Off only records the starter.",
     ],
     more: "rules",
   },
@@ -104,7 +104,8 @@ export const GLOSSARY: Record<GlossaryId, GlossaryEntry> = {
   "logged-changes": {
     title: "Which changes are logged",
     body: [
-      "Every change made in this section writes a line to BB's log naming who made it, and risky ones ask first.",
+      "Settings, colour and machine changes made here write a line to BB's log naming who made them, and risky ones ask first.",
+      "Choosing a browser name logs the name chosen; forgetting one logs no name. Neither says who did it.",
       "BB's generated Configuration form and `bb plugin config` change the same settings without asking and without a log line.",
     ],
   },

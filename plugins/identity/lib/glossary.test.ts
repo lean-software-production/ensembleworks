@@ -63,4 +63,20 @@ describe("the glossary", () => {
     expect(text("composer-check")).toContain("If you are identified by your Access email, Enforce refuses");
     expect(text("composer-check")).toContain("A browser name or the fallback email is never refused");
   });
+
+  it("checks the machine at Send only in Audit and Enforce", () => {
+    // makeGuardrail returns before classifying the host when the mode is Off.
+    expect(text("composer-check")).not.toContain("When you press Send, Identity checks the machine");
+    expect(text("composer-check")).toContain("In Audit and Enforce, pressing Send checks the machine");
+    expect(text("blind-spots")).not.toContain("nothing is checked until you press Send");
+    expect(text("blind-spots")).toContain("In Audit and Enforce, the check comes when you press Send");
+  });
+
+  it("says which logged changes name who made them", () => {
+    // Settings, colour and pin lines carry adminActor(); a browser name's select line carries
+    // the chosen person and its forget line no person (server.ts /select- and /forget-identity).
+    expect(text("logged-changes")).not.toContain("Every change made in this section");
+    expect(text("logged-changes")).toContain("Settings, colour and machine changes made here write a line to BB's log naming who made them");
+    expect(text("logged-changes")).toContain("Choosing a browser name logs the name chosen; forgetting one logs no name. Neither says who did it.");
+  });
 });
