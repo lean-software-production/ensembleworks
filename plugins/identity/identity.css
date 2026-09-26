@@ -240,12 +240,41 @@
 .identity-settings-dot { flex: 0 0 auto; width: 12px; height: 12px; border-radius: 999px; }
 .identity-settings-detail { display: flex; flex-direction: column; gap: 12px; min-width: 0; }
 
+/* This browser: the precedence ladder and the picker's readiness chain, the current step outlined. */
+.identity-settings-ladder,
+.identity-settings-chain { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 4px; }
+.identity-settings-ladder li,
+.identity-settings-chain li {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+  min-height: 40px;
+  box-sizing: border-box;
+  padding: 6px 10px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+}
+.identity-settings-ladder li[aria-current="step"],
+.identity-settings-chain li[aria-current="step"] {
+  border-color: var(--ring, #2563eb);
+  box-shadow: inset 3px 0 0 var(--ring, #2563eb);
+}
+.identity-settings-rung-label { font-weight: 600; }
+.identity-settings-check input { width: 18px; height: 18px; margin: 0; }
+.identity-settings-field input[type="search"] { width: min(100%, 320px); }
+
+/* Machines: the row header is the machine's name, and every action wraps within its cell. */
+.identity-settings-table th[scope="row"] { color: inherit; font-size: inherit; font-weight: 600; }
+.identity-settings-machines .identity-settings-actions { gap: 6px; }
+
 @container (max-width: 719px) {
   .identity-settings-master-detail { grid-template-columns: minmax(0, 1fr); }
   .identity-settings-table thead { display: none; }
   .identity-settings-table tr { display: block; border-top: 1px solid var(--border); padding: 6px 0; }
   .identity-settings-table td { display: grid; grid-template-columns: 7.5em minmax(0, 1fr); gap: 8px; border: 0; padding: 2px 0; }
   .identity-settings-table td::before { content: attr(data-label); color: var(--muted-foreground); font-size: 12px; }
+  .identity-settings-table th[scope="row"] { display: block; border: 0; padding: 2px 0; }
 }
 @supports not (container-type: inline-size) {
   @media (max-width: 719px) {
@@ -254,6 +283,7 @@
     .identity-settings-table tr { display: block; border-top: 1px solid var(--border); padding: 6px 0; }
     .identity-settings-table td { display: grid; grid-template-columns: 7.5em minmax(0, 1fr); gap: 8px; border: 0; padding: 2px 0; }
     .identity-settings-table td::before { content: attr(data-label); color: var(--muted-foreground); font-size: 12px; }
+    .identity-settings-table th[scope="row"] { display: block; border: 0; padding: 2px 0; }
   }
 }
 

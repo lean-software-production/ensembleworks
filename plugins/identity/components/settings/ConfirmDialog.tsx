@@ -1,5 +1,12 @@
-import { useEffect, useId, useRef, useState, type ReactNode } from "react";
+import { useEffect, useId, useRef, useState, type MouseEvent, type ReactNode } from "react";
 import * as Dialog from "@radix-ui/react-dialog";
+
+/**
+ * For an ordinary button that opens a ConfirmDialog. A click does not focus a button
+ * everywhere (Safari), and the dialog hands focus back to whatever held it on open — so
+ * the opener takes focus itself first.
+ */
+export const focusOpener = (event: MouseEvent<HTMLElement>) => event.currentTarget.focus();
 
 /**
  * The one confirm dialog every destructive or trust-changing action goes through.

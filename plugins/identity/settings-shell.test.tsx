@@ -100,6 +100,8 @@ function mount(over: Handlers = {}) {
 
 const readinessList = () => screen.findByRole("list", { name: "Identity readiness" });
 const tab = (name: string) => screen.getByRole("tab", { name });
+/** The browser picker lives on the This browser tab. */
+const openBrowserTab = async () => fireEvent.click(await screen.findByRole("tab", { name: "This browser" }));
 
 describe("People & machines settings section", () => {
   it("keeps the section id and carries the new title and description", () => {
@@ -143,6 +145,7 @@ describe("People & machines settings section", () => {
         return { ok: true, url: "/commit-selection" };
       },
     });
+    await openBrowserTab();
     const bar = await screen.findByRole("region", { name: "Who you are here" });
     const you = () => bar.querySelector("p")!.textContent;
     await waitFor(() => expect(you()).toBe("You: Anonymous · anonymous · Nothing is refused for anonymous requests"));
@@ -173,6 +176,7 @@ describe("People & machines settings section", () => {
       identity_whoami: () => (calls++ === 0 ? late : current),
       identity_prepare_selection: () => { current = chosen; return { ok: true, url: "/commit-selection" }; },
     });
+    await openBrowserTab();
     const bar = await screen.findByRole("region", { name: "Who you are here" });
     const you = () => bar.querySelector("p")!.textContent;
     fireEvent.change(await screen.findByRole("combobox", { name: "Your name" }), { target: { value: "alex" } });
@@ -199,6 +203,7 @@ describe("People & machines settings section", () => {
       identity_whoami: () => (hold ? late : current),
       identity_prepare_selection: () => { current = chosen; return { ok: true, url: "/commit-selection" }; },
     });
+    await openBrowserTab();
     const bar = await screen.findByRole("region", { name: "Who you are here" });
     const you = () => bar.querySelector("p")!.textContent;
     const combo = await screen.findByRole("combobox", { name: "Your name" });
@@ -501,6 +506,7 @@ describe("first-run server profile", () => {
         return { ok: true, changed: ["selfSelectedIdentity"] };
       },
     });
+    await openBrowserTab();
     fireEvent.click(await screen.findByRole("radio", { name: profileName }));
     const picker = () => screen.queryByRole("combobox", { name: "Your name" });
     await waitFor(() => expect(picker() !== null).toBe(before));

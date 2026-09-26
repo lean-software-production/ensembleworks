@@ -2,7 +2,9 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { useRpc } from "@get-bb/plugin-sdk/app";
 import type { MachineList, RosterAnswer, rpcContract, SettingsOverview, WhoAmI } from "../../server.js";
 import type { SettingsTab } from "../../settings-admin.js";
+import { BrowserTab } from "./BrowserTab.js";
 import { IdentityBar } from "./IdentityBar.js";
+import { MachinesTab } from "./MachinesTab.js";
 import { PeopleTab } from "./PeopleTab.js";
 import { ProfilePanel } from "./ProfilePanel.js";
 import { ReadinessStrip } from "./ReadinessStrip.js";
@@ -79,14 +81,13 @@ export function useSettingsData(): SettingsData {
 }
 
 /** What each tab not built yet will show, under its real title. */
-const PLACEHOLDERS: Record<Exclude<SettingsTab, "people">, string> = {
-  machines: "Every machine bb knows, whose it is and why — a name suffix, a pin or the team list — with pin conflicts to resolve.",
-  browser: "Which name this browser shows, where it sits on the precedence ladder, and the picker's origin and signing key.",
+type PlaceholderTab = Exclude<SettingsTab, "people" | "machines" | "browser">;
+const PLACEHOLDERS: Record<PlaceholderTab, string> = {
   rules: "What the guardrail does in each mode, a simulator over the real rules, and which actions it can see.",
   health: "The self-test, the picker chain, ledger fill, configuration checks and a redacted diagnostics bundle.",
 };
 
-function Placeholder({ tab }: { tab: Exclude<SettingsTab, "people"> }) {
+function Placeholder({ tab }: { tab: PlaceholderTab }) {
   return (
     <div className="identity-settings-stack">
       <h3 className="identity-settings-heading">{TAB_LABELS[tab]}</h3>
@@ -147,8 +148,8 @@ export function IdentitySettings() {
         onSelect={setTab}
         panels={{
           people: <PeopleTab data={data} />,
-          machines: <Placeholder tab="machines" />,
-          browser: <Placeholder tab="browser" />,
+          machines: <MachinesTab data={data} />,
+          browser: <BrowserTab data={data} />,
           rules: <Placeholder tab="rules" />,
           health: <Placeholder tab="health" />,
         }}

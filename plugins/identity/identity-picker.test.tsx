@@ -16,6 +16,8 @@ function mount(whoami: WhoAmI, prepare = () => ({ ok: true as const, url: "/comm
     identity_whoami: () => whoami,
     identity_prepare_selection: prepare,
   } });
+  // The picker lives on the settings section's This browser tab.
+  void screen.findByRole("tab", { name: "This browser" }).then((tab) => fireEvent.click(tab));
 }
 
 describe("accessible browser picker", () => {
