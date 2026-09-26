@@ -20,8 +20,12 @@ export function IdentityPicker({ onIdentityChange }: { onIdentityChange?: (ident
   const [editing, setEditing] = useState(false);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  // Bumped by every refresh and selection change, so an older read landing late cannot undo a newer one.
+  const latest = useRef(0);
   const refresh = useCallback(async () => {
+    const mine = ++latest.current;
     const result = await rpcRef.current.call("identity_whoami");
+    if (mine !== latest.current) return result;
     setMe(result);
     onIdentityChangeRef.current?.(result);
     return result;
@@ -36,6 +40,7 @@ export function IdentityPicker({ onIdentityChange }: { onIdentityChange?: (ident
   const mutate = async (action: "select" | "forget") => {
     setBusy(true);
     setError(null);
+    latest.current++;
     try {
       const prepared = await rpcRef.current.call("identity_prepare_selection",
         action === "select" ? { action, personId: choice } : { action });

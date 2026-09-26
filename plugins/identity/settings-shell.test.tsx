@@ -184,6 +184,38 @@ describe("People & machines settings section", () => {
     expect(screen.queryByText(/Identity could not tell who you are/)).toBeNull();
   });
 
+  // A picker refresh (the poll or a visibility change) started before Use this name must not win when it lands later.
+  it("keeps the picker's name when an older picker refresh lands after Use this name", async () => {
+    const readyPicker = { enabled: true, status: "ready", people: [alex] };
+    const anonymous: WhoAmI = { email: null, person: null, provenance: "unknown", selection: null, picker: readyPicker };
+    const chosen: WhoAmI = { email: null, person: alex, provenance: "self-selected", selection: { status: "valid" },
+      picker: readyPicker };
+    let current = anonymous;
+    let hold = false;
+    let release: (whoami: WhoAmI) => void = () => {};
+    const late = new Promise<WhoAmI>((resolve) => { release = resolve; });
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue({ ok: true }));
+    mount({
+      identity_whoami: () => (hold ? late : current),
+      identity_prepare_selection: () => { current = chosen; return { ok: true, url: "/commit-selection" }; },
+    });
+    const bar = await screen.findByRole("region", { name: "Who you are here" });
+    const you = () => bar.querySelector("p")!.textContent;
+    const combo = await screen.findByRole("combobox", { name: "Your name" });
+    hold = true;
+    act(() => { document.dispatchEvent(new Event("visibilitychange")); });
+    hold = false;
+    fireEvent.change(combo, { target: { value: "alex" } });
+    fireEvent.click(screen.getByRole("button", { name: "Use this name" }));
+    const named = "You: Alex Rivera · from the name this browser chose · counts for Attribution only — never the guardrail";
+    await waitFor(() => expect(you()).toBe(named));
+    expect(screen.getByText("Shown as Alex Rivera (chosen here; attribution only).")).toBeTruthy();
+    await act(async () => { release(anonymous); await late; });
+    expect(you()).toBe(named);
+    expect(screen.getByText("Shown as Alex Rivera (chosen here; attribution only).")).toBeTruthy();
+    expect(screen.queryByRole("combobox", { name: "Your name" })).toBeNull();
+  });
+
   it("shows six readiness items in order, each an icon and text", async () => {
     mount();
     const items = within(await readinessList()).getAllByRole("button");
@@ -415,6 +447,37 @@ describe("first-run server profile", () => {
     await waitFor(() => expect(update).toHaveBeenCalledTimes(1));
     expect(view.rpcCalls.find((call) => call.method === "identity_update_settings")?.input).toEqual(
       profileRecommendation("solo", current, { myEmail: "alex@example.test", browserOrigin: window.location.origin }).patch);
+  });
+
+  // Apply and Close remove the button that was focused, so focus moves to the Profile readiness item.
+  it.each([
+    ["a successful Apply", async () => {
+      fireEvent.click(screen.getByRole("radio", { name: "Direct, without Access" }));
+      const apply = screen.getByRole("button", { name: "Apply" });
+      apply.focus();
+      fireEvent.click(apply);
+      const dialog = await screen.findByRole("dialog", { name: "Apply the Direct, without Access profile?" });
+      const confirm = within(dialog).getByRole("button", { name: "Apply profile" });
+      confirm.focus();
+      fireEvent.click(confirm);
+    }],
+    ["Close", async () => {
+      const close = screen.getByRole("button", { name: "Close" });
+      close.focus();
+      fireEvent.click(close);
+    }],
+  ] as const)("moves focus to the Profile readiness item after %s", async (_kind, dismiss) => {
+    let answer = { ...fresh(), firstRun: false };
+    mount({ identity_settings_overview: () => answer,
+      identity_update_settings: () => { answer = { ...answer, firstRun: false }; return { ok: true, changed: ["enforcement"] }; } });
+    const profileItem = within(await readinessList()).getByRole("button", { name: /^Profile:/ });
+    fireEvent.click(profileItem);
+    await screen.findByRole("radiogroup", { name: question });
+    await dismiss();
+    await waitFor(() => expect(screen.queryByRole("radiogroup", { name: question })).toBeNull());
+    await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
+    await waitFor(() => expect(document.activeElement).toBe(
+      within(screen.getByRole("list", { name: "Identity readiness" })).getByRole("button", { name: /^Profile:/ })));
   });
 
   it("explains a refused write in a sentence and stays open", async () => {

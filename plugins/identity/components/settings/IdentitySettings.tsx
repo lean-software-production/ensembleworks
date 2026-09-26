@@ -98,6 +98,15 @@ export function IdentitySettings() {
   const [tab, setTab] = useState<SettingsTab>("people");
   // null: the profile panel follows `firstRun`; "opened" from readiness; "dismissed" once applied.
   const [profile, setProfile] = useState<"opened" | "dismissed" | null>(null);
+  // Apply and Close remove the focused button with the panel, so focus moves to the Profile item.
+  const profileItem = useRef<HTMLButtonElement>(null);
+  const [refocus, setRefocus] = useState(false);
+  useEffect(() => {
+    if (!refocus) return;
+    profileItem.current?.focus();
+    setRefocus(false);
+  }, [refocus]);
+  const dismissProfile = () => { setProfile("dismissed"); setRefocus(true); };
 
   // As before: nothing until the first answer, so the page does not flash empty.
   const settled = overview !== null || roster !== null || errors.overview !== undefined || errors.roster !== undefined;
@@ -117,6 +126,7 @@ export function IdentitySettings() {
         <ReadinessStrip
           items={overview.readiness}
           onActivate={(target) => { if (target === "profile") setProfile("opened"); else setTab(target); }}
+          profileRef={profileItem}
         />
       )}
       {showProfile && (
@@ -124,8 +134,8 @@ export function IdentitySettings() {
           overview={overview}
           whoami={whoami}
           closable={profile === "opened"}
-          onApplied={() => { setProfile("dismissed"); data.reload(); }}
-          onClose={() => setProfile("dismissed")}
+          onApplied={() => { dismissProfile(); data.reload(); }}
+          onClose={dismissProfile}
         />
       )}
       <SettingsTabs
