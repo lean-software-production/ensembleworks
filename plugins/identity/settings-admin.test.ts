@@ -20,7 +20,7 @@ import {
   type WritableSettings,
 } from "./settings-admin.js";
 import type { HostClassification } from "./hosts.js";
-import type { Person } from "./people.js";
+import { parseDirectory, type Person } from "./people.js";
 
 const alex: Person = { person: "alex", github: "alexgh", displayName: "Alex Rivera", emails: ["alex@example.com"] };
 const sam: Person = { person: "sam", github: "samgh", displayName: "Sam Chen", emails: ["sam@example.org", "sam.chen@example.net"] };
@@ -472,6 +472,30 @@ describe("redactDiagnostics", () => {
     expect(JSON.parse(out).directory).toEqual({
       ok: false, error: 'directory email "s***@example.org" belongs to both "sam" and "twin"', people: 0, emails: 0,
     });
+  });
+
+  it("keeps no parser excerpt of a malformed directory", () => {
+    const leaks = ["Alex Rivera", "Rivera", "arivera", "alex@example.com", "Secret Key"];
+    const cases: Array<[string, string]> = [
+      ["Alex Rivera", "directory is not valid JSON"],
+      ['[{"displayName":"Alex Rivera" alex@example.com}]', "directory is not valid JSON at position 30 (line 1 column 31)"],
+      ['[{"displayName":"Alex Rivera"', "directory is not valid JSON at position 29 (line 1 column 30)"],
+      [JSON.stringify([{ person: "alex", github: "arivera", displayName: "Alex Rivera", emails: ["alex@example.com"], "Secret Key": 1 }]),
+        "directory is invalid at [0]: Unrecognized key"],
+      [JSON.stringify([{ person: "Alex Rivera", github: "arivera", displayName: "Alex Rivera", emails: ["alex@example.com"] }]),
+        "directory is invalid at [0.person]: person must match ^[a-z_][a-z0-9_-]*$"],
+    ];
+    for (const [directory, expected] of cases) {
+      const parsed = parseDirectory(directory);
+      if (parsed.ok) throw new Error(`expected ${directory} to be rejected`);
+      const broken = healthy({ directoryError: parsed.error, people: [] });
+      const out = redactDiagnostics({
+        ...broken, generatedAt: 0, sharedMachineUser: "u", lint: lintConfig(broken),
+        ledgers: { starters: { count: 0, max: 2000 }, queued: { count: 0, max: 1000 } },
+      });
+      for (const leak of leaks) expect(out).not.toContain(leak);
+      expect(JSON.parse(out).directory.error).toBe(expected);
+    }
   });
 
   it("redacts an email the self-test probe saw unexpectedly", () => {

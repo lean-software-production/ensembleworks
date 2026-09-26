@@ -292,6 +292,31 @@ export function redactEmail(email: string): string {
 
 const EMBEDDED_EMAIL = /[^\s"'<>(),;:[\]]+@[^\s"'<>(),;:[\]]+/g;
 
+/**
+ * The directory error with every excerpt of the directory's own text removed. JSON.parse
+ * and zod quote the offending source (`"Alex Rivera" is not valid JSON`, `Unrecognized
+ * key: "…"`), so only the error's shape survives: its position, its path and the text of
+ * the message before the first quote. The duplicate errors name schema-checked person ids
+ * and an email, which is redacted.
+ */
+function diagnosticsDirectoryError(error: string): string {
+  const syntax = /^directory is not valid JSON: /.exec(error);
+  if (syntax !== null) {
+    const at = /at position \d+(?: \(line \d+ column \d+\))?/.exec(error);
+    return at === null ? "directory is not valid JSON" : `directory is not valid JSON ${at[0]}`;
+  }
+  const invalid = /^(directory is invalid(?: at \[[\w.]*\])?): (.*)$/s.exec(error);
+  if (invalid !== null) {
+    const message = invalid[2]!.split(/["'`]/)[0]!.replace(/[\s:,]+$/, "");
+    return message.length === 0 ? invalid[1]! : `${invalid[1]}: ${message}`;
+  }
+  if (/^directory lists person "[a-z_][a-z0-9_-]*" twice$/.test(error)
+    || /^directory email "[^"]*" belongs to both "[a-z_][a-z0-9_-]*" and "[a-z_][a-z0-9_-]*"$/.test(error)) {
+    return error.replace(EMBEDDED_EMAIL, redactEmail);
+  }
+  return "directory is invalid";
+}
+
 export type LedgerFill = { starters: { count: number | null; max: number }; queued: { count: number | null; max: number } };
 export type DiagnosticsInput = AdminFacts & {
   generatedAt: number;
@@ -325,7 +350,7 @@ export function redactDiagnostics(input: DiagnosticsInput): string {
     accessSeen: input.accessSeen,
     directory: {
       ok: input.directoryError === null,
-      error: input.directoryError?.replace(EMBEDDED_EMAIL, redactEmail) ?? null,
+      error: input.directoryError === null ? null : diagnosticsDirectoryError(input.directoryError),
       people: input.people.length,
       emails: input.people.reduce((total, person) => total + person.emails.length, 0),
     },

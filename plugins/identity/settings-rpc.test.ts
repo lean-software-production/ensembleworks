@@ -373,4 +373,11 @@ describe("identity_diagnostics", () => {
     expect(text).not.toContain("Alex Rivera");
     expect(text).not.toContain(KEY);
   });
+  it("keeps a malformed directory's text out of the bundle", async () => {
+    await load({ directory: "Alex Rivera <alex@example.com>" });
+    const { text } = await call<{ text: string }>("identity_diagnostics");
+    expect(JSON.parse(text).directory).toMatchObject({ ok: false, error: "directory is not valid JSON" });
+    expect(text).not.toContain("Alex Rivera");
+    expect(text).not.toContain("alex@example.com");
+  });
 });
