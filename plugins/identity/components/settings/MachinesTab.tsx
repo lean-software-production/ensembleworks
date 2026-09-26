@@ -96,7 +96,13 @@ export function MachinesTab({ data }: { data: SettingsData }) {
   // off the page goes to the row's first action, else the filter, else the heading.
   const settle = useRef<{ key: string; overview: typeof overview; machines: typeof machines } | null>(null);
 
-  const teamText = overview?.settings.teamMachines ?? "";
+  // The team list this tab last wrote, until a settings read issued after that write lands.
+  // A second edit made while the reload is in flight (or after it failed) builds on the first
+  // rather than on the stale settings, which would silently drop it.
+  const overviewRef = useRef(overview);
+  overviewRef.current = overview;
+  const [written, setWritten] = useState<{ text: string; over: typeof overview } | null>(null);
+  const teamText = written !== null && written.over === overview ? written.text : overview?.settings.teamMachines ?? "";
   const write = (at: string, call: () => Promise<{ ok: true } | { ok: false; sentence: string }>, onOk?: () => void) => {
     setBusy(true);
     setError(null);
@@ -110,7 +116,7 @@ export function MachinesTab({ data }: { data: SettingsData }) {
   const writeTeam = (at: string, text: string, onOk?: () => void) => write(at, async () => {
     const answer = await rpc.call("identity_update_settings", { teamMachines: text });
     return answer.ok ? answer : { ok: false, sentence: refusalSentence(answer.reason) };
-  }, onOk);
+  }, () => { setWritten({ text, over: overviewRef.current }); onOk?.(); });
   const resolvePin = (row: Row, action: "keep" | "repin" | "unpin", onOk: () => void) => {
     const person = action === "repin" ? row.derived?.person : undefined;
     write(row.key, async () => {

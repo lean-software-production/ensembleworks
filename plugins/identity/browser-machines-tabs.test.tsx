@@ -425,6 +425,65 @@ describe("Machines tab", () => {
     await waitFor(() => expect((field as HTMLInputElement).value).toBe(""));
   });
 
+  describe("a second team edit made before the settings reload lands keeps the first", () => {
+    /** Answers the first settings read at once and every later one with `later`, reading the team list at call time. */
+    function slowReload(later: (answer: SettingsOverview) => Promise<SettingsOverview>) {
+      const state = { team: teamText };
+      let reads = 0;
+      const update = vi.fn((input: unknown) => {
+        state.team = (input as { teamMachines: string }).teamMachines;
+        return { ok: true, changed: ["teamMachines"] };
+      });
+      mount({
+        identity_settings_overview: () => {
+          const answer = { ...overview(), settings: { ...overview().settings, teamMachines: state.team } };
+          return ++reads === 1 ? answer : later(answer);
+        },
+        identity_update_settings: update,
+      });
+      return { state, update };
+    }
+    async function addThenRemove(update: ReturnType<typeof vi.fn>) {
+      const panel = await openTab("Machines");
+      await within(panel).findByRole("table");
+      const field = within(panel).getByRole("textbox", { name: "Add a team machine by name" });
+      fireEvent.change(field, { target: { value: "ew-ci" } });
+      fireEvent.click(within(panel).getByRole("button", { name: "Add" }));
+      await waitFor(() => expect(update).toHaveBeenCalledTimes(1));
+      await waitFor(() => expect((field as HTMLInputElement).value).toBe(""));
+      const row = rowsOf(panel).find((entry) => machineName(entry) === "ew-main")!;
+      await waitFor(() => expect(within(row).getByRole("button", { name: "Remove from team" }).hasAttribute("disabled"))
+        .toBe(false));
+      fireEvent.click(within(row).getByRole("button", { name: "Remove from team" }));
+      fireEvent.click(within(await dialogNamed("Remove ew-main from the team?"))
+        .getByRole("button", { name: "Remove from team" }));
+      await waitFor(() => expect(update).toHaveBeenCalledTimes(2));
+      return panel;
+    }
+    const both = removeTeamMachine(addTeamMachine(teamText, "ew-ci"), "ew-main");
+
+    it("while the reload is still in flight", async () => {
+      let release: () => void = () => {};
+      const held = new Promise<void>((resolve) => { release = resolve; });
+      const { state, update } = slowReload((answer) => held.then(() => answer));
+      const panel = await addThenRemove(update);
+      expect(update).toHaveBeenLastCalledWith({ teamMachines: both });
+      expect(parseTeamMachines(state.team)).toEqual(parseTeamMachines(both));
+      release();
+      await held;
+      // Once the reload lands, the settings it brings still list the first edit.
+      await waitFor(() => expect(within(rowsOf(panel).find((row) => machineName(row) === "ew-ci")!)
+        .getByText("Listed in teamMachines but not seen")).toBeTruthy());
+    });
+
+    it("when the reload fails", async () => {
+      const { state, update } = slowReload(() => Promise.reject(new Error("bb did not answer in time")));
+      await addThenRemove(update);
+      expect(update).toHaveBeenLastCalledWith({ teamMachines: both });
+      expect(parseTeamMachines(state.team)).toEqual(parseTeamMachines(both));
+    });
+  });
+
   it("saves the shared machine user", async () => {
     const update = vi.fn(() => ({ ok: true, changed: ["sharedMachineUser"] }));
     mount({ identity_update_settings: update });
