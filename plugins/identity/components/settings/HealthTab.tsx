@@ -126,7 +126,7 @@ function Checks({ lint }: { lint: SettingsOverview["lint"] }) {
         : (
           <ul aria-label="Configuration checks" className="identity-settings-chain">
             {sorted.map((issue) => (
-              <li key={issue.id}>
+              <li key={`${issue.id}:${issue.message}`}>
                 <StatusBadge status={issue.severity} text={SEVERITY[issue.severity].text} />
                 <span>{issue.message}</span>
                 <span className="identity-settings-muted">{issue.fix}</span>

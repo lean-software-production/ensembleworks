@@ -740,17 +740,19 @@ export default async function plugin(bb: BbPluginApi) {
         + "message into someone else's thread, and an automation off a team machine. "
         + "A dispatch Identity cannot tie to a person is ALWAYS allowed in every mode — that is the normal "
         + "shape of every agent path — and an identity supplied by Fallback email counts as untied. "
-        + "audit and enforce both log; off logs nothing. Emails appear in those log lines by design.",
+        + "audit and enforce both log their verdicts; off logs no verdicts, but settings, pin and colour "
+        + "changes are logged in every mode. Emails appear in those log lines by design.",
       default: "off",
     },
     fallbackEmail: {
       type: "string",
       label: "Fallback email",
       description:
-        "Used as the requester's email when a request carries no Cloudflare Access header, for a BB "
-        + "server not behind Access (e.g. a laptop). Every header-less caller, agents and CLI included, "
-        + "is then attributed to this email — so the guardrail ignores a fallback identity and never "
-        + "refuses on it. Leave empty on a shared server.",
+        "Used as the requester's email when a request carries no Cloudflare Access header and no valid browser name, "
+        + "for a BB server not behind Access (e.g. a laptop). Such callers, agents and CLI included, are then "
+        + "attributed to this email; a stale, expired or invalid browser name stays anonymous and never falls "
+        + "through to it. The guardrail ignores a fallback identity and never refuses on it. "
+        + "Leave empty on a shared server.",
       default: "",
     },
     selfSelectedIdentity: {

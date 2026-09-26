@@ -381,3 +381,29 @@ describe("identity_diagnostics", () => {
     expect(text).not.toContain("alex@example.com");
   });
 });
+
+describe("generated Configuration form copy", () => {
+  async function descriptions() {
+    host = createFakePluginHost({ pluginId: "identity", settings: { directory: DIRECTORY } });
+    const define = vi.spyOn(host.bb.settings, "define");
+    await plugin(host.bb);
+    const schema = define.mock.calls[0]![0] as Record<string, { description?: string }>;
+    return (key: string) => schema[key]!.description ?? "";
+  }
+
+  // Precedence: Access → valid browser name → fallback → anonymous; a bad name never falls through.
+  it("says when Fallback email applies and that a stale browser name stays anonymous", async () => {
+    const fallback = (await descriptions())("fallbackEmail");
+    expect(fallback).not.toMatch(/Every header-less caller|every caller without/i);
+    expect(fallback).toMatch(/no Cloudflare Access header and no valid browser name/);
+    expect(fallback).toMatch(/stale, expired or invalid browser name stays anonymous/);
+  });
+
+  // Audit lines for settings, pins and colours are written whatever the enforcement mode.
+  it("says Off still writes change audit lines", async () => {
+    const enforcement = (await descriptions())("enforcement");
+    expect(enforcement).not.toMatch(/off logs nothing/);
+    expect(enforcement).toMatch(/off logs no verdicts/);
+    expect(enforcement).toMatch(/settings, pin and colour changes are logged in every mode/);
+  });
+});

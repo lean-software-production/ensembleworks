@@ -332,7 +332,7 @@ written whatever `enforcement` is.
 | Set `fallbackEmail` | `identity_update_settings` | `settings.change` | A non-empty value needs *Only one person uses this server* ticked; the server refuses it otherwise |
 | Team machines, shared machine user | `identity_update_settings` | `settings.change` | Making a listed machine a team machine, or removing one, is confirmed (rule C); adding one by name is not |
 | Rotate the signing key | `identity_rotate_signing_key` | `settings.change` (`[secret]` → `[rotated]`) | Type `rotate`; every browser's chosen name expires at once |
-| Keep / re-pin / unpin a machine | `identity_resolve_pin` | `host.pin` | Confirmed; re-pin and unpin spell out the rule A consequence |
+| Keep / re-pin / unpin a machine | `identity_resolve_pin` | `host.pin` | Confirmed; re-pin spells out the rule A consequence, unpin that the owner is re-derived from the name |
 | A person's colour | `identity_set_person_color` / `identity_clear_person_color` | `person.color` | None — cosmetic, as before |
 | Re-run the self-test | `identity_rerun_self_test` | — | Read-only |
 | Copy diagnostics | `identity_diagnostics` | — | Read-only; emails shortened, names and the key left out |

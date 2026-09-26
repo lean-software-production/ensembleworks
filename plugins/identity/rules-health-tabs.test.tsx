@@ -372,6 +372,20 @@ describe("Health tab", () => {
     expect(list.querySelectorAll("[data-status-icon]")).toHaveLength(3);
   });
 
+  it("keeps one row per repeated check, each with its own key", async () => {
+    const errors = vi.spyOn(console, "error").mockImplementation(() => {});
+    const lint: LintIssue[] = [
+      { id: "team-machine-missing", severity: "warning", message: "Team machine ew-a is not in bb's host list.", fix: "Check it." },
+      { id: "team-machine-missing", severity: "warning", message: "Team machine ew-b is not in bb's host list.", fix: "Check it." },
+    ];
+    mount({ identity_settings_overview: () => overview({}, { lint }) });
+    const panel = await openTab("Health");
+    const list = await within(panel).findByRole("list", { name: "Configuration checks" });
+    expect(within(list).getAllByRole("listitem")).toHaveLength(2);
+    expect(errors.mock.calls.flat().join(" ")).not.toContain("same key");
+    errors.mockRestore();
+  });
+
   it("says so when there are no configuration problems", async () => {
     mount({ identity_settings_overview: () => overview({}, { lint: [] }) });
     const panel = await openTab("Health");
