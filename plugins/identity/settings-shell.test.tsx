@@ -480,6 +480,39 @@ describe("first-run server profile", () => {
       within(screen.getByRole("list", { name: "Identity readiness" })).getByRole("button", { name: /^Profile:/ })));
   });
 
+  // The picker keeps its own who-you-are, so an Apply that flips browser names must refresh it too.
+  it.each([
+    ["turns browser names on", "Direct, without Access", false, true],
+    ["turns browser names off", /^Cloudflare Access/, true, false],
+  ] as const)("updates the browser picker when an applied profile %s", async (_kind, profileName, before, after) => {
+    const readyPicker = { enabled: true, status: "ready", people: [alex] };
+    const whoamiFor = (on: boolean): WhoAmI => ({ email: null, person: null, provenance: "unknown", selection: null,
+      picker: on ? readyPicker : offPicker });
+    let answer = overview({ selfSelectedIdentity: before }, { firstRun: true });
+    let written = false;
+    let arrive: (whoami: WhoAmI) => void = () => {};
+    const late = new Promise<WhoAmI>((resolve) => { arrive = resolve; });
+    mount({
+      identity_settings_overview: () => answer,
+      identity_whoami: () => (written ? late : whoamiFor(before)),
+      identity_update_settings: () => {
+        written = true;
+        answer = overview({ selfSelectedIdentity: after }, { firstRun: false });
+        return { ok: true, changed: ["selfSelectedIdentity"] };
+      },
+    });
+    fireEvent.click(await screen.findByRole("radio", { name: profileName }));
+    const picker = () => screen.queryByRole("combobox", { name: "Your name" });
+    await waitFor(() => expect(picker() !== null).toBe(before));
+    fireEvent.click(screen.getByRole("button", { name: "Apply" }));
+    await confirmApply(typeof profileName === "string"
+      ? `Apply the ${profileName} profile?` : "Apply the Cloudflare Access profile?");
+    await waitFor(() => expect(screen.queryByRole("radiogroup", { name: question })).toBeNull());
+    expect(picker() !== null).toBe(before);
+    await act(async () => { arrive(whoamiFor(after)); await late; });
+    await waitFor(() => expect(picker() !== null).toBe(after));
+  });
+
   it("explains a refused write in a sentence and stays open", async () => {
     mount({ identity_settings_overview: fresh,
       identity_update_settings: () => ({ ok: false, reason: "write-failed" }) });

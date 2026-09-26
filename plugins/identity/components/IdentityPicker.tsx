@@ -8,7 +8,11 @@ const REFRESH_MS = 5_000;
  * The browser-name picker, moved out of app.tsx so both the app overlays and the settings
  * page can mount it without an import cycle. Behaviour and accessible names are unchanged.
  */
-export function IdentityPicker({ onIdentityChange }: { onIdentityChange?: (identity: WhoAmI) => void } = {}) {
+export function IdentityPicker({ onIdentityChange, refreshKey }: {
+  onIdentityChange?: (identity: WhoAmI) => void;
+  /** A change asks for an immediate refresh — the settings page bumps it after a write, e.g. a new profile. */
+  refreshKey?: number;
+} = {}) {
   const rpc = useRpc<typeof rpcContract>();
   const selectorId = useId();
   const rpcRef = useRef(rpc);
@@ -37,6 +41,13 @@ export function IdentityPicker({ onIdentityChange }: { onIdentityChange?: (ident
     document.addEventListener("visibilitychange", onVisible);
     return () => { window.clearInterval(timer); document.removeEventListener("visibilitychange", onVisible); };
   }, [refresh]);
+  // The mount effect already read once; only a later change of key refreshes, ordered like any other.
+  const seenKey = useRef(refreshKey);
+  useEffect(() => {
+    if (seenKey.current === refreshKey) return;
+    seenKey.current = refreshKey;
+    void refresh().catch(() => undefined);
+  }, [refreshKey, refresh]);
   const mutate = async (action: "select" | "forget") => {
     setBusy(true);
     setError(null);

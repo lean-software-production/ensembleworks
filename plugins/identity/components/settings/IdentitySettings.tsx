@@ -16,6 +16,8 @@ export type SettingsData = {
   reload: () => void;
   /** Takes a fresher who-you-are answer (the picker's), so the bar follows a browser-name change. */
   adoptWhoami: (whoami: WhoAmI) => void;
+  /** Counts reloads, so the picker (which keeps its own who-you-are) refreshes after every write. */
+  revision: number;
 };
 
 /** One sentence per read, so a failure names what is missing instead of blanking the page. */
@@ -43,9 +45,11 @@ export function useSettingsData(): SettingsData {
   const [whoami, setWhoami] = useState<WhoAmI | null>(null);
   const [machines, setMachines] = useState<MachineList | null>(null);
   const [errors, setErrors] = useState<Partial<Record<ReadKey, string>>>({});
+  const [revision, setRevision] = useState(0);
 
   const reload = useCallback(() => {
     const mine = ++generation.current;
+    setRevision(mine);
     const whoamiAtStart = whoamiVersion.current;
     const read = <T,>(key: ReadKey, call: () => Promise<T>, store: (value: T) => void) => {
       const stale = () => generation.current !== mine || (key === "whoami" && whoamiVersion.current !== whoamiAtStart);
@@ -71,7 +75,7 @@ export function useSettingsData(): SettingsData {
   }, []);
 
   useEffect(reload, [reload]);
-  return { overview, roster, whoami, machines, errors, reload, adoptWhoami };
+  return { overview, roster, whoami, machines, errors, reload, adoptWhoami, revision };
 }
 
 /** What each tab not built yet will show, under its real title. */

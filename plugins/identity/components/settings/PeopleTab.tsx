@@ -24,7 +24,7 @@ export function PeopleTab({ data }: { data: SettingsData }) {
   const [selected, setSelected] = useState<string | null>(null);
   const [busy, setBusy] = useState<string | null>(null);
   const [colorError, setColorError] = useState<string | null>(null);
-  const { overview, roster, machines, reload, adoptWhoami } = data;
+  const { overview, roster, machines, reload, adoptWhoami, revision } = data;
 
   /**
    * One handler for both writes. A refusal comes back as an ANSWER (`ok: false`) rather
@@ -56,7 +56,7 @@ export function PeopleTab({ data }: { data: SettingsData }) {
         People are managed in infrastructure (<code>ew_bb_people</code>). Colours are Identity{"'"}s own and anyone
         can change them; every change is logged.
       </p>
-      <IdentityPicker onIdentityChange={adoptWhoami} />
+      <IdentityPicker onIdentityChange={adoptWhoami} refreshKey={revision} />
       <p className="identity-settings-muted">{SEEN_UNKNOWN_CAVEAT}</p>
       {roster?.unavailable != null && (
         <p className="identity-settings-muted">Machines are not listed: {roster.unavailable}.</p>
