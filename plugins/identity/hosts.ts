@@ -15,7 +15,8 @@ import type { StarterSummary } from "./attribution.js";
  * the `<box>-<person>` naming convention — and names can be changed by anyone
  * (`PATCH /hosts/:id`). So a derived owner is PINNED by host id on first sight, and a
  * later name that disagrees with the pin is NOT followed: it is reported as a conflict
- * for a human to look at.
+ * for a human to look at, unless an operator has chosen Keep pin for that exact name
+ * (`keptName`), which silences the conflict until the name changes again.
  */
 
 export { hostRefSchema } from "./host-ref.js";
