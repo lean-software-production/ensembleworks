@@ -25,6 +25,7 @@ import {
   headerChip,
   ownershipRowStatus,
   readOnlyBanner,
+  type OwnershipBanner,
 } from "./ownership-labels.js";
 import {
   readableInk,
@@ -36,6 +37,7 @@ import {
   type ThreadStatus,
 } from "./sidebar-fallback.js";
 import { IdentityPicker } from "./components/IdentityPicker.js";
+import { Explain } from "./components/Explain.js";
 import { IdentitySettings } from "./components/settings/IdentitySettings.js";
 
 export { IdentityPicker };
@@ -477,11 +479,15 @@ function useMachineList(): MachineList | null {
   return list;
 }
 
-function BannerBody({ title, detail }: { title: string; detail: string }) {
+function BannerBody({ title, detail, note, suffix }: OwnershipBanner & { suffix?: string }) {
   return (
     <div style={{ display: "flex", flexDirection: "column", fontSize: 12, gap: 2, lineHeight: 1.4 }}>
       <span style={{ fontWeight: 600 }}>{title}</span>
-      <span style={{ color: "var(--muted-foreground)" }}>{detail}</span>
+      <span style={{ color: "var(--muted-foreground)" }}>
+        {detail}
+        {note === undefined ? null : <> <Explain term={note.term}>{note.text}</Explain></>}
+        {suffix}
+      </span>
     </div>
   );
 }
@@ -498,20 +504,16 @@ function StartingAsBanner() {
   if (list === null) return null;
   const banner = composerBanner({ me: list.me, provenance: list.meProvenance,
     machines: list.machines, enforcement: list.enforcement });
-  return (
-    <BannerBody
-      title={banner.title}
-      detail={`${banner.detail}${list.unavailable === null ? "" : ` ${list.unavailable}.`}`}
-    />
-  );
+  return <BannerBody {...banner} suffix={list.unavailable === null ? undefined : ` ${list.unavailable}.`} />;
 }
 
 /**
  * The composer banner on a thread somebody else started: "Read-only: Matt's thread".
  *
- * Rule B is what makes it true, so it ships with rule B and reads the same setting: with
- * enforcement off it says the thread is Matt's and that nothing enforces that, and in
- * audit that a message here is logged as a would-refuse and goes through anyway.
+ * The own-thread rule is what makes it true, so it ships with that rule and reads the
+ * same setting: with enforcement off it says the thread is Matt's and that nothing
+ * enforces that, and in audit that a message here is logged as a would-refuse and goes
+ * through anyway. Send now skips the check in every mode, and the banner says so.
  */
 function ReadOnlyThreadBanner() {
   const rpc = useRpc<typeof rpcContract>();
@@ -535,7 +537,7 @@ function ReadOnlyThreadBanner() {
     enforcement: list.enforcement,
   });
   if (banner === null) return null;
-  return <BannerBody title={banner.title} detail={banner.detail} />;
+  return <BannerBody {...banner} />;
 }
 
 /** Invisible composer surface: observes text, never sends draft content. */
@@ -592,11 +594,17 @@ function anonymousViewerDetail(presence: { viewers: number; people: PresentPerso
   return `${count} anonymous ${count === 1 ? "viewer" : "viewers"}`;
 }
 
-function identityFooter(me: WhoAmI | null): string {
-  if (me?.provenance === "self-selected" && me.person) return `You are shown as ${me.person.displayName}, chosen in this browser for attribution only.`;
-  if (me?.provenance === "configured-fallback" && me.person) return `You are shown as ${me.person.displayName} by the configured fallback.`;
-  if (me?.person) return `Upstream header identifies ${me.person.displayName} (header not verified by Identity).`;
-  if (me?.email) return `Upstream header says ${me.email}; this address is not in the Identity directory.`;
+function identityFooter(me: WhoAmI | null): ReactNode {
+  if (me?.provenance === "self-selected" && me.person) {
+    return <>You are shown as {me.person.displayName}, chosen in this browser — <Explain term="attribution-only">attribution only</Explain>.</>;
+  }
+  if (me?.provenance === "configured-fallback" && me.person) {
+    return <>You are shown as {me.person.displayName} from the fallback email — <Explain term="attribution-only">attribution only</Explain>.</>;
+  }
+  // A fallback email outside the directory still arrives as `email`; it is not an Access email.
+  if (me?.provenance === "configured-fallback" && me.email) return `The fallback email, ${me.email}, is not in Identity's directory.`;
+  if (me?.person) return `You are ${me.person.displayName}, from your Access email.`;
+  if (me?.email) return `Your Access email, ${me.email}, is not in Identity's directory.`;
   return "You are anonymous here.";
 }
 

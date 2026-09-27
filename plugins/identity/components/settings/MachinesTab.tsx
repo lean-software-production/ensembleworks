@@ -4,6 +4,7 @@ import type { PinResolution, rpcContract } from "../../server.js";
 import { parseTeamMachines, personFromHostName, type HostClassification, type HostKind } from "../../hosts.js";
 import type { Person } from "../../people.js";
 import { addTeamMachine, removeTeamMachine, type ReadinessStatus } from "../../settings-admin.js";
+import { Explain } from "../Explain.js";
 import { ConfirmDialog, focusOpener } from "./ConfirmDialog.js";
 import { refusalSentence } from "./ProfilePanel.js";
 import { StatusBadge } from "./StatusBadge.js";
@@ -172,7 +173,7 @@ export function MachinesTab({ data }: { data: SettingsData }) {
     <div ref={rootRef} className="identity-settings-stack">
       <h3 className="identity-settings-heading" tabIndex={-1}>Machines</h3>
       <p className="identity-settings-muted">
-        Every machine BB knows, whose it is and why: a name suffix, a pin or the team list. Problems come first.
+        Every machine BB knows and <Explain term="machine-owner">whose it is</Explain>. Problems come first.
       </p>
       {machines?.unavailable != null && (
         <p className="identity-settings-muted">Identity cannot list machines: {machines.unavailable}.</p>
@@ -313,7 +314,7 @@ function PendingDialog({ pending: { action, row }, busy, onConfirm, onCancel }: 
     repin: {
       title: `Re-pin ${host} to ${derived ?? "the name's owner"}?`, confirmLabel: "Re-pin",
       consequence: `${host} becomes ${derived ?? "the name's owner"}'s machine. `
-        + `${pinned} starting a thread on ${host} would be refused (rule A) once enforcing.`,
+        + `Once enforcing, the own-machine rule refuses ${pinned} a new thread on ${host} if their Access email is in the directory.`,
     },
     unpin: {
       title: `Unpin ${host}?`, confirmLabel: "Unpin",
@@ -325,7 +326,7 @@ function PendingDialog({ pending: { action, row }, busy, onConfirm, onCancel }: 
     },
     "team-remove": {
       title: `Remove ${host} from the team?`, confirmLabel: "Remove from team", destructive: true,
-      consequence: `An automation starting a thread on ${host} would be refused (rule C) once enforcing. `
+      consequence: `A BB-stamped automation starting a thread on ${host} would be refused by the automation rule once enforcing. `
         + "Automations posting into an existing thread are not checked.",
     },
   };

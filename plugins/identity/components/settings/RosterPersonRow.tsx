@@ -1,7 +1,8 @@
 import type { RosterAnswer } from "../../server.js";
 import { initials } from "../../presence-labels.js";
-import { seenPhrase, SEEN_UNKNOWN_CAVEAT } from "../../roster.js";
+import { seenPhrase } from "../../roster.js";
 import { colorInputValue, shouldCommitColor } from "../../person-colors.js";
+import { Explain } from "../Explain.js";
 
 /**
  * One person's colour row, moved from app.tsx for the People tab's detail pane.
@@ -77,12 +78,8 @@ export function RosterPersonRow({
             ? `Machines: ${row.machines.join(", ")}`
             : "No machines of their own are known"}
         </span>
-        {/* The caveat is stated ONCE, under the heading. Repeating it on every row —
-            which is what the first version did, and what looking at the rendered page
-            showed — buried the rows it was supposed to qualify under three copies of the
-            same sentence. It stays reachable per-row as the title. */}
-        <span style={{ color: "var(--muted-foreground)", fontSize: 12 }} title={SEEN_UNKNOWN_CAVEAT}>
-          {seenPhrase(row.seen)}
+        <span style={{ color: "var(--muted-foreground)", fontSize: 12 }}>
+          <Explain term="seen">{seenPhrase(row.seen)}</Explain>
         </span>
 
         {row.clashesWith.length > 0 && (
@@ -134,7 +131,7 @@ export function RosterPersonRow({
             style={{ background: "none", border: "none", height: 40, padding: 0, width: 48 }}
           />
           <span style={{ color: "var(--muted-foreground)", fontSize: 12 }}>
-            {row.overridden ? "chosen" : "dealt"}
+            {row.overridden ? "chosen" : "auto"}
           </span>
           {row.overridden && (
             <button
@@ -152,7 +149,7 @@ export function RosterPersonRow({
                 padding: "0 12px",
               }}
             >
-              Reset to dealt
+              Reset to auto
             </button>
           )}
         </div>

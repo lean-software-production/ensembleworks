@@ -13,6 +13,7 @@ import {
   removeTeamMachine,
   type AdminFacts,
 } from "./settings-admin.js";
+import { stubPopoverDom } from "./popover-test-dom.js";
 
 const app = await loadPluginApp(() => import("./app.js"));
 const section = app.settingsSections.find((entry) => entry.id === "people")!;
@@ -154,6 +155,21 @@ describe("This browser tab", () => {
     expect(await within(panel).findByRole("combobox", { name: "Your name" })).toBeTruthy();
   });
 
+  it("says each setting in one sentence and keeps the term outside the checkbox label", async () => {
+    mount({ identity_whoami: () => ({ ...chosenAlex, person: null, provenance: "unknown", selection: null }) });
+    const panel = await openTab("This browser");
+    await within(panel).findByRole("combobox", { name: "Your name" });
+    const picker = within(panel).getByLabelText("Browser identity");
+    expect(within(picker).queryByText("This browser")).toBeNull();
+    const toggle = await within(panel).findByRole("checkbox", { name: "Let browsers choose a name" });
+    const term = within(panel).getByRole("button", { name: "Attribution only" });
+    expect(toggle.closest("label")!.contains(term)).toBe(false);
+    expect(within(panel).getByText(/^For a server only one person uses\./).textContent)
+      .toBe("For a server only one person uses. How it works");
+    expect(within(panel).getByRole("button", { name: "How it works" })).toBeTruthy();
+    expect(within(panel).getByText("Only the key's status is shown; it never leaves the server.")).toBeTruthy();
+  });
+
   it("disables Save and explains an invalid public origin", async () => {
     const update = vi.fn(() => ({ ok: true, changed: [] }));
     mount({ identity_update_settings: update });
@@ -222,6 +238,18 @@ describe("This browser tab", () => {
     await waitFor(() => expect(update).toHaveBeenCalledWith({ selfSelectedIdentity: true }));
   });
 
+  it("makes turning browser names on conditional on the picker being ready", async () => {
+    // pickerStatus stays short of "ready" while the origin, signing key or cookie bridge is
+    // missing (server.ts), so no one can pick a name the moment the setting turns on.
+    mount({ identity_settings_overview: () => overview({ selfSelectedIdentity: false, pickerStatus: "off",
+      selectionPublicOrigin: "", signingKey: "missing" }) });
+    const panel = await openTab("This browser");
+    fireEvent.click(await within(panel).findByRole("checkbox", { name: /Let browsers choose a name/ }));
+    const dialog = await dialogNamed("Let browsers choose a name?");
+    expect(dialog.textContent).not.toMatch(/^Anyone who opens BB can pick/m);
+    expect(dialog.textContent).toContain("Once the picker is ready, anyone who opens BB can pick any name in the directory");
+  });
+
   it("confirms a fallback email behind the sole-user checkbox", async () => {
     const update = vi.fn(() => ({ ok: true, changed: ["fallbackEmail"] }));
     mount({ identity_update_settings: update });
@@ -233,7 +261,8 @@ describe("This browser tab", () => {
     const dialog = await dialogNamed("Set a fallback email?");
     expect(dialog.textContent).toContain("s***@example.test");
     expect(dialog.textContent).not.toContain("solo@example.test");
-    expect(dialog.textContent).toContain("The guardrail never refuses on it.");
+    expect(dialog.textContent).toContain("stays anonymous. Attribution only.");
+    expect(within(dialog).getByRole("button", { name: "Attribution only" })).toBeTruthy();
     expect(dialog.textContent).not.toContain("This server looks shared.");
     const confirm = within(dialog).getByRole("button", { name: "Set fallback email" });
     expect(confirm.hasAttribute("disabled")).toBe(true);
@@ -243,6 +272,40 @@ describe("This browser tab", () => {
     await waitFor(() => expect(update).toHaveBeenCalledWith({ fallbackEmail: "solo@example.test", confirmSoleUser: true }));
     await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
     expect(document.activeElement).toBe(save);
+  });
+
+  // One explanation, one place: the dialog says the consequence in one sentence and leaves
+  // what the fallback email counts for to its glossary entry.
+  it("explains the fallback email from its dialog through the glossary", async () => {
+    stubPopoverDom();
+    mount();
+    const panel = await openTab("This browser");
+    fireEvent.change(await within(panel).findByRole("textbox", { name: "Fallback email" }),
+      { target: { value: "solo@example.test" } });
+    fireEvent.click(within(panel).getByRole("button", { name: "Save fallback email" }));
+    const dialog = await dialogNamed("Set a fallback email?");
+    const reach = within(dialog).getByText(/^Requests with no Access email/);
+    expect(reach.textContent).toBe("Requests with no Access email and no browser name, agents included, will be "
+      + "attributed to s***@example.test; a stale, expired or invalid name stays anonymous. Attribution only.");
+    fireEvent.click(within(dialog).getByRole("button", { name: "Attribution only" }));
+    const entry = await screen.findByRole("dialog", { name: "Fallback email" });
+    expect(entry.textContent).toContain("the person rules never refuse it");
+  });
+
+  it.each([
+    [false, "Let browsers choose a name?", "attribution only", "Attribution only"],
+    [true, "Stop browsers choosing a name?", "the next identity that applies", "Which name you are shown as"],
+  ])("says the browser-name consequence in one sentence and explains the rest (%#)", async (on, title, term, entry) => {
+    stubPopoverDom();
+    mount({ identity_settings_overview: () => overview(on ? {} : { selfSelectedIdentity: false, pickerStatus: "off" }) });
+    const panel = await openTab("This browser");
+    fireEvent.click(await within(panel).findByRole("checkbox", { name: /Let browsers choose a name/ }));
+    const dialog = await dialogNamed(title);
+    const sentence = within(dialog).getByRole("button", { name: term }).closest("p")!;
+    expect(sentence.textContent!.match(/[.;:]\s/g)).toBeNull();
+    expect(sentence.textContent).not.toContain("never the guardrail");
+    fireEvent.click(within(dialog).getByRole("button", { name: term }));
+    expect(await screen.findByRole("dialog", { name: entry })).toBeTruthy();
   });
 
   it("warns that a server where Access was seen looks shared", async () => {
@@ -348,7 +411,7 @@ describe("Machines tab", () => {
       "ew-lab-003-priya stays Erin Example's machine even though its name says Priya Shah.",
       { hostId: "h1", action: "keep" }],
     ["Re-pin to Priya Shah", "Re-pin ew-lab-003-priya to Priya Shah?", "Re-pin",
-      "Erin Example starting a thread on ew-lab-003-priya would be refused (rule A) once enforcing.",
+      "Once enforcing, the own-machine rule refuses Erin Example a new thread on ew-lab-003-priya if their Access email is in the directory.",
       { hostId: "h1", action: "repin", person: "priya" }],
     ["Unpin", "Unpin ew-lab-003-priya?", "Unpin",
       "Identity re-derives the owner from the name on next sight.",
@@ -404,7 +467,7 @@ describe("Machines tab", () => {
     const row = rowsOf(panel).find((entry) => machineName(entry) === name)!;
     fireEvent.click(within(row).getByRole("button", { name: "Remove from team" }));
     const dialog = await dialogNamed(`Remove ${name} from the team?`);
-    expect(dialog.textContent).toContain(`An automation starting a thread on ${name} would be refused (rule C) once enforcing. `
+    expect(dialog.textContent).toContain(`A BB-stamped automation starting a thread on ${name} would be refused by the automation rule once enforcing. `
       + "Automations posting into an existing thread are not checked.");
     expect(within(dialog).getByRole("button", { name: "Remove from team" }).getAttribute("data-variant"))
       .toBe("destructive");

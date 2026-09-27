@@ -1,7 +1,8 @@
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useRpc } from "@get-bb/plugin-sdk/app";
 import type { MachineList, RosterAnswer, rpcContract, SettingsOverview, WhoAmI } from "../../server.js";
 import type { SettingsTab } from "../../settings-admin.js";
+import { SettingsNavContext } from "../Explain.js";
 import { BrowserTab } from "./BrowserTab.js";
 import { HealthTab } from "./HealthTab.js";
 import { IdentityBar } from "./IdentityBar.js";
@@ -98,6 +99,13 @@ export function IdentitySettings() {
     setRefocus(false);
   }, [refocus]);
   const dismissProfile = () => { setProfile("dismissed"); setRefocus(true); };
+  // A popover's "More" selects another tab and asks SettingsTabs to focus it.
+  const [focusTab, setFocusTab] = useState<SettingsTab | null>(null);
+  const clearFocusTab = useCallback(() => setFocusTab(null), []);
+  const nav = useMemo(() => ({
+    current: tab,
+    go: (next: SettingsTab) => { setTab(next); setFocusTab(next); },
+  }), [tab]);
 
   // As before: nothing until the first answer, so the page does not flash empty.
   const settled = overview !== null || roster !== null || errors.overview !== undefined || errors.roster !== undefined;
@@ -110,36 +118,40 @@ export function IdentitySettings() {
     .filter((sentence): sentence is string => sentence !== undefined);
 
   return (
-    <div className="identity-settings">
-      <IdentityBar whoami={whoami} />
-      {failures.map((sentence) => <p key={sentence} className="identity-settings-muted">{sentence}</p>)}
-      {overview !== null && (
-        <ReadinessStrip
-          items={overview.readiness}
-          onActivate={(target) => { if (target === "profile") setProfile("opened"); else setTab(target); }}
-          profileRef={profileItem}
+    <SettingsNavContext.Provider value={nav}>
+      <div className="identity-settings">
+        <IdentityBar whoami={whoami} />
+        {failures.map((sentence) => <p key={sentence} className="identity-settings-muted">{sentence}</p>)}
+        {overview !== null && (
+          <ReadinessStrip
+            items={overview.readiness}
+            onActivate={(target) => { if (target === "profile") setProfile("opened"); else setTab(target); }}
+            profileRef={profileItem}
+          />
+        )}
+        {showProfile && (
+          <ProfilePanel
+            overview={overview}
+            whoami={whoami}
+            closable={profile === "opened"}
+            onApplied={() => { dismissProfile(); data.reload(); }}
+            onClose={dismissProfile}
+          />
+        )}
+        <SettingsTabs
+          selected={tab}
+          onSelect={setTab}
+          focusRequest={focusTab}
+          onFocusHandled={clearFocusTab}
+          panels={{
+            people: <PeopleTab data={data} />,
+            machines: <MachinesTab data={data} />,
+            browser: <BrowserTab data={data} />,
+            rules: <RulesTab data={data} />,
+            health: <HealthTab data={data} />,
+          }}
         />
-      )}
-      {showProfile && (
-        <ProfilePanel
-          overview={overview}
-          whoami={whoami}
-          closable={profile === "opened"}
-          onApplied={() => { dismissProfile(); data.reload(); }}
-          onClose={dismissProfile}
-        />
-      )}
-      <SettingsTabs
-        selected={tab}
-        onSelect={setTab}
-        panels={{
-          people: <PeopleTab data={data} />,
-          machines: <MachinesTab data={data} />,
-          browser: <BrowserTab data={data} />,
-          rules: <RulesTab data={data} />,
-          health: <HealthTab data={data} />,
-        }}
-      />
-    </div>
+      </div>
+    </SettingsNavContext.Provider>
   );
 }

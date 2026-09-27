@@ -1,8 +1,9 @@
 import { useCallback, useState } from "react";
 import { useRpc } from "@get-bb/plugin-sdk/app";
 import type { ColorWriteAnswer, rpcContract, RosterAnswer } from "../../server.js";
-import { seenPhrase, SEEN_UNKNOWN_CAVEAT } from "../../roster.js";
+import { seenPhrase } from "../../roster.js";
 import { recognisedBy } from "../../lib/recognised-by.js";
+import { Explain } from "../Explain.js";
 import { RosterPersonRow } from "./RosterPersonRow.js";
 import type { SettingsData } from "./IdentitySettings.js";
 
@@ -52,10 +53,8 @@ export function PeopleTab({ data }: { data: SettingsData }) {
     <div className="identity-settings-stack">
       <h3 className="identity-settings-heading">People</h3>
       <p className="identity-settings-muted">
-        People are managed in infrastructure (<code>ew_bb_people</code>). Colours are Identity{"'"}s own and anyone
-        can change them; every change is logged.
+        People come from infrastructure (<code>ew_bb_people</code>). Anyone can change a colour.
       </p>
-      <p className="identity-settings-muted">{SEEN_UNKNOWN_CAVEAT}</p>
       {roster?.unavailable != null && (
         <p className="identity-settings-muted">Machines are not listed: {roster.unavailable}.</p>
       )}
@@ -64,8 +63,8 @@ export function PeopleTab({ data }: { data: SettingsData }) {
         ? (
           <div role="alert" className="identity-settings-card identity-settings-alert">
             <p>
-              The People directory setting is invalid: {overview.directory.error}. Everyone is anonymous and no person
-              is refused until it is fixed.
+              The People directory setting is invalid: {overview.directory.error}. Until it is fixed, no email matches a
+              person, so the person rules refuse no one.
             </p>
             <p>Fix it either way:</p>
             <ul>
@@ -78,8 +77,7 @@ export function PeopleTab({ data }: { data: SettingsData }) {
         : current === null
           ? (
             <p className="identity-settings-muted">
-              Nobody is registered yet. Identity reads its people from the directory setting above, which
-              infrastructure manages.
+              Nobody is registered yet. People come from the directory setting, which infrastructure manages.
             </p>
           )
           : (
@@ -139,7 +137,9 @@ function PersonDetail({ row, busy, onChoose, onReset, context }: {
             <tr key={`${signal.from}:${signal.signal}`}>
               <td data-label="Signal">{signal.signal}</td>
               <td data-label="From">{signal.from}</td>
-              <td data-label="Counts for">{signal.countsFor}</td>
+              <td data-label="Counts for">
+                {signal.term ? <Explain term={signal.term}>{signal.countsFor}</Explain> : signal.countsFor}
+              </td>
             </tr>
           ))}
         </tbody>

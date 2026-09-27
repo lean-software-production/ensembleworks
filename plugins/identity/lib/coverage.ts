@@ -10,16 +10,17 @@ export const COVERAGE_ROWS: readonly CoverageRow[] = [
   { path: "Composer send (new thread or follow-up)", status: "checked",
     note: "The dispatch hook sees it and the guardrail can refuse it." },
   { path: "Send now (queued message)", status: "seen-after",
-    note: "Skips the dispatch hook; Identity records the requester afterwards. "
+    note: "Skips the dispatch hook; in audit and enforce modes Identity logs it afterwards, naming the sender when it can. "
       + "A Send-now dispatch hook in BB core would move this to Checked." },
   { path: "Automation spawning a thread (threads.spawn)", status: "checked",
-    note: "Rule C applies to stamped automation spawns headed for a named machine; a spawn with no machine named is allowed." },
+    note: "The automation rule applies to stamped automation spawns headed for a named machine; "
+      + "a spawn with no machine named is allowed." },
   { path: "Automation sending into an existing thread (threads.send)", status: "blind",
-    note: "Arrives unstamped, so rule C cannot see it. Needs BB core to stamp threads.send." },
-  { path: "Agents and the CLI (no Access header)", status: "checked",
-    note: "Always allowed: no identity means nothing to refuse. Attributed to the fallback email when one is set." },
+    note: "Arrives unstamped, so the automation rule cannot see it. Needs BB core to stamp threads.send." },
+  { path: "Agents and the CLI sending a message (no Access header)", status: "checked",
+    note: "Never refused unless BB stamps it as an automation: the person rules need an Access email." },
   { path: "Terminals, Stop, Archive, approvals, host routes, plugin RPCs", status: "logged-only",
     note: "Seen by the request stream in audit/enforce modes; never refused." },
-  { path: "Raw API calls with an Access header", status: "checked",
+  { path: "Raw API message sends with an Access header", status: "checked",
     note: "Same hook as the composer." },
 ];

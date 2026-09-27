@@ -8,8 +8,10 @@ import {
   type SettingsPatch,
   type SigningKeyStatus,
 } from "../../settings-admin.js";
-import { precedenceLadder, type RungState } from "../../lib/precedence.js";
+import { pickerSummary, precedenceLadder, type RungState } from "../../lib/precedence.js";
+import { Explain } from "../Explain.js";
 import { IdentityPicker } from "../IdentityPicker.js";
+import { ChecklistSummary } from "./ChecklistSummary.js";
 import { ConfirmDialog, focusOpener } from "./ConfirmDialog.js";
 import { PickerChain } from "./PickerChain.js";
 import { refusalSentence } from "./ProfilePanel.js";
@@ -93,6 +95,8 @@ export function BrowserTab({ data }: { data: SettingsData }) {
     else setPending({ kind: "fallback", value: fallback });
   };
   // People seen using this server, not merely listed: a directory names everyone the team might add.
+  // Shown only once the overview has loaded; the "off" stand-in is never rendered.
+  const picker = pickerSummary(overview?.pickerStatus ?? "off");
   const looksShared = (overview?.accessSeen ?? false) || (roster?.people.filter((row) => row.seen).length ?? 0) > 1;
 
   return (
@@ -102,17 +106,21 @@ export function BrowserTab({ data }: { data: SettingsData }) {
         Which name this browser shows, why, and the settings that let browsers choose one.
       </p>
       {whoami !== null && <Ladder whoami={whoami} fallbackConfigured={(settings?.fallbackEmail ?? "") !== ""} />}
-      <IdentityPicker onIdentityChange={adoptWhoami} refreshKey={revision} />
+      <IdentityPicker heading={false} onIdentityChange={adoptWhoami} refreshKey={revision} />
 
       {settings !== null && overview !== null && (
         <>
           <section className="identity-settings-stack" aria-labelledby={`${base}-picker`}>
             <h4 id={`${base}-picker`} className="identity-settings-heading">Browser names</h4>
-            <label className="identity-settings-check">
-              <input type="checkbox" checked={settings.selfSelectedIdentity} disabled={busy}
-                onChange={(event) => { event.currentTarget.focus(); setPending({ kind: "picker", on: event.target.checked }); }} />
-              Let browsers choose a name (Attribution only)
-            </label>
+            <div className="identity-settings-actions">
+              <label className="identity-settings-check">
+                <input type="checkbox" checked={settings.selfSelectedIdentity} disabled={busy}
+                  onChange={(event) => { event.currentTarget.focus(); setPending({ kind: "picker", on: event.target.checked }); }} />
+                Let browsers choose a name
+              </label>
+              {/* Outside the label, so opening the term does not toggle the checkbox. */}
+              <Explain term="attribution-only">Attribution only</Explain>
+            </div>
             {sentenceFor("picker")}
             <div className="identity-settings-field">
               <label htmlFor={`${base}-origin`}>Public origin</label>
@@ -134,14 +142,15 @@ export function BrowserTab({ data }: { data: SettingsData }) {
               </button>
             </div>
             {sentenceFor("origin")}
-            <PickerChain status={overview.pickerStatus} />
+            <ChecklistSummary status={picker.status} summary={picker.text} open={picker.open}>
+              <PickerChain status={overview.pickerStatus} />
+            </ChecklistSummary>
           </section>
 
           <section className="identity-settings-stack" aria-labelledby={`${base}-fallback`}>
             <h4 id={`${base}-fallback`} className="identity-settings-heading">Fallback email</h4>
             <p className="identity-settings-muted">
-              For a server only one person uses: requests with no Access email and no browser name are attributed to
-              it. It never counts for the guardrail.
+              For a server only one person uses. <Explain term="fallback-email">How it works</Explain>
             </p>
             <div className="identity-settings-field">
               <label htmlFor={`${base}-fallback-email`}>Fallback email</label>
@@ -159,9 +168,7 @@ export function BrowserTab({ data }: { data: SettingsData }) {
 
           <section className="identity-settings-stack" aria-labelledby={`${base}-key`}>
             <h4 id={`${base}-key`} className="identity-settings-heading">Signing key</h4>
-            <p className="identity-settings-muted">
-              Browsers{"'"} chosen names are signed with a key that never leaves the server; only its status is shown.
-            </p>
+            <p className="identity-settings-muted">Only the key{"'"}s status is shown; it never leaves the server.</p>
             <StatusBadge status={KEY_BADGES[settings.signingKey]} text={`Signing key: ${settings.signingKey}`} />
             <div className="identity-settings-actions">
               <button type="button" className="identity-settings-button" disabled={busy}
@@ -183,8 +190,8 @@ export function BrowserTab({ data }: { data: SettingsData }) {
           onConfirm={confirm}
           onCancel={() => { if (!busy) setPending(null); }}
           consequence={pending.on
-            ? <p>Anyone who opens BB can pick any name in the directory. A chosen name counts for attribution, never the guardrail.</p>
-            : <p>Every browser{"'"}s chosen name stops counting: those browsers show as anonymous, or as the fallback email if one is set.</p>}
+            ? <p>Once the picker is ready, anyone who opens BB can pick any name in the directory, as <Explain term="attribution-only">attribution only</Explain>.</p>
+            : <p>Every browser{"'"}s chosen name stops counting, so each shows as <Explain term="precedence">the next identity that applies</Explain>.</p>}
         />
       )}
       {pending?.kind === "origin" && (
@@ -218,7 +225,7 @@ export function BrowserTab({ data }: { data: SettingsData }) {
           onCancel={() => { if (!busy) setPending(null); }}
           consequence={
             <p>
-              {fallbackReach(redactEmail(pending.value))} The guardrail never refuses on it.
+              {fallbackReach(redactEmail(pending.value))} <Explain term="fallback-email">Attribution only</Explain>.
               {looksShared ? " This server looks shared." : ""}
             </p>
           }

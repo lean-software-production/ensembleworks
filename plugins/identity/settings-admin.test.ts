@@ -298,8 +298,8 @@ describe("lintConfig", () => {
   it("enforcement-no-team-machines", () => {
     const issue = lintConfig(healthy({ teamMachines: [] })).find((entry) => entry.id === "enforcement-no-team-machines");
     expect(issue?.severity).toBe("warning");
-    expect(issue?.message).toBe("No team machine is configured, so an automation starting a thread on a named machine would be "
-      + "refused (rule C). Automations posting into an existing thread arrive unstamped and are not checked.");
+    expect(issue?.message).toBe("No team machine is configured, so in Enforce the automation rule refuses a BB-stamped automation "
+      + "starting a thread on a named machine. Automations posting into an existing thread arrive unstamped and are not checked.");
     expect(ids(lintConfig(healthy({ teamMachines: [], enforcement: "off" })))).not.toContain("enforcement-no-team-machines");
   });
 
@@ -402,14 +402,14 @@ describe("enforceRisks", () => {
 
   it("(a) an automation spawn on a named machine would be refused without a team machine", () => {
     expect(enforceRisks(healthy({ teamMachines: [] }))).toEqual([
-      "An automation starting a thread on a named machine would be refused: no team machine is configured (rule C). "
+      "A BB-stamped automation starting a thread on a named machine would be refused by the automation rule: no team machine is configured. "
       + "Automations posting into an existing thread arrive unstamped, and a start with no machine named is not judged, so neither is refused.",
     ]);
   });
 
   it("(b) names who would be refused on a renamed machine", () => {
     expect(enforceRisks(healthy({ machines: [teamBox, renamed] }))).toEqual([
-      "ew-lsp-003-sam is pinned to Alex Rivera, but its name now says Sam Chen: Sam Chen starting a thread there would be refused (rule A).",
+      "ew-lsp-003-sam is pinned to Alex Rivera, but its name now says Sam Chen: Sam Chen starting a thread there with their Access email would be refused by the own-machine rule.",
     ]);
   });
 
@@ -610,8 +610,7 @@ describe("profileRecommendation", () => {
       expect.objectContaining({ setting: "enforcement", now: "audit", recommended: "off" }),
     ]);
     expect(recommended.notes).toContain("Requests with no Access email and no browser name, agents included, will be "
-      + "attributed to this email. While browser names are on, a browser presenting a stale, expired or invalid name "
-      + "stays anonymous — the fallback never covers it.");
+      + "attributed to this email; a stale, expired or invalid name stays anonymous.");
   });
 
   it("changes lists only differences", () => {

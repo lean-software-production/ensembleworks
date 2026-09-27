@@ -1,5 +1,5 @@
 import type { WhoAmI } from "../server.js";
-import type { PickerStatus } from "../settings-admin.js";
+import type { PickerStatus, ReadinessStatus } from "../settings-admin.js";
 
 /**
  * The This browser tab's "Why am I shown as …?" ladder: the fixed precedence (Access
@@ -33,19 +33,21 @@ export function precedenceLadder(whoami: WhoAmI, context: { fallbackConfigured: 
 
   const details: Record<RungId, string> = {
     access: decided === "access"
-      ? `Access sent ${whoami.email ?? "an email"}${name === null ? ", which is not in the directory" : `, which the directory names ${name}`}. It counts for attribution and the guardrail.`
+      ? `Access sent ${whoami.email ?? "an email"}${name === null
+        ? ", which is not in the directory. It counts for attribution only; the person rules need a directory match."
+        : `, which the directory names ${name}. It counts for attribution and the guardrail.`}`
       : "No Access email on this request.",
     selection: status === "overridden" ? "Your Access email outranks this browser's choice."
       : badChoice ? `This browser's choice is ${status}; Identity treats you as anonymous rather than falling back.`
-      : decided === "selection" ? `This browser chose ${name ?? "a name"}. It counts for attribution, never the guardrail.`
+      : decided === "selection" ? `This browser chose ${name ?? "a name"}. It counts for attribution, never the person rules.`
       : "This browser has not chosen a name.",
     fallback: decided === "fallback"
-      ? `The Fallback email setting names ${whoami.email ?? "someone"}${name === null ? "" : ` (${name})`}. It counts for attribution, never the guardrail.`
+      ? `The Fallback email setting names ${whoami.email ?? "someone"}${name === null ? "" : ` (${name})`}. It counts for attribution, never the person rules.`
       : badChoice && context.fallbackConfigured ? `Skipped: a ${status} choice never falls through to the fallback.`
       : context.fallbackConfigured ? "The fallback email did not apply to this request."
       : "No fallback email is set.",
     anonymous: decided === "anonymous"
-      ? "Threads you start show no starter, and the person rules (A and B) never refuse you."
+      ? "Threads you start get no starter of their own (a child thread may inherit one), and the own-machine and own-thread rules never refuse you."
       : "Not reached.",
   };
 
@@ -67,12 +69,30 @@ export function precedenceLadder(whoami: WhoAmI, context: { fallbackConfigured: 
  */
 export const PICKER_CHAIN: ReadonlyArray<{ status: PickerStatus; label: string; fix: string }> = [
   { status: "off", label: "Browser names turned on",
-    fix: "Tick \"Let browsers choose a name\" below." },
+    fix: "Turn on \"Let browsers choose a name\" in This browser." },
   { status: "origin-not-configured", label: "Public origin set",
     fix: "Enter the exact origin people open BB at, such as https://bb.example.com, and save it." },
   { status: "signing-key-unavailable", label: "Signing key available",
-    fix: "Rotate the signing key below to create a new one." },
+    fix: "Rotate the signing key in This browser." },
   { status: "cookie-bridge-unavailable", label: "Cookie bridge working",
     fix: "Re-run the self-test in Health; if it still fails, check that BB passes cookies through to plugins." },
   { status: "ready", label: "Ready", fix: "Nothing to do: browsers can choose a name." },
 ];
+
+/** What stops browser names, as the end of a sentence ("Not ready: …", "unavailable: …"). */
+export function pickerProblem(status: PickerStatus): string {
+  switch (status) {
+    case "off": return "browser names are turned off";
+    case "origin-not-configured": return "no public origin is set";
+    case "signing-key-unavailable": return "there is no signing key";
+    case "cookie-bridge-unavailable": return "the cookie bridge is not working";
+    case "ready": return "nothing";
+  }
+}
+
+/** The picker chain as one line: open only when something needs fixing. */
+export function pickerSummary(status: PickerStatus): { status: ReadinessStatus; text: string; open: boolean } {
+  if (status === "ready") return { status: "ok", text: `Ready · ${PICKER_CHAIN.length - 1} checks passed`, open: false };
+  if (status === "off") return { status: "off", text: "Off", open: false };
+  return { status: "attention", text: `Not ready: ${pickerProblem(status)}`, open: true };
+}

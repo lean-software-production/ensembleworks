@@ -1,7 +1,9 @@
 import { useId, useRef, useState } from "react";
 import { useRpc } from "@get-bb/plugin-sdk/app";
 import type { rpcContract, SettingsOverview } from "../../server.js";
-import type { LintSeverity, ReadinessStatus } from "../../settings-admin.js";
+import type { LintSeverity, PickerStatus, ReadinessStatus } from "../../settings-admin.js";
+import { pickerSummary } from "../../lib/precedence.js";
+import { ChecklistSummary } from "./ChecklistSummary.js";
 import { PickerChain } from "./PickerChain.js";
 import { StatusBadge } from "./StatusBadge.js";
 import { useCopy } from "./useCopy.js";
@@ -25,6 +27,16 @@ function selfTestLegs(selfTest: SettingsOverview["selfTest"]): Leg[] {
   ];
 }
 
+/** The self-test as one line: not run, passed, or the first check that failed. */
+export function selfTestSummary(selfTest: SettingsOverview["selfTest"]): { status: ReadinessStatus; text: string; open: boolean } {
+  if (selfTest === null) return { status: "off", text: "Not run yet", open: false };
+  const legs = selfTestLegs(selfTest);
+  const failed = legs.find((leg) => leg.status !== "ok");
+  return failed === undefined
+    ? { status: "ok", text: `Passed · ${legs.length} checks`, open: false }
+    : { status: "problem", text: `Failed: ${failed.label}`, open: true };
+}
+
 const SEVERITY: Record<LintSeverity, { rank: number; text: string }> = {
   error: { rank: 0, text: "Error" },
   warning: { rank: 1, text: "Warning" },
@@ -46,10 +58,7 @@ export function HealthTab({ data }: { data: SettingsData }) {
       {overview !== null && (
         <>
           <SelfTest data={data} />
-          <section className="identity-settings-stack">
-            <h4 className="identity-settings-heading">Browser names</h4>
-            <PickerChain status={overview.pickerStatus} />
-          </section>
+          <BrowserNames status={overview.pickerStatus} />
           <Ledgers ledgers={overview.ledgers} />
           <Checks lint={overview.lint} />
         </>
@@ -72,18 +81,22 @@ function SelfTest({ data }: { data: SettingsData }) {
       .catch((failure: unknown) => setError(`Identity could not run the self-test: ${String(failure)}`))
       .finally(() => setRunning(false));
   };
+  const selfTest = data.overview?.selfTest ?? null;
+  const summary = selfTestSummary(selfTest);
   return (
     <section className="identity-settings-stack" aria-labelledby={`${base}-self-test`}>
       <h4 id={`${base}-self-test`} className="identity-settings-heading">Self-test</h4>
-      <ul aria-label="Self-test" className="identity-settings-chain">
-        {selfTestLegs(data.overview?.selfTest ?? null).map((leg) => (
-          <li key={leg.label}>
-            <span className="identity-settings-rung-label">{leg.label}</span>
-            <StatusBadge status={leg.status} text={leg.text} />
-            {leg.detail !== "" && <span className="identity-settings-muted">{leg.detail}</span>}
-          </li>
-        ))}
-      </ul>
+      <ChecklistSummary status={summary.status} summary={summary.text} open={summary.open}>
+        <ul aria-label="Self-test" className="identity-settings-chain">
+          {selfTestLegs(selfTest).map((leg) => (
+            <li key={leg.label}>
+              <span className="identity-settings-rung-label">{leg.label}</span>
+              <StatusBadge status={leg.status} text={leg.text} />
+              {leg.detail !== "" && <span className="identity-settings-muted">{leg.detail}</span>}
+            </li>
+          ))}
+        </ul>
+      </ChecklistSummary>
       <div className="identity-settings-actions">
         <button type="button" className="identity-settings-button" disabled={running}
           aria-busy={running ? "true" : undefined} onClick={rerun}>
@@ -91,6 +104,18 @@ function SelfTest({ data }: { data: SettingsData }) {
         </button>
       </div>
       {error !== null && <p className="identity-settings-error">{error}</p>}
+    </section>
+  );
+}
+
+function BrowserNames({ status }: { status: PickerStatus }) {
+  const summary = pickerSummary(status);
+  return (
+    <section className="identity-settings-stack">
+      <h4 className="identity-settings-heading">Browser names</h4>
+      <ChecklistSummary status={summary.status} summary={summary.text} open={summary.open}>
+        <PickerChain status={status} />
+      </ChecklistSummary>
     </section>
   );
 }

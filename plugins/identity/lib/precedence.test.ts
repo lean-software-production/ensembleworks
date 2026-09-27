@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import type { WhoAmI } from "../server.js";
 import { PICKER_STATUSES } from "../settings-admin.js";
-import { PICKER_CHAIN, precedenceLadder, type Rung } from "./precedence.js";
+import { PICKER_CHAIN, pickerProblem, pickerSummary, precedenceLadder, type Rung } from "./precedence.js";
 
 const alex = { person: "alex", displayName: "Alex Rivera", github: "alexr" };
 const picker = { enabled: true, status: "ready", people: [{ person: "alex", displayName: "Alex Rivera" }] };
@@ -36,7 +36,8 @@ describe("precedenceLadder", () => {
     expect(states(rungs)).toEqual(["access:skipped", "selection:decided", "fallback:not-reached",
       "anonymous:not-reached"]);
     expect(detail(rungs, "selection")).toContain("Alex Rivera");
-    expect(detail(rungs, "selection")).toContain("never the guardrail");
+    expect(detail(rungs, "selection")).toContain("never the person rules");
+    expect(detail(rungs, "selection")).not.toContain("never the guardrail");
   });
 
   it("decides on the fallback email only when nothing above it applies", () => {
@@ -45,6 +46,24 @@ describe("precedenceLadder", () => {
     expect(states(rungs)).toEqual(["access:skipped", "selection:skipped", "fallback:decided",
       "anonymous:not-reached"]);
     expect(detail(rungs, "fallback")).toContain("solo@example.test");
+    // A stamped automation attributed to the fallback can still meet the automation rule.
+    expect(detail(rungs, "fallback")).toContain("never the person rules");
+    expect(detail(rungs, "fallback")).not.toContain("never the guardrail");
+  });
+
+  it("says an Access email the directory lacks counts for attribution only", () => {
+    // people.ts resolves it to no person, so makeGuardrail has no requester for the person rules.
+    const rungs = precedenceLadder(whoami({ email: "stranger@example.test", provenance: "upstream-header" }),
+      { fallbackConfigured: false });
+    expect(detail(rungs, "access")).toContain("not in the directory");
+    expect(detail(rungs, "access")).toContain("attribution only");
+    expect(detail(rungs, "access")).not.toContain("the guardrail");
+  });
+
+  it("says a directory person's Access email counts for the guardrail", () => {
+    const rungs = precedenceLadder(whoami({ email: "alex@example.test", person: alex, provenance: "upstream-header" }),
+      { fallbackConfigured: false });
+    expect(detail(rungs, "access")).toContain("It counts for attribution and the guardrail.");
   });
 
   it("decides anonymous when nothing names you", () => {
@@ -52,7 +71,7 @@ describe("precedenceLadder", () => {
     expect(states(rungs)).toEqual(["access:skipped", "selection:skipped", "fallback:skipped", "anonymous:decided"]);
     expect(detail(rungs, "fallback")).toBe("No fallback email is set.");
     expect(detail(rungs, "anonymous"))
-      .toBe("Threads you start show no starter, and the person rules (A and B) never refuse you.");
+      .toBe("Threads you start get no starter of their own (a child thread may inherit one), and the own-machine and own-thread rules never refuse you.");
   });
 
   it.each(["stale", "expired", "invalid"] as const)(
@@ -101,5 +120,20 @@ describe("PICKER_CHAIN", () => {
       expect(step.label.length).toBeGreaterThan(0);
       expect(step.fix.length).toBeGreaterThan(0);
     }
+  });
+});
+
+describe("pickerSummary", () => {
+  it("collapses a ready chain, and an off one, to one line", () => {
+    expect(pickerSummary("ready")).toEqual({ status: "ok", text: "Ready · 4 checks passed", open: false });
+    expect(pickerSummary("off")).toEqual({ status: "off", text: "Off", open: false });
+  });
+  it("opens on the first problem and names it", () => {
+    expect(pickerSummary("signing-key-unavailable"))
+      .toEqual({ status: "attention", text: "Not ready: there is no signing key", open: true });
+    expect(pickerProblem("origin-not-configured")).toBe("no public origin is set");
+  });
+  it("never points above or below: the chain shows on two tabs", () => {
+    for (const step of PICKER_CHAIN) expect(step.fix).not.toMatch(/\b(above|below)\b/);
   });
 });

@@ -1,4 +1,4 @@
-import { useId, useRef, type KeyboardEvent, type ReactNode } from "react";
+import { useEffect, useId, useRef, type KeyboardEvent, type ReactNode } from "react";
 import { SETTINGS_TABS, type SettingsTab } from "../../settings-admin.js";
 
 export const TAB_LABELS: Record<SettingsTab, string> = {
@@ -20,14 +20,24 @@ export function SettingsTabs({
   onSelect,
   panels,
   badges,
+  focusRequest,
+  onFocusHandled,
 }: {
   selected: SettingsTab;
   onSelect: (tab: SettingsTab) => void;
   panels: Record<SettingsTab, ReactNode>;
   badges?: Partial<Record<SettingsTab, ReactNode>>;
+  focusRequest?: SettingsTab | null;
+  onFocusHandled?: () => void;
 }) {
   const base = useId();
   const refs = useRef(new Map<SettingsTab, HTMLButtonElement>());
+  // A popover's "More" asks for a tab to be focused once it is selected.
+  useEffect(() => {
+    if (focusRequest == null) return;
+    refs.current.get(focusRequest)?.focus();
+    onFocusHandled?.();
+  }, [focusRequest, onFocusHandled]);
   const tabId = (tab: SettingsTab) => `${base}-tab-${tab}`;
   const panelId = (tab: SettingsTab) => `${base}-panel-${tab}`;
   const move = (event: KeyboardEvent<HTMLButtonElement>, from: SettingsTab) => {

@@ -27,8 +27,9 @@ typing pulses carry a person when one is known, and stay anonymous otherwise.
   With nobody named they keep the anonymous wording ("2 other viewers").
 - Counts are of distinct people: one person in two browsers counts once. Your
   own browser is excluded.
-- The popover footer states the source of the name, including whether it was chosen
-  in this browser or came from an unverified upstream header.
+- The popover footer says where your name came from — your Access email, a name
+  chosen in this browser, or the fallback email — or that you are anonymous or not in
+  the directory.
 - `identity_whoami` (RPC) and `GET /api/v1/plugins/identity/http/whoami` return
   `{ email, person, provenance, selection, picker }` for the caller.
 
@@ -111,7 +112,7 @@ starter rows retain their old strict shape; older code reads weak new rows as un
 | Ordinary future/busy/host-wait queue via `/threads` or `/:id/send` | `message.queued` snapshots the requester by row ID; a later drain reads that row. Capture misses and storage races are unknown. | Initial attempt and ordinary drain. |
 | Explicit `POST /threads/:id/queued-messages` | The request audit sees the insertion attempt, but no suitable queue event binds the row; the drain requester is unknown. | No insertion hook; normal drain hook later. |
 | Automatic/scheduled drain | Per-row ledger, never ambient async context; mixed or missing row identity is unknown. A changed content digest is attributed as unknown. | Yes, subject to core behavior. |
-| `POST .../queued-messages/:id/send` (Send-now) | Post-hoc `message.dispatched` names the stored enqueuer and the separate presser when observed. | **No**: core bypasses the dispatch hook. |
+| `POST .../queued-messages/:id/send` (Send-now) | In `audit` and `enforce` only, post-hoc `message.dispatched` names the stored enqueuer and the separate presser when observed; `off` logs nothing. | **No**: core bypasses the dispatch hook. |
 | Queue edits, reorder, group, cancel | HTTP request audit only; unobserved edits have no reliable editor binding. Cancel/dispatch cleanup is best effort. | No edit hook. |
 | Approvals, Stop, Archive, terminal and host HTTP routes | Request audit only. It records an observed attempt, not successful completion. | No Identity policy hook. |
 | Presence and Identity RPC reads | Current `whoami`/presence state; polling is rolled up in audit. | No. |
@@ -161,16 +162,19 @@ back as `null`. Attribution is a guardrail aid, not an audit log.
 
 ## Ownership UI
 
-Identity **shows** who owns what. It labels; it restricts nothing, and nothing here can
-reject, delay or alter a dispatch.
+Identity **shows** who owns what. The ownership UI only labels: nothing in it can reject,
+delay or alter a dispatch. What refuses is the guardrail, below.
 
-- **Machines are labelled `person`, `team` or `unclaimed`.** A machine named
-  `<box>-<person>` whose last segment matches a directory `person` or `github` belongs to
-  that person; a machine listed in `teamMachines` is the team's; anything else is
-  **unclaimed** — never silently folded into "team". A host is **pinned** to its person by
-  host id on first sight, and a later rename that disagrees with the pin is *not* followed:
-  the pin stands and the disagreement is reported (`GET …/http/host-pins`, and in the
-  header chip).
+- **Machines are labelled `person`, `team` or `unclaimed`,** checked in this order: the
+  team list, the pin, the name. A machine on `teamMachines` is the team's, whatever its
+  name or pin, and reports no conflict. Otherwise a machine **pinned** to a person (by host
+  id) is theirs, and a pin to someone since removed from the directory still names them. A
+  later rename that disagrees is *not* followed but reported (`GET …/http/host-pins`, and
+  in the header chip) until someone chooses **Keep pin**, which accepts that name without
+  changing the owner; a rename to any other disagreeing name is reported again. Otherwise a
+  machine named `<box>-<person>` whose last segment matches a directory `person` or
+  `github` is that person's, and is pinned to them on first sight. Anything else is
+  **unclaimed** — never silently folded into "team".
 - **Thread rows** show who started the thread ("Started by David · team machine"), except
   while someone is viewing or typing — **presence wins** that glyph.
 - **The thread header** reads "Started by David · runs as ensembleworks-agent on
@@ -182,8 +186,9 @@ reject, delay or alter a dispatch.
   it says about what happens *after* you press send follows the `enforcement` setting, and
   `ownership-labels.test.ts` fails if that copy ever promises an enforcement that is not
   switched on — in either tense, so audit's "would be refused" may never read as "was".
-- **In `audit` mode the header chip also says what enforcement would have done**
-  ("Started by Matt · would be refused — Matt's thread (audit mode, so it went through)"),
+- **In `audit` mode the header chip also says what Enforce would do to your next message
+  here, or to a new thread you start on this machine**
+  ("Started by Matt · your next message would be refused — Matt's thread (audit mode lets it through)"),
   so the team can evaluate the guardrail by using BB rather than by reading logs.
 
 Read paths: `identity_thread_ownership` (RPC, batched) / `GET …/http/thread-ownership`,
@@ -201,9 +206,13 @@ One three-way setting, `enforcement`:
 | `audit` | Take the **same** decision `enforce` would, write it to the log as a would-refuse, and let the message through. |
 | `enforce` | Act on that decision. |
 
-The rules `audit` reports and `enforce` acts on (`guardrail.ts`): **A** a known person's
-start on another *person's* machine (team and unclaimed machines are always fine); **B** a
-known person's message into a thread a different known person started; **C** an automation
+The rules `audit` reports and `enforce` acts on (`guardrail.ts`), where a *known person* is
+one whose Access email matches the directory: **A** a known person's request into a thread
+with no record — a new thread, or a follow-up after a Send now start — on another *person's*
+machine (team and unclaimed machines are always fine); **B** a known person's follow-up
+into a thread whose recorded starter is someone else, including a starter a child thread
+inherited from its lineage (a thread recorded from a browser name or `fallbackEmail` keeps
+its recorded starter, but the guardrail ignores it, so follow-ups stay open to anyone); **C** an automation
 (`origin: plugin`, `originPluginId: automations`) headed for a machine that is not a team
 machine. A dispatch Identity cannot tie to a person is **never refused by rules A or B, in
 any mode** — that is the normal shape of every agent path (see the design note's S9) — and
@@ -211,7 +220,9 @@ an identity that came from a browser name or from `fallbackEmail` counts as unti
 Access identity can be refused as a person. Rule C needs no person, and sees only what bb
 stamps: a `threads.spawn` from the automations plugin that names a machine. An automation
 posting into an existing thread (`threads.send`) arrives unstamped, and a spawn that names
-no machine is not judged, so rule C allows both.
+no machine is not judged, so rule C allows both. The settings section calls them the
+own-machine (A), own-thread (B) and automation (C) rules; log lines carry the rule id from
+`guardrail.ts`.
 
 `audit` and `enforce` run the *same* `decideGuardrail` call; only the returned action
 differs. A test drives the same facts through both modes and asserts the verdicts are
@@ -296,9 +307,10 @@ BB's settings page carries one Identity section, **People & machines** (section 
 `people`). It explains who and what Identity recognises, why, and what it does about it,
 and it is where the settings below are meant to be changed. From the top:
 
-- **The identity bar** — who this browser is (`You: Alex Rivera · from your Access email,
-  read as-is · counts for Attribution and the guardrail`), and the standing reminder that
-  Identity is a guardrail against mistakes, not a lock.
+- **The identity bar** — who this browser is (`You: Alex Rivera · from your Access email ·
+  counts for Attribution and the guardrail`; an Access email the directory lacks counts for
+  Attribution only), and a second line, `Changes here are logged.`, whose popover says
+  which changes write a change line and which (the generated form, the CLI) do not.
 - **The readiness strip** — six items (profile, people, machines, browser names,
   guardrail, check), each an icon plus text; activating one opens the tab that fixes it.
 - **The server profile question** — on a fresh server (nobody in the directory and every
@@ -335,8 +347,9 @@ and it is where the settings below are meant to be changed. From the top:
 Settings writes from this section go through `settings.experimental_set`, pins through
 the host-pin store and colours through the colour store. Each of the section's write RPCs
 and colour/pin actions that changes something writes exactly one audit line through
-`bb.log` naming who asked (person, email, provenance) and what changed, from → to. These
-lines are written whatever `enforcement` is.
+`bb.log` with the requester's identity (person, email, provenance) and what changed,
+from → to. That identity can be unknown: an anonymous requester's line carries `by: null`,
+`email: null` and provenance `unknown`. These lines are written whatever `enforcement` is.
 
 That promise covers only the section. BB's generated Configuration form (still listed
 beside the section) and `bb plugin config identity set` write the settings directly; Identity
@@ -369,7 +382,7 @@ what makes a section write accountable. A change made through the generated form
 CLI carries no such line (see *What each write does*), so while that form stays visible
 the log is not a complete record of who changed a setting. Precedence stays fixed (Access header → valid browser
 name → `fallbackEmail` → anonymous; a stale, expired or invalid name is anonymous and
-never falls through to the fallback). Only an Access identity can be refused as a person
+never falls through to the fallback). Only an Access identity the directory knows can be refused as a person
 (rules A and B); rule C refuses a stamped automation spawn headed for a named machine that is
 not a team machine, with no person involved.
 
@@ -384,7 +397,8 @@ bb plugin logs identity | jq -cR 'fromjson? | .message? | strings | select(start
 
 ### What still needs BB core
 
-The section labels these "Needs BB core" where it mentions them; none is attempted here:
+The coverage map in the Rules tab names the one that matters day to day (stamping
+`threads.send`); none is attempted here:
 grouping or hiding BB's generated settings form (it still lists every setting beside the
 section), setting provenance or locks, a host owner field, a plugin log query (and so any
 in-UI would-refuse evidence), a Send-now dispatch hook, stamping `threads.send` so rule C
@@ -418,16 +432,18 @@ directory marks the plugin *needs configuration* and presence stays anonymous.
 ### `fallbackEmail`
 
 Optional, default empty. Used as the requester's email when a request carries
-neither an Access header nor a valid browser name, for a BB server that is not behind
+neither an Access header nor a browser name, for a BB server that is not behind
 Cloudflare Access (e.g. a laptop). Such callers, agents and the CLI included, are then
 attributed to this email. With browser names on, a browser presenting a stale, expired
-or invalid name stays anonymous — it never falls through to the fallback. The guardrail
-never refuses on a fallback identity. Leave it empty on a shared server.
+or invalid name stays anonymous — it never falls through to the fallback. The person rules
+never refuse a fallback identity; a stamped automation still meets the automation rule.
+Leave it empty on a shared server.
 
 ### `teamMachines`
 
 Host names of the shared team machines, one per line or comma separated (a JSON array
-works too). A host that matches neither a person nor this list renders as "unclaimed".
+works too). A host that is not on this list, not pinned and whose name names no one in
+the directory renders as "unclaimed".
 
 ### `sharedMachineUser`
 
@@ -437,8 +453,8 @@ the header chip. Display only — Identity never sets or checks it.
 ### Setting them
 
 Prefer the People & machines section above: it confirms the risky changes and writes an
-audit line for each. The CLI still works, and is the only way to set `directory`, but a
-CLI (or generated Configuration form) change skips those confirmations and writes no
+audit line for each. The CLI and the generated Configuration form still work (they are the
+only ways to set `directory`), but they skip those confirmations and write no
 `settings.change` line:
 
 ```

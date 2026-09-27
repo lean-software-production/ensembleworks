@@ -705,8 +705,8 @@ export default async function plugin(bb: BbPluginApi) {
       type: "string",
       label: "People directory",
       description:
-        'JSON array of { "person", "github", "displayName", "emails": [...] }. Emails are matched '
-        + "case-insensitively against the Cloudflare Access email header. Changes apply without a reload.",
+        'Managed in infrastructure. JSON array of { "person", "github", "displayName", "emails": [...] }; '
+        + "emails match the Access email case-insensitively.",
       experimental_multiline: true,
       default: "[]",
     },
@@ -714,9 +714,9 @@ export default async function plugin(bb: BbPluginApi) {
       type: "string",
       label: "Team machines",
       description:
-        "Host names of the shared team machines, one per line or comma separated (a JSON array is "
-        + "accepted too). A host that matches neither a person nor this list is shown as "
-        + '"unclaimed" — never silently as the team machine. Display only: Identity restricts nothing.',
+        "Shared machines, one per line or comma separated. Anyone may start threads on them, and automations "
+        + "may start threads only on them or with no machine named: Enforce refuses a stamped automation "
+        + "elsewhere; Audit logs it.",
       experimental_multiline: true,
       default: "",
     },
@@ -724,8 +724,8 @@ export default async function plugin(bb: BbPluginApi) {
       type: "string",
       label: "Shared machine user",
       description:
-        "The Linux account threads run as on the team machine and on unclaimed machines, shown in "
-        + "the thread header chip. Display only — Identity never sets or checks it.",
+        "The Linux account agents run as on team and unclaimed machines. Shown in the thread header; "
+        + "Identity never sets or checks it.",
       default: "ensembleworks-agent",
     },
     enforcement: {
@@ -733,44 +733,34 @@ export default async function plugin(bb: BbPluginApi) {
       label: "Enforcement",
       options: [...ENFORCEMENT_MODES],
       description:
-        "off: record who started what, label it in the UI, and never refuse anything. "
-        + "audit: take the SAME decision enforcement would, write it to the log (`bb plugin logs identity`) "
-        + "as a would-refuse, and let the message through anyway. "
-        + "enforce: act on that decision — refuse a known person's start on another person's machine, their "
-        + "message into someone else's thread, and an automation spawning a thread on a named machine that is "
-        + "not a team machine. A dispatch Identity cannot tie to a person is never refused by the person rules — "
-        + "that is the normal shape of every agent path — and an identity supplied by Fallback email or a browser "
-        + "name counts as untied. The automation rule needs no person, but sees only spawns bb stamps: an "
-        + "automation posting into an existing thread arrives unstamped and is allowed, as is a spawn naming no machine. "
-        + "audit and enforce both log their verdicts; off logs no verdicts, but settings, pin and colour "
-        + "changes are logged in every mode when made through the People & machines section — a change made "
-        + "in this form or with bb plugin config is applied but not logged. Emails appear in those log lines by design.",
+        "Off (record only), Audit (log what Enforce would refuse) or Enforce (refuse it). Use People "
+        + "& machines, where turning on Enforce is confirmed and a change writes a settings.change line; a "
+        + "change made here is not confirmed and writes none.",
       default: "off",
     },
     fallbackEmail: {
       type: "string",
       label: "Fallback email",
       description:
-        "Used as the requester's email when a request carries no Cloudflare Access header and no valid browser name, "
-        + "for a BB server not behind Access (e.g. a laptop). Such callers, agents and CLI included, are then "
-        + "attributed to this email; a stale, expired or invalid browser name stays anonymous and never falls "
-        + "through to it. The guardrail ignores a fallback identity and never refuses on it. "
+        "Only for a server one person uses. Requests with no Access email and no browser name are "
+        + "attributed to it; a stale, expired or invalid browser name stays anonymous. The guardrail ignores it. "
         + "Leave empty on a shared server.",
       default: "",
     },
     selfSelectedIdentity: {
       type: "boolean", label: "Browser identity picker", default: false,
-      description: "Allow attribution-only browser selection from the Identity directory. Never counts as policy identity.",
+      description: "Let browsers choose a name from the directory. Attribution only.",
     },
     selectionPublicOrigin: {
       type: "string", label: "Identity picker public origin", default: "",
-      description: "Exact browser origin (scheme, host and optional port). Required to issue a selection; no forwarded header is trusted.",
+      description: "The exact origin browsers use, such as https://bb.example.com. Needed for browser names.",
     },
     selectionSigningKey: {
       type: "string", label: "Identity picker signing key", secret: true,
-      description: "32-byte base64url HMAC key. Rotate by setting a fresh key; all existing selections expire immediately.",
+      description: "32-byte base64url key that signs browser names. Setting a new one expires every browser's name.",
     },
   });
+
 
   let people: Person[] = [];
   let fallbackEmail = "";

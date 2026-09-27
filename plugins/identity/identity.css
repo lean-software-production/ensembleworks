@@ -294,20 +294,6 @@
 .identity-settings-modes { display: flex; flex-direction: column; gap: 6px; }
 .identity-settings-mode { align-items: flex-start; padding: 8px 10px; }
 .identity-settings-mode input { flex: 0 0 auto; width: 18px; height: 18px; margin: 1px 0 0; }
-/* What only BB core can provide: dashed, with its own glyph, never mistaken for a status. */
-.identity-settings-core {
-  align-self: flex-start;
-  display: inline-flex;
-  align-items: center;
-  gap: 6px;
-  max-width: 100%;
-  padding: 2px 8px;
-  border: 1px dashed var(--core, #7c3aed);
-  border-radius: 999px;
-  color: var(--core, #7c3aed);
-  font-size: 12px;
-}
-.identity-settings-core::before { content: "⬡"; }
 .identity-settings select {
   min-height: 40px;
   max-width: 100%;
@@ -381,3 +367,65 @@
 .identity-settings-dialog-title { font-size: 16px; font-weight: 700; margin: 0; }
 .identity-settings-dialog-actions { justify-content: flex-end; }
 .identity-settings-dialog ul { margin: 0; padding-left: 18px; }
+
+/* A term that explains itself: inline text with a dotted underline and a 44px-tall hit area. */
+.identity-explain {
+  position: relative;
+  display: inline;
+  padding: 0;
+  margin: 0;
+  border: 0;
+  background: none;
+  color: inherit;
+  font: inherit;
+  line-height: inherit;
+  text-align: inherit;
+  text-decoration: underline dotted;
+  text-underline-offset: 3px;
+  cursor: pointer;
+}
+.identity-explain::after { content: "ⓘ" / ""; display: inline-block; margin-left: 2px; font-size: 0.9em; }
+.identity-explain::before {
+  content: "";
+  position: absolute;
+  left: 0;
+  right: 0;
+  top: 50%;
+  height: 44px;
+  transform: translateY(-50%);
+}
+/* The term's own text sits above any neighbour's enlarged hit area. */
+.identity-explain-text { position: relative; z-index: 1; }
+.identity-explain:focus-visible { outline: 2px solid var(--ring, #2563eb); outline-offset: 2px; }
+.identity-explain-content {
+  z-index: 90;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  box-sizing: border-box;
+  max-width: min(320px, calc(100vw - 16px));
+  padding: 12px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--popover, var(--background));
+  color: var(--popover-foreground, var(--foreground));
+  box-shadow: 0 8px 24px rgb(0 0 0 / 0.18);
+  font-size: 13px;
+  line-height: 1.5;
+  overflow-wrap: anywhere;
+}
+.identity-explain-title { font-weight: 600; }
+.identity-explain-where { color: var(--muted-foreground); font-size: 12px; }
+.identity-explain-more {
+  align-self: flex-start;
+  min-height: 44px;
+  padding: 0 12px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: none;
+  color: inherit;
+  font: inherit;
+  cursor: pointer;
+}
+.identity-explain-more:focus-visible { outline: 2px solid var(--ring, #2563eb); outline-offset: 2px; }
+.identity-settings-checklist { display: flex; flex-direction: column; gap: 8px; }

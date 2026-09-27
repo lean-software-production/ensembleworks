@@ -16,8 +16,9 @@ import type { HostClassification } from "../hosts.js";
  * act on it differently. A simulator that modelled the rules instead would be a second
  * copy of them, free to drift.
  *
- * The example cast is fixed: Alex asks, Sam is someone else, and each machine kind has
- * one host.
+ * The example cast is fixed: Alex and Sam are example people, and each machine kind has
+ * one host. Only the Access-email Who asks as Alex; the others have no person requester,
+ * so Alex and Sam are then just the machines' owners and the threads' recorded starters.
  */
 export type SimWho = "access-person" | "browser-name" | "fallback" | "anonymous" | "automation";
 export type SimWhat = "start" | "follow-up-own" | "follow-up-others";
