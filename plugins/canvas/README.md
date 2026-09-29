@@ -1,5 +1,28 @@
 # bb-plugin-canvas
 
+## Artifact compatibility reader — Release N (Stage 1a)
+
+Release N preserves valid stored artifacts and shows an inert placeholder. It
+cannot originate artifacts through Paste, Duplicate, shape/model imports,
+editor intents or client/server shape writes. CRDT history import and sync
+still preserve artifacts supplied by a compatible newer writer.
+
+**Rollback floor: Release N.** The risk persists:
+rolling back below Release N after artifacts have existed can delete them.
+Older plugins ignore the format table and repair unknown kinds away. A later
+forward upgrade cannot recover those deletions; use a pre-rollback backup.
+
+Deploy N to **every host sharing room storage** before enabling N+1. Retire
+all below-N processes first, including outgoing hosts during a reload, and
+reopen old panels. N reads storage format 1 and wire schema 4; these are
+separate from artifact props schemaVersion 1. A room with a newer storage
+format is refused without reading, repairing or writing its blobs.
+
+N is not released yet. At release time record the immutable N tag, commit
+and built-bundle hashes in the [release record](docs/artifact-release-n.md).
+The plugin package version alone does not identify a compatible build. That
+record also describes the compatibility evidence and the N+1 release gates.
+
 Canvas follows BB’s appearance theme: paper, grid, toolbar, tabs, menus, frames,
 neutral drawing/text colours, and selection controls update with the host theme.
 Sticky-note colours and explicit drawing colours remain document content. Theme

@@ -65,6 +65,7 @@ export default async function plugin(bb: BbPluginApi) {
   // Which build this is, as far as the room's storage is concerned: a room
   // stamped newer than this is refused (canvas/store.ts) and says so below.
   bb.log.info(`canvas storage format ${CANVAS_FORMAT_VERSION}`);
+  bb.log.info("Canvas artifact rollback floor: Release N (Stage 1a compatibility reader); rolling back below Release N after artifacts have existed can delete them. Deploy N to every host sharing room storage before enabling N+1.");
   const room = new CanvasRoomHost({
     store: new CanvasStore(db),
     publish: (envelope) => bb.realtime.publish(CANVAS_CHANNEL, envelope),

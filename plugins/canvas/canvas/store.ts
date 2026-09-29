@@ -56,6 +56,18 @@ export const CANVAS_MIGRATIONS = [
      blob BLOB NOT NULL,
      PRIMARY KEY (room, seq)
    )`,
+  // Retired transcript storage. These SQL bytes shipped in v0.29.0, so
+  // their migration indices remain reserved even after the feature's removal.
+  `CREATE TABLE IF NOT EXISTS canvas_transcript (
+     id INTEGER PRIMARY KEY,
+     ts INTEGER NOT NULL,
+     speaker TEXT NOT NULL,
+     text TEXT NOT NULL
+   )`,
+  `CREATE INDEX IF NOT EXISTS canvas_transcript_ts ON canvas_transcript (ts)`,
+  `CREATE TABLE IF NOT EXISTS canvas_transcript_feed (id TEXT NOT NULL)`,
+  `INSERT INTO canvas_transcript_feed (id) SELECT lower(hex(randomblob(16))) WHERE NOT EXISTS (SELECT 1 FROM canvas_transcript_feed)`,
+  // Slot 6: slots 2–5 shipped in v0.29.0 and must never be reused.
   `CREATE TABLE IF NOT EXISTS canvas_format (
      room TEXT PRIMARY KEY,
      version INTEGER NOT NULL
@@ -67,6 +79,21 @@ export class CanvasStore {
 
   constructor(db: BetterSqlite3.Database) {
     this.#db = db;
+  }
+
+  /** Serialize a format check and ALL uses of that format against other
+   * connections/processes. IMMEDIATE acquires the writer lock before SELECT;
+   * a deferred/read transaction would still allow a newer writer to win.
+   * Nested store calls use savepoints under the same outer writer lock.
+   * The callback must be synchronous. */
+  withCurrentFormat<T>(room: string, use: () => T): T {
+    return this.#db.transaction(() => {
+      const format = this.formatVersion(room);
+      if (format !== null && format > CANVAS_FORMAT_VERSION) {
+        throw new CanvasFormatRefusedError(room, format);
+      }
+      return use();
+    }).immediate();
   }
 
   loadSnapshot(room: string): Uint8Array | null {
@@ -100,12 +127,16 @@ export class CanvasStore {
 
   /** Record that `version` has written this room. Only ever raises the stamp. */
   stampFormat(room: string, version: number): void {
-    this.#db
-      .prepare(
-        `INSERT INTO canvas_format (room, version) VALUES (?, ?)
-         ON CONFLICT(room) DO UPDATE SET version = MAX(version, excluded.version)`,
-      )
-      .run(room, version);
+    this.#db.transaction(() => {
+      const stored = this.formatVersion(room);
+      if (stored !== null && stored > version) throw new CanvasFormatRefusedError(room, stored);
+      this.#db
+        .prepare(
+          `INSERT INTO canvas_format (room, version) VALUES (?, ?)
+           ON CONFLICT(room) DO UPDATE SET version = MAX(version, excluded.version)`,
+        )
+        .run(room, version);
+    }).immediate();
   }
 
   updateCount(room: string): number {
@@ -124,17 +155,19 @@ export class CanvasStore {
    * bug.
    */
   appendUpdate(room: string, payload: Uint8Array): number {
-    // The seq is claimed from the table in the same statement, never from a
-    // per-store counter: during a plugin reload two hosts (two stores) append
-    // to one room, and a cached counter hands both the same seq.
-    const row = this.#db
-      .prepare<[string, Buffer, string], { seq: number }>(
-        `INSERT INTO canvas_updates (room, seq, blob)
-         SELECT ?, COALESCE(MAX(seq), 0) + 1, ? FROM canvas_updates WHERE room = ?
-         RETURNING seq`,
-      )
-      .get(room, Buffer.from(payload), room);
-    return row!.seq;
+    return this.withCurrentFormat(room, () => {
+      // The seq is claimed from the table in the same statement, never from a
+      // per-store counter: during a plugin reload two hosts (two stores) append
+      // to one room, and a cached counter hands both the same seq.
+      const row = this.#db
+        .prepare<[string, Buffer, string], { seq: number }>(
+          `INSERT INTO canvas_updates (room, seq, blob)
+           SELECT ?, COALESCE(MAX(seq), 0) + 1, ? FROM canvas_updates WHERE room = ?
+           RETURNING seq`,
+        )
+        .get(room, Buffer.from(payload), room);
+      return row!.seq;
+    });
   }
 
   /**
@@ -151,11 +184,7 @@ export class CanvasStore {
    * no other connection can append between the read and the delete.
    */
   compact(room: string, build: (stored: StoredRoom) => Uint8Array): void {
-    const write = this.#db.transaction(() => {
-      const format = this.formatVersion(room);
-      if (format !== null && format > CANVAS_FORMAT_VERSION) {
-        throw new CanvasFormatRefusedError(room, format);
-      }
+    this.withCurrentFormat(room, () => {
       const updates = this.loadUpdates(room);
       const snapshot = build({ snapshot: this.loadSnapshot(room), updates });
       this.#db
@@ -168,6 +197,5 @@ export class CanvasStore {
         .prepare(`DELETE FROM canvas_updates WHERE room = ? AND seq <= ?`)
         .run(room, updates.at(-1)?.seq ?? 0);
     });
-    write.immediate();
   }
 }

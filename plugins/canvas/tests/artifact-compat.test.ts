@@ -186,7 +186,9 @@ describe("the schemaVersion gate", () => {
     await plugin(host.bb);
     const writer = await connect(host, "writer");
     writer.peer.doc.putPage({ id: "page:p", name: "P" });
-    writer.peer.putShape(artifact("shape:art"));
+    // Fixture for history written by N+1; Release N cannot originate it.
+    writer.peer.doc.putShapeUnchecked(artifact("shape:art"));
+    writer.peer.doc.commit();
     await writer.pump();
     expect((await debug(host)).shapeIds).toEqual(["shape:art"]);
 
@@ -267,7 +269,9 @@ describe("the stored format version", () => {
     await plugin(host.bb);
     const writer = await connect(host, "writer");
     writer.peer.doc.putPage({ id: "page:p", name: "P" });
-    writer.peer.putShape(artifact("shape:art"));
+    // Fixture for history written by N+1; Release N cannot originate it.
+    writer.peer.doc.putShapeUnchecked(artifact("shape:art"));
+    writer.peer.doc.commit();
     await writer.pump();
 
     const reloaded = await host.harness.lifecycle.reload(plugin);
@@ -370,7 +374,7 @@ describe("the stored format version", () => {
     store.stampFormat("main", 1);
     expect(store.formatVersion("main")).toBe(1);
     store.stampFormat("main", 3);
-    store.stampFormat("main", 1);
+    expect(() => store.stampFormat("main", 1)).toThrow("storage format 3");
     expect(store.formatVersion("main")).toBe(3);
     expect(store.formatVersion("elsewhere")).toBeNull();
     db.close();

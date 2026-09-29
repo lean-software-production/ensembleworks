@@ -30,7 +30,10 @@ const reader = new SyncClientPeer({ peerId: 102n, transport: clientEndB })
 
 writer.doc.putPage({ id: 'page:p', name: 'P' })
 writer.doc.commit()
-writer.putShape(artifact)
+// Seed a future writer's persisted history using the test-only raw helper.
+// Release N's public putShape must refuse origination while imports preserve it.
+writer.doc.putShapeUnchecked(artifact)
+writer.doc.commit()
 
 assert.deepEqual(writer.doc.getShape('shape:art')?.props, props, 'the writer keeps its own artifact')
 assert.deepEqual(server.doc.getShape('shape:art')?.props, props, 'the server keeps the artifact through import + repair')

@@ -47,6 +47,10 @@ export function cloneWithNewIds(
   rootParentId: string,
   offset: { x: number; y: number },
 ): { shapes: Shape[]; bindings: Binding[]; rootIds: string[] } {
+  // Cloning is origination, including Duplicate's already-validated input.
+  // Keep schema/repair permissive for stored artifacts; Release N cannot
+  // mint a new artifact id. Endpoints of dropped shapes are filtered below.
+  input = { ...input, shapes: input.shapes.filter((s) => s.kind !== 'artifact') }
   const idMap = new Map<string, string>()
   input.shapes.forEach((s, i) => idMap.set(s.id, mint(i)))
 
@@ -142,7 +146,7 @@ export function decodeClipboard(text: string): { shapes: Shape[]; bindings: Bind
   const shapes: Shape[] = []
   for (const raw of rawShapes) {
     const result = validateShape(raw)
-    if (result.ok) shapes.push(result.shape)
+    if (result.ok && result.shape.kind !== 'artifact') shapes.push(result.shape)
   }
 
   const keptIds = new Set(shapes.map((s) => s.id))
@@ -215,6 +219,9 @@ export function serializeSelection(
     }
   }
 
+  // Copy/duplicate are authoring inputs. Preserve artifacts in the source
+  // document, but do not carry them into a new-shape payload in Release N.
+  for (const [id, shape] of collected) if (shape.kind === 'artifact') collected.delete(id)
   const collectedIds = collected // Map already gives O(1) `.has` by id.
   const keptBindings = bindings.filter((b) => collectedIds.has(b.fromId) && collectedIds.has(b.toId))
 
