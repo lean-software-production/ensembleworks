@@ -4,6 +4,18 @@ import { threadListArgsFor, threadPickerOptions } from "./thread-picker.js";
 import { hasThreadFrameFor } from "./thread-frames.js";
 import type { rpcContract } from "../server.js";
 import type { CanvasRoomHost } from "./room.js";
+import { CANVAS_SCHEMA_VERSION } from "./wire.js";
+
+/**
+ * Refuse a bundle built for any other document schema, before it touches the
+ * room (see CANVAS_SCHEMA_VERSION). Exact match, not "at least": a NEWER tab
+ * against this backend is just as unsafe, and reopening fixes both.
+ */
+function requireCompatibleCanvas(schemaVersion: number | undefined): void {
+  if (schemaVersion !== CANVAS_SCHEMA_VERSION) {
+    throw new Error("Canvas has been updated. Reopen this panel to continue editing.");
+  }
+}
 
 export interface RpcHandlerDependencies {
   readonly room: CanvasRoomHost;
@@ -41,11 +53,13 @@ export function createRpcHandlers(
   } = deps;
 
   return {
-    canvas_join: ({ clientId, name }) => {
+    canvas_join: ({ clientId, name, schemaVersion }) => {
+      requireCompatibleCanvas(schemaVersion);
       room.join(clientId, Date.now(), name);
       return { room: room.room };
     },
-    canvas_frame: ({ clientId, data }) => {
+    canvas_frame: ({ clientId, data, schemaVersion }) => {
+      requireCompatibleCanvas(schemaVersion);
       room.frame(clientId, base64ToBytes(data), Date.now());
       return { ok: true } as const;
     },

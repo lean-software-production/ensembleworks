@@ -65,6 +65,9 @@ export class LoroCanvasDoc implements CanvasDoc {
   // no known unbounded-growth path for index buckets on docs that never
   // import/repair — the incremental mutators alone keep the index precise.
   private index = new Map<string, LoroTreeNode[]>()
+  // IDs observed in imported history may be restored by undo after deletion.
+  // This never grants permission to mint a different artifact id locally.
+  private artifactHistory = new Set<string>()
 
   private constructor(
     private doc: LoroDoc,
@@ -95,6 +98,7 @@ export class LoroCanvasDoc implements CanvasDoc {
       if (n.isDeleted()) continue
       const sid = n.data.get('shapeId') as string | undefined
       if (!sid) continue
+      if (n.data.get('kind') === 'artifact') this.artifactHistory.add(sid)
       const arr = this.index.get(sid)
       if (arr) arr.push(n); else this.index.set(sid, [n])
     }
@@ -239,6 +243,15 @@ export class LoroCanvasDoc implements CanvasDoc {
       // rejectWrite coerces both centrally so no call site can leak garbage
       // into InvalidWrite.
       this.rejectWrite('putShape', s, (s as { id?: unknown })?.id, v.error)
+      return
+    }
+    // Release N reads/syncs artifact history but cannot originate artifacts.
+    // This boundary covers client/server puts, model imports and editor
+    // intents, including attempts to change an ordinary shape's kind.
+    // CRDT import/fromSnapshot deliberately bypass it: dropping remote
+    // artifacts would make N an unsafe rollback target for N+1.
+    if (s.kind === 'artifact' && !this.artifactHistory.has(s.id)) {
+      this.rejectWrite('putShape', s, s.id, 'artifact creation is unavailable in Release N')
       return
     }
     this.putShapeUnchecked(s)

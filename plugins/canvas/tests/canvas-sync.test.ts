@@ -13,7 +13,7 @@ import { createFakePluginHost } from "@get-bb/plugin-sdk/testing";
 import type { FakePluginHost } from "@get-bb/plugin-sdk/testing";
 import { CanvasRoomHost } from "../canvas/room.js";
 import { CANVAS_MIGRATIONS, CanvasStore } from "../canvas/store.js";
-import { CANVAS_CHANNEL } from "../canvas/wire.js";
+import { CANVAS_CHANNEL, CANVAS_SCHEMA_VERSION } from "../canvas/wire.js";
 import { createPresencePublisher } from "../canvas/presence-publisher.js";
 import {
   createBbTransport,
@@ -99,7 +99,10 @@ async function connect(host: FakePluginHost, id: string): Promise<Connected> {
       throw error;
     },
   });
-  await host.harness.behavior.callRpc("canvas_join", { clientId: id });
+  await host.harness.behavior.callRpc("canvas_join", {
+    clientId: id,
+    schemaVersion: CANVAS_SCHEMA_VERSION,
+  });
   const peer = new SyncClientPeer({ peerId: newPeerId(), transport });
   const pump = makePump(host, transport, id);
   await pump();
@@ -232,6 +235,7 @@ describe("the room over bb rpc + realtime", () => {
 
     await host.harness.behavior.callRpc("canvas_join", {
       clientId: "watcher",
+      schemaVersion: CANVAS_SCHEMA_VERSION,
     });
     expect(
       await host.harness.behavior.callRpc("canvas_ping", {

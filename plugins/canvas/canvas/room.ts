@@ -12,9 +12,15 @@
 // is not theirs. That is fine for a spike (frames are already CRDT deltas that
 // a non-addressee would merely waste bytes on), but it is NOT a privacy
 // boundary — noted as a known limitation.
+import { LoroCanvasDoc } from "@ensembleworks/canvas-doc";
 import { SyncServerPeer, type Transport } from "@ensembleworks/canvas-sync";
 import { bytesToBase64 } from "./base64.js";
-import type { CanvasStore } from "./store.js";
+import {
+  CANVAS_FORMAT_VERSION,
+  CanvasFormatRefusedError,
+  type CanvasStore,
+  type StoredRoom,
+} from "./store.js";
 import {
   ROOM_ID,
   type CanvasEnvelope,
@@ -106,7 +112,7 @@ export interface CanvasRoomHostOptions {
 }
 
 export class CanvasRoomHost {
-  readonly peer: SyncServerPeer;
+  #peer = new SyncServerPeer({ peerId: SERVER_PEER_ID });
   readonly room: string;
   readonly #store: CanvasStore;
   readonly #publish: (message: CanvasServerMessage) => void;
@@ -114,10 +120,12 @@ export class CanvasRoomHost {
   readonly #compactEvery: number;
   readonly #clientIdleMs: number;
   readonly #clients = new Map<string, ClientEntry>();
-  #updatesSinceSnapshot: number;
-  /** Highest canvas_updates.seq this host has read or written; bounds compaction. */
-  #lastSeq = 0;
+  #updatesSinceSnapshot = 0;
   #closed = false;
+  #outbox: CanvasServerMessage[] | null = null;
+  /** Set after a newer storage format or any failed storage transaction.
+   * From then on it serves nothing and writes nothing (see `refusal`). */
+  #refused: Error | null = null;
 
   constructor(options: CanvasRoomHostOptions) {
     this.room = options.room ?? ROOM_ID;
@@ -127,32 +135,61 @@ export class CanvasRoomHost {
     this.#compactEvery = options.compactEvery ?? COMPACT_EVERY;
     this.#clientIdleMs = options.clientIdleMs ?? CLIENT_IDLE_MS;
 
+    // The lock covers checking, reading BOTH blobs, import/repair, and the
+    // stamp. No newer writer can commit between any of these operations.
+    try {
+      this.#store.withCurrentFormat(this.room, () => this.#restorePeer());
+    } catch (error) {
+      this.#peer.close();
+      if (!(error instanceof CanvasFormatRefusedError)) throw error;
+      this.#refuse(error);
+    }
+  }
+
+  #restorePeer(): void {
     const snapshot = this.#store.loadSnapshot(this.room);
-    this.peer = new SyncServerPeer({
+    const peer = new SyncServerPeer({
       peerId: SERVER_PEER_ID,
       ...(snapshot === null ? {} : { initialSnapshot: snapshot }),
-      // Durable-first: canvas-sync calls this BEFORE repair/commit/relay, so
-      // no client can observe a delta we have not written down yet.
+      // Import precedes this callback. Even a failed append must discard
+      // that imported state; canvas-sync catches callback exceptions. The
+      // outer host boundary checks refusal and rolls back before publishing.
       onUpdatePayload: (payload) => {
-        this.#lastSeq = this.#store.appendUpdate(this.room, payload);
-        this.#updatesSinceSnapshot += 1;
+        try {
+          this.#store.appendUpdate(this.room, payload);
+          this.#updatesSinceSnapshot += 1;
+        } catch (error) {
+          this.#storageFailed(error);
+          throw error;
+        }
       },
     });
+
+    this.#peer.close();
+    this.#peer = peer; // constructor catch also closes a partially restored peer
 
     // Replay whatever accumulated after the snapshot. These imports go
     // straight at the doc, not through a frame, so onUpdatePayload does not
     // fire and the log is not duplicated.
     const logged = this.#store.loadUpdates(this.room);
-    for (const update of logged) this.peer.doc.import(update.bytes);
+    for (const update of logged) peer.doc.import(update.bytes);
     if (logged.length > 0) {
-      this.peer.doc.repair();
-      this.peer.doc.commit();
-      this.#lastSeq = logged[logged.length - 1]!.seq;
+      peer.doc.repair();
+      peer.doc.commit();
     }
     this.#updatesSinceSnapshot = logged.length;
+    this.#store.stampFormat(this.room, CANVAS_FORMAT_VERSION);
     this.#log(
-      `room "${this.room}" restored: snapshot ${snapshot?.length ?? 0} bytes, ${logged.length} logged updates, ${this.peer.doc.listShapes().length} shapes`,
+      `room "${this.room}" restored: snapshot ${snapshot?.length ?? 0} bytes, ${logged.length} logged updates, ${peer.doc.listShapes().length} shapes`,
     );
+  }
+
+  /** The current peer; a storage failure replaces it with an empty closed peer. */
+  get peer(): SyncServerPeer { return this.#peer; }
+
+  /** Why this host refuses to serve the room, or null while it serves it. */
+  get refusal(): string | null {
+    return this.#refused?.message ?? null;
   }
 
   get clientCount(): number {
@@ -188,22 +225,24 @@ export class CanvasRoomHost {
    */
   join(clientId: string, nowMs: number, name?: string | null): void {
     if (this.#closed) throw new Error("CanvasRoomHost is closed");
-    this.#clients.get(clientId)?.transport.close();
-    const transport = new ClientTransport(clientId, this.#publish);
-    // Drop our own bookkeeping when the transport dies for any reason
-    // (explicit leave, sweep, or peer.close()).
-    transport.onClose(() => {
-      if (this.#clients.get(clientId)?.transport === transport) {
-        this.#clients.delete(clientId);
-      }
+    this.#withCurrentFormat(() => {
+      this.#clients.get(clientId)?.transport.close();
+      const transport = new ClientTransport(clientId, (message) => this.#emit(message));
+      // Drop our own bookkeeping when the transport dies for any reason
+      // (explicit leave, sweep, or peer.close()).
+      transport.onClose(() => {
+        if (this.#clients.get(clientId)?.transport === transport) {
+          this.#clients.delete(clientId);
+        }
+      });
+      this.#clients.set(clientId, {
+        transport,
+        lastSeenMs: nowMs,
+        name: name ?? null,
+      });
+      this.peer.connect(transport);
+      this.#publishIdentities();
     });
-    this.#clients.set(clientId, {
-      transport,
-      lastSeenMs: nowMs,
-      name: name ?? null,
-    });
-    this.peer.connect(transport);
-    this.#publishIdentities();
   }
 
   /**
@@ -215,7 +254,7 @@ export class CanvasRoomHost {
    * was still in sync while the server silently held a newer doc.
    */
   touch(clientId: string, nowMs: number): boolean {
-    if (this.#closed) return false;
+    if (this.#closed || this.#refused !== null) return false;
     const entry = this.#clients.get(clientId);
     if (entry === undefined) return false;
     entry.lastSeenMs = nowMs;
@@ -240,19 +279,22 @@ export class CanvasRoomHost {
    */
   frame(clientId: string, bytes: Uint8Array, nowMs: number): void {
     if (this.#closed) return;
-    let entry = this.#clients.get(clientId);
-    if (entry === undefined) {
-      this.join(clientId, nowMs);
-      entry = this.#clients.get(clientId);
-      if (entry === undefined) return;
-      this.#publish({ to: clientId, resync: true });
-    }
-    entry.lastSeenMs = nowMs;
-    entry.transport.deliver(bytes);
-    // Compact here rather than inside onUpdatePayload: by now the peer has
-    // finished import + repair + commit for this frame, so the snapshot we
-    // take is fully current.
-    this.#maybeCompact();
+    this.#withCurrentFormat(() => {
+      let entry = this.#clients.get(clientId);
+      if (entry === undefined) {
+        this.join(clientId, nowMs);
+        entry = this.#clients.get(clientId);
+        if (entry === undefined) return;
+        this.#emit({ to: clientId, resync: true });
+      }
+      entry.lastSeenMs = nowMs;
+      entry.transport.deliver(bytes);
+      this.#throwIfRefused(); // persistence errors are swallowed by the sync peer
+      // Compact here rather than inside onUpdatePayload: by now the peer has
+      // finished import + repair + commit for this frame, so the snapshot we
+      // take is fully current.
+      this.#maybeCompact();
+    });
   }
 
   leave(clientId: string): void {
@@ -266,6 +308,7 @@ export class CanvasRoomHost {
 
   /** Close every client silent for longer than the idle window. */
   sweep(nowMs: number): number {
+    if (this.#refused !== null) return 0;
     let swept = 0;
     for (const [clientId, entry] of [...this.#clients]) {
       if (nowMs - entry.lastSeenMs <= this.#clientIdleMs) continue;
@@ -280,13 +323,23 @@ export class CanvasRoomHost {
     return swept;
   }
 
-  /** Force a snapshot + truncation of the log rows that snapshot covers. */
+  /**
+   * Force a snapshot + truncation of the log rows that snapshot covers. A
+   * refused host never writes; a newer stamp found here refuses the host.
+   */
   compact(): void {
-    this.#store.compact(this.room, this.peer.snapshot(), this.#lastSeq);
+    if (this.#refused !== null) return;
+    try {
+      this.#store.compact(this.room, (stored) => this.#mergedSnapshot(stored));
+    } catch (error) {
+      if (error instanceof CanvasFormatRefusedError) { this.#refuse(error); return; }
+      this.#storageFailed(error);
+      throw error;
+    }
     this.#updatesSinceSnapshot = 0;
   }
 
-  /** Idempotent: compact one last time, then detach every client. */
+  /** Idempotent: compact one last time (unless refused), then detach every client. */
   close(): void {
     if (this.#closed) return;
     this.#closed = true;
@@ -304,7 +357,80 @@ export class CanvasRoomHost {
    * wrong label indefinitely; the next broadcast repairs any client. */
   #publishIdentities(): void {
     if (this.#closed) return;
-    this.#publish({ identities: this.identities });
+    this.#emit({ identities: this.identities });
+  }
+
+  /**
+   * This host's document merged with everything stored for the room. A plugin
+   * reload overlaps two hosts on one database, and each logs (or compacts)
+   * updates the other never imported; the new snapshot must hold them before
+   * their rows go. Merged in a scratch doc — the live doc is not touched, and
+   * nothing is repaired: that is the next load's job, as for any logged update.
+   */
+  #mergedSnapshot(stored: StoredRoom): Uint8Array {
+    const merged = LoroCanvasDoc.fromSnapshot(this.peer.snapshot(), { peerId: SERVER_PEER_ID });
+    if (stored.snapshot !== null) merged.import(stored.snapshot);
+    for (const update of stored.updates) merged.import(update.bytes);
+    return merged.exportSnapshot();
+  }
+
+  /**
+   * Throw the refusal if this host has one, or if another host has stamped
+   * the room with a newer format since this one loaded it. Checked on every
+   * join and frame, BEFORE anything is delivered, so a live host that loses
+   * the room to a newer build stops at the next client message.
+   */
+  #withCurrentFormat(use: () => void): void {
+    if (this.#refused !== null) throw this.#refused;
+    // Auto-join nests inside frame; share its lock and post-commit outbox.
+    if (this.#outbox !== null) { use(); return; }
+    const outbox: CanvasServerMessage[] = [];
+    this.#outbox = outbox;
+    try {
+      this.#store.withCurrentFormat(this.room, () => { use(); this.#throwIfRefused(); });
+    } catch (error) {
+      if (error instanceof CanvasFormatRefusedError) this.#refuse(error);
+      else this.#storageFailed(error);
+      throw error;
+    } finally {
+      this.#outbox = null;
+    }
+    // Publishing inside the transaction would expose updates before COMMIT.
+    for (const message of outbox) this.#publish(message);
+  }
+
+  #emit(message: CanvasServerMessage): void {
+    if (this.#refused !== null) return;
+    if (this.#outbox !== null) this.#outbox.push(message);
+    else this.#publish(message);
+  }
+
+  /** Enter refused mode: log why, once, and drop every client. */
+  #refuse(error: Error): void {
+    if (this.#refused !== null) return;
+    this.#refused = error;
+    this.#log(error.message);
+    for (const entry of [...this.#clients.values()]) entry.transport.close();
+    this.#clients.clear();
+  }
+
+  #throwIfRefused(): void {
+    if (this.#refused !== null) throw this.#refused;
+  }
+
+  /** SQLite rollback cannot undo Loro imports, repairs, causal caches or
+   * counters. Discard the entire peer on ANY storage boundary failure (BEGIN,
+   * reads, writes/savepoints, COMMIT or rollback cleanup). Do not reload here:
+   * rollback itself may have failed, leaving the connection's state unknown.
+   * A fresh host after storage recovery must read committed history again. */
+  #storageFailed(error: unknown): void {
+    if (this.#refused !== null) return;
+    this.#refuse(new Error(`Canvas room "${this.room}" stopped after storage failure: ${String(error)}. Reload after storage recovers.`, { cause: error }));
+    this.#peer.close();
+    this.#peer = new SyncServerPeer({ peerId: SERVER_PEER_ID });
+    this.#peer.close();
+    this.#updatesSinceSnapshot = 0;
+    this.#outbox?.splice(0);
   }
 
   #maybeCompact(): void {

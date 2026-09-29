@@ -3,13 +3,14 @@
 // pushes inbound bytes in with `deliver`, so this module is unit-testable and
 // the React layer stays a thin adapter.
 //
-//   outbound  transport.send(frame) -> sendFrame({ clientId, data })  [rpc canvas_frame]
+//   outbound  transport.send(frame) -> sendFrame({ clientId, data, schemaVersion })  [rpc canvas_frame]
 //   inbound   useRealtime(CANVAS_CHANNEL, p => { const b = envelopeBytesFor(id, p);
 //                                                if (b) transport.deliver(b) })
 import type { Transport } from "@ensembleworks/canvas-sync";
 import { base64ToBytes, bytesToBase64 } from "./canvas/base64.js";
 import {
   CANVAS_CHANNEL,
+  CANVAS_SCHEMA_VERSION,
   ROOM_ID,
   type CanvasEnvelope,
   type CanvasFramePayload,
@@ -73,7 +74,7 @@ export function createBbTransport(
       chain = chain.then(async () => {
         if (closed) return;
         try {
-          await sendFrame({ clientId, data });
+          await sendFrame({ clientId, data, schemaVersion: CANVAS_SCHEMA_VERSION });
         } catch (error) {
           onError?.(error);
         }

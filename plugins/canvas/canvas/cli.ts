@@ -54,6 +54,7 @@ export function registerCanvasCli(
             ),
             shapes: shapeIds.length,
             pendingUpdates: room.pendingUpdates,
+            refusal: room.refusal,
           };
           return {
             exitCode: 0,
@@ -64,6 +65,7 @@ export function registerCanvasCli(
               }`,
               `shapes:   ${status.shapes}`,
               `pending:  ${status.pendingUpdates} update(s) since last snapshot`,
+              ...(status.refusal === null ? [] : [`refused:  ${status.refusal}`]),
             ].join("\n"),
           };
         }

@@ -46,10 +46,11 @@ interface Harness {
 	unmount: () => Promise<void>
 }
 
-async function mount(opts: { rejectWrite?: boolean } = {}): Promise<Harness> {
+async function mount(opts: { rejectWrite?: boolean; storedShapes?: ShapeT[]; write?: () => Promise<void> } = {}): Promise<Harness> {
 	const doc = LoroCanvasDoc.create({ peerId: 1n })
 	doc.putPage({ id: 'page:p', name: 'P' })
 	doc.putShape({ id: 'shape:n', kind: 'note', parentId: 'page:p', index: 'a1', x: 100, y: 100, rotation: 0, isLocked: false, opacity: 1, meta: {}, props: {} } as ShapeT)
+	for (const shape of opts.storedShapes ?? []) doc.putShapeUnchecked(shape)
 	doc.commit()
 	const editor = new Editor({ doc, now: () => 0, random: () => 0.5, pageId: 'page:p' })
 	const toolContext = createToolContext(editor)
@@ -58,9 +59,10 @@ async function mount(opts: { rejectWrite?: boolean } = {}): Promise<Harness> {
 	const notices: string[] = []
 	const host: CanvasHost = {
 		clipboard: {
-			read: () => Promise.resolve(''),
+			read: () => Promise.resolve(writes.at(-1) ?? ''),
 			write: (text) => {
 				writes.push(text)
+				if (opts.write) return opts.write()
 				return opts.rejectWrite ? Promise.reject(new Error('denied')) : Promise.resolve()
 			},
 		},
@@ -333,4 +335,73 @@ function note(h: Harness): { x: number; y: number } {
 	assert.ok(after.x !== before.x, 'a one-finger drag after a pinch still moves the shape')
 	await h.unmount()
 	console.log('ok: (h) a pinch does not eat the gesture that follows it')
+}
+
+// Release N: clipboard omits stored artifacts, so Cut must preserve them.
+const storedArtifact = { id: 'shape:artifact', kind: 'artifact', parentId: 'page:p', index: 'a2',
+  x: 400, y: 100, rotation: 0, isLocked: false, opacity: 1, meta: {},
+  props: { w: 100, h: 100, schemaVersion: 1, source: 'thread-storage',
+    threadId: 'thr_fixture01', path: 'reports/deck.html', title: 'Deck' } } as const
+const storedFrame = { ...storedArtifact, id: 'shape:frame', kind: 'frame', props: { w: 300, h: 300 } } as ShapeT
+for (const mode of ['artifact only', 'mixed', 'containing frame', 'rejected write'] as const) {
+  const artifact = mode === 'containing frame' ? { ...storedArtifact, parentId: storedFrame.id } : storedArtifact
+  const h = await mount({ storedShapes: mode === 'containing frame' ? [storedFrame, artifact] : [artifact], rejectWrite: mode === 'rejected write' })
+  const preserved = h.editor.doc.getShape(artifact.id)
+  const selected = mode === 'artifact only' ? [artifact.id] : ['shape:n', mode === 'containing frame' ? storedFrame.id : artifact.id]
+  await act(async () => {
+    h.editor.apply({ type: 'SetSelection', ids: selected })
+    pointerdown(h.inScope)
+    keydown(h.body, 'x', { ctrl: true })
+  })
+  assert.deepEqual(h.editor.doc.getShape(artifact.id), preserved, `${mode}: Cut preserves the uncopied artifact`)
+  assert.equal(!!h.editor.doc.getShape('shape:n'), mode === 'artifact only' || mode === 'rejected write', `${mode}: ordinary selection cuts only after successful clipboard write`)
+  if (mode === 'containing frame') assert.ok(h.editor.doc.getShape(storedFrame.id), 'artifact parent stays stored')
+  assert.ok(h.writes.every(text => !text.includes('shape:artifact')), 'Copy/Cut never serializes artifacts')
+  if (mode !== 'rejected write') {
+    await act(async () => { keydown(h.body, 'v', { ctrl: true }) })
+    assert.deepEqual(h.editor.doc.listShapes().filter(s => s.kind === 'artifact'), [preserved], 'Paste never clones or deletes stored artifacts')
+    const reloaded = LoroCanvasDoc.fromSnapshot(h.editor.doc.exportSnapshot(), { peerId: 2n })
+    assert.deepEqual(reloaded.getShape(artifact.id), preserved, 'artifact survives persisted reload after Cut/Paste')
+  }
+  await h.unmount()
+  console.log(`ok: Cut ${mode} preserves artifacts`)
+}
+// The clipboard write can yield to a remote import. Never cascade-delete a
+// newly-arrived artifact (or other uncopied descendant) under a copied frame.
+{
+  let resolve!: () => void
+  const h = await mount({ storedShapes: [storedFrame], write: () => new Promise<void>(r => { resolve = r }) })
+  await act(async () => {
+    h.editor.apply({ type: 'SetSelection', ids: [storedFrame.id] })
+    pointerdown(h.inScope); keydown(h.body, 'x', { ctrl: true })
+  })
+  await act(async () => {
+    const remote = LoroCanvasDoc.fromSnapshot(h.editor.doc.exportSnapshot(), { peerId: 2n })
+    remote.putShapeUnchecked({ ...storedArtifact, parentId: storedFrame.id }); remote.commit()
+    h.editor.doc.import(remote.exportUpdate()); h.editor.doc.commit()
+    resolve()
+  })
+  assert.ok(h.editor.doc.getShape(storedFrame.id), 'frame gaining an uncopied descendant while clipboard pending stays stored')
+  assert.ok(h.editor.doc.getShape(storedArtifact.id), 'concurrent artifact stays stored')
+  await h.unmount()
+  console.log('ok: Cut rechecks descendants after async clipboard completion')
+}
+
+// Copy/Duplicate remain usable for ordinary content beside an artifact, while
+// neither action (nor subsequent Paste) originates a new artifact.
+for (const action of ['c', 'd'] as const) {
+  const h = await mount({ storedShapes: [storedArtifact] })
+  await act(async () => {
+    h.editor.apply({ type: 'SetSelection', ids: ['shape:n', storedArtifact.id] })
+    pointerdown(h.inScope); keydown(h.body, action, { ctrl: true })
+  })
+  if (action === 'c') {
+    assert.ok(h.writes[0]?.includes('shape:n'))
+    assert.ok(!h.writes[0]?.includes(storedArtifact.id))
+    await act(async () => { keydown(h.body, 'v', { ctrl: true }) })
+  }
+  assert.equal(h.editor.doc.listShapes().filter(s => s.kind === 'note').length, 2)
+  assert.deepEqual(h.editor.doc.listShapes().filter(s => s.kind === 'artifact'), [storedArtifact])
+  await h.unmount()
+  console.log(`ok: ${action === 'c' ? 'Copy/Paste' : 'Duplicate'} preserves but never originates artifacts`)
 }
