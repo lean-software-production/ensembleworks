@@ -9,6 +9,7 @@
 // persistence. The full duplex path is covered by tests/canvas-sync.test.ts.
 import assert from "node:assert/strict";
 import { SyncClientPeer } from "@ensembleworks/canvas-sync";
+import { CANVAS_SCHEMA_VERSION } from "../canvas/wire.js";
 import { createBbTransport, newClientId, newPeerId } from "../transport.js";
 
 const base = process.env.BB_SERVER_URL ?? "http://127.0.0.1:38886";
@@ -32,7 +33,7 @@ const transport = createBbTransport({
   },
 });
 
-await rpc("canvas_join", { clientId });
+await rpc("canvas_join", { clientId, schemaVersion: CANVAS_SCHEMA_VERSION });
 const peer = new SyncClientPeer({ peerId: newPeerId(), transport });
 peer.doc.putPage({ id: "page:p", name: "P" });
 const id = `shape:live-${Date.now()}`;

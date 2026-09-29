@@ -11,6 +11,13 @@ const clientIdSchema = z.string().trim().min(1).max(128);
 const nameSchema = z.string().trim().min(1).max(MAX_NAME_LENGTH);
 
 /**
+ * The bundle's CANVAS_SCHEMA_VERSION (canvas/wire.ts). OPTIONAL at the wire on
+ * purpose: a bundle from before the gate sends none, and it must reach the
+ * handler so it can be told to reopen rather than fail as a malformed call.
+ */
+const schemaVersionSchema = z.number().int().optional();
+
+/**
  * A bb pathname a client is reporting itself at.
  *
  * Rooted and bounded at the wire, so nothing that could not be a bb route ever
@@ -40,13 +47,21 @@ export const rpcContract = defineRpcContract({
   // fetch has ever succeeded — such a client simply has no cursor label.
   canvas_join: {
     input: z
-      .object({ clientId: clientIdSchema, name: nameSchema.optional() })
+      .object({
+        clientId: clientIdSchema,
+        name: nameSchema.optional(),
+        schemaVersion: schemaVersionSchema,
+      })
       .strict(),
     output: z.object({ room: z.string() }).strict(),
   },
   canvas_frame: {
     input: z
-      .object({ clientId: clientIdSchema, data: z.string().max(4_000_000) })
+      .object({
+        clientId: clientIdSchema,
+        data: z.string().max(4_000_000),
+        schemaVersion: schemaVersionSchema,
+      })
       .strict(),
     output: z.object({ ok: z.literal(true) }).strict(),
   },

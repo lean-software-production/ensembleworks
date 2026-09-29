@@ -11,10 +11,10 @@ import {
 } from './shape.js'
 import { validateAsset } from './document.js'
 
-// Every kind the room can contain is enumerated (9 tldraw incl. group + image + 6 custom + bbthread).
+// Every kind the room can contain is enumerated (9 tldraw incl. group + image + 6 custom + bbthread + artifact).
 assert.deepEqual(
   [...SHAPE_KINDS].sort(),
-  ['arrow','bbthread','draw','file-viewer','frame','geo','group','highlight','iframe','image','line','neko','note','roadmap','screenshare','terminal','text'].sort(),
+  ['arrow','artifact','bbthread','draw','file-viewer','frame','geo','group','highlight','iframe','image','line','neko','note','roadmap','screenshare','terminal','text'].sort(),
 )
 
 const note = {

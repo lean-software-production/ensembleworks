@@ -10,7 +10,11 @@
 import { type BbPluginApi } from "@get-bb/plugin-sdk";
 import { resolveCanvasProjectId } from "./canvas/agent-project.js";
 import { CanvasRoomHost } from "./canvas/room.js";
-import { CANVAS_MIGRATIONS, CanvasStore } from "./canvas/store.js";
+import {
+  CANVAS_FORMAT_VERSION,
+  CANVAS_MIGRATIONS,
+  CanvasStore,
+} from "./canvas/store.js";
 import { registerBackground, registerHttp } from "./canvas/registrations.js";
 import { createRpcHandlers } from "./canvas/rpc-handlers.js";
 import { registerCanvasCli } from "./canvas/cli.js";
@@ -58,6 +62,9 @@ export default async function plugin(bb: BbPluginApi) {
   // update. Constructed at load so the room is live before the first client.
   const db = bb.storage.database();
   bb.storage.migrate(db, CANVAS_MIGRATIONS);
+  // Which build this is, as far as the room's storage is concerned: a room
+  // stamped newer than this is refused (canvas/store.ts) and says so below.
+  bb.log.info(`canvas storage format ${CANVAS_FORMAT_VERSION}`);
   const room = new CanvasRoomHost({
     store: new CanvasStore(db),
     publish: (envelope) => bb.realtime.publish(CANVAS_CHANNEL, envelope),

@@ -14,6 +14,7 @@ import {
   CHROME_SHADOW,
 } from "../pages/chrome-dock.js";
 import type { PresencePublisher } from "../presence-publisher.js";
+import { CANVAS_SCHEMA_VERSION } from "../wire.js";
 
 export const READY_TIMEOUT_MS = 4_000;
 export const PRESENCE_POLL_MS = 150;
@@ -111,11 +112,14 @@ export function delay(ms: number): Promise<void> {
   return ms > 0 ? new Promise((resolve) => setTimeout(resolve, ms)) : Promise.resolve();
 }
 
+/** `canvas_join`'s input. Always carries this bundle's schema version: the
+ * backend refuses a join without it (see CANVAS_SCHEMA_VERSION). */
 export function joinInput(
   clientId: string,
   name: string | null,
-): { clientId: string; name?: string } {
-  return name === null ? { clientId } : { clientId, name };
+): { clientId: string; name?: string; schemaVersion: number } {
+  const schemaVersion = CANVAS_SCHEMA_VERSION;
+  return name === null ? { clientId, schemaVersion } : { clientId, name, schemaVersion };
 }
 
 export function canvasDebugEnabled(): boolean {

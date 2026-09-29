@@ -6,6 +6,20 @@
 /** The one room this spike serves. */
 export const ROOM_ID = "main";
 
+/**
+ * The document schema this bundle speaks. `canvas_join` and `canvas_frame`
+ * refuse any other value, so a stale tab is told to reopen instead of being
+ * let near the room: every client repairs what it syncs, and repair drops the
+ * kinds a build does not know, so an older bundle would silently delete them.
+ *
+ * Bump it whenever an older bundle could repair away a kind this build keeps.
+ * main had no gate before this (pre-4 bundles send no version at all). 3 is
+ * already claimed by PR #118 (github-issue), so the artifact reader takes 4 to
+ * stay distinct in either merge order — whichever of the two lands second must
+ * bump past the other.
+ */
+export const CANVAS_SCHEMA_VERSION = 4;
+
 /** The realtime channel every server -> client frame is published on. */
 export const CANVAS_CHANNEL = "canvas:main";
 
@@ -23,6 +37,7 @@ export interface CanvasEnvelope {
 export interface CanvasFramePayload {
   clientId: string;
   data: string;
+  schemaVersion: number;
 }
 
 /**
