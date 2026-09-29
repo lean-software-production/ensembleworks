@@ -14,6 +14,7 @@ import {
 	dispatchToActiveTool,
 	duplicateSelectionIntents,
 	pasteIntents,
+	prepareCut,
 	redoWithRepair,
 	reorderSelectionIntents,
 	IDLE_MULTI_TOUCH,
@@ -182,13 +183,12 @@ export function useCanvasSession(options: UseCanvasSessionOptions): CanvasSessio
 					} else if (command.action === 'paste') {
 						hostRef.current.clipboard.read().then((text) => apply(pasteIntents(editor, text)), clipboardFailed)
 					} else if (selection.length > 0) {
-						const payload = encodeClipboard(serializeSelection(editor.doc.listShapes(), editor.doc.listBindings(), selection))
-						// Cut captures its delete now, from the selection just
-						// serialized, and applies it only once the write succeeds: a
-						// failed write never loses shapes, and a selection change during
-						// the write never deletes something that was not copied.
-						const deleteAfter = command.action === 'cut' ? deleteSelectionIntents(editor) : []
-						hostRef.current.clipboard.write(payload).then(() => apply(deleteAfter), clipboardFailed)
+						const cut = command.action === 'cut' ? prepareCut(editor) : null
+						const payload = cut?.payload ?? serializeSelection(editor.doc.listShapes(), editor.doc.listBindings(), selection)
+						if (cut && payload.shapes.length === 0) return
+						// Capture copyable roots now; recheck their subtrees after the
+						// async write so a remote artifact cannot be lost by Cut.
+						hostRef.current.clipboard.write(encodeClipboard(payload)).then(() => apply(cut?.deleteIntents() ?? []), clipboardFailed)
 					}
 					return
 				}

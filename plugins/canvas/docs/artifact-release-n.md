@@ -14,6 +14,11 @@ boundary still permits restoring an artifact ID already seen in imported
 history (including undo). Raw CRDT snapshot/update import must preserve
 compatible future history; it is not an authoring API or an authorization
 boundary. The test-only unchecked writer is not used by product code.
+Cut keeps selected artifact-containing subtrees intact and omits those subtrees
+from its clipboard payload. Other selected roots cut normally. After the
+clipboard write succeeds, Cut rechecks the captured roots: a changed subtree
+or a newly arrived descendant stays stored. Copy/Paste/Duplicate continue to
+exclude artifacts; ordinary Delete and undo retain their existing behavior.
 
 **Rollback floor: Release N.** Once artifacts have existed, rolling back below
 Release N can delete them. Pre-N builds ignore format stamps and repair unknown
@@ -40,6 +45,18 @@ Compaction merges the persisted snapshot and log before replacing/truncating,
 including data from overlapping hosts. Close uses this guarded compaction.
 Touch, leave and sweep update only in-memory membership; they cannot persist a
 snapshot or append. After refusal, close is idempotent and writes no room rows.
+
+Any storage transaction failure stops the host and discards its live peer,
+pending causal imports, update count, clients and outgoing messages. This
+covers lock acquisition, reads, append/savepoints, compaction, outer COMMIT and
+rollback cleanup failures. An append exception cannot be swallowed into a
+successful host transaction by the sync peer's malformed-frame guard. Startup
+storage failures abort construction. No later SyncRequest or close can publish
+or persist rejected history. Recover storage, then reload the plugin to create
+a fresh host from committed rows; a panel reconnect cannot restart the stopped
+host. Do not rebuild on the failed connection automatically: rollback itself
+may have failed. Other healthy hosts can continue to commit, and the stopped
+host cannot overwrite their history.
 
 SQLite arbitrates the lock across connections/processes: either N commits
 before a newer writer acquires the lock, or the newer stamp wins and N refuses
@@ -113,27 +130,27 @@ fixture harness does not satisfy these future-release gates.
 
 ## Proposed PR text
 
-Release N now locks format validation and persistence together, so a competing
-newer-format writer cannot race startup, frame import/append or final
-compaction. Artifact origination is blocked at the clipboard, intent and shared
-document write boundaries while imported artifacts remain valid, synced and
-visible as inert placeholders. Released migration history is preserved and
-startup/operator guidance names the destructive rollback floor.
+Prevent rolled-back Canvas frames from leaking through a later sync or close:
+any storage transaction failure now stops the host and discards its live peer
+and unpublished state. Recovery requires storage repair and a fresh host load.
 
-Regression evidence covers deterministic connection/process barriers,
-creation refusal separately from preservation, the rollback log/docs and the
-released migration hashes. The strengthened compiled-backend harness asserts
-destructive pre-N rollback, N preservation, both overlap orders and format
-refusal. Its tagged-source rebuild, future fixture and browser limitations are
-explicit above; actual N+1 compatibility is still a release gate.
+Cut preserves selected artifacts and whole selected subtrees containing them,
+while unrelated copyable roots cut normally. It rechecks copied subtrees after
+the asynchronous clipboard write. Copy/Paste/Duplicate/import/create gates
+continue to refuse new artifacts and preserve stored history.
 
-Validation: Canvas plugin typecheck, all 1,177 tests, the literal quality audit
-and `bb plugin build .` pass. Root typecheck/build and the model, document,
-sync, editor, React, UI, interaction-contract and server canvas suites pass.
-The compiled compatibility harness passes all 36 assertions.
+Regression coverage includes a real SQLite COMMIT lock failure followed by a
+valid SyncRequest, failed append/savepoints, pending imports, failed rollback
+cleanup, overlap/reload, and Cut through the mounted session and real browser.
+The declared browser interaction contract is `cut-preserves-artifacts`; the
+fixture-props seed works in both adapters, with no new observation API.
 
-ux-contract: none — placeholder only, no interaction surface
+Validation includes the literal Canvas typecheck/test/quality/build commands,
+repository typechecks and relevant suites, clipboard browser contracts, and
+all 36 compiled compatibility assertions. The tagged-source rebuild, future
+fixture and real BB loader limitations above remain future release gates.
 
-The generic clipboard/intent edits only refuse artifact origination and empty
-clone batches. No new gesture, body editing, renderer interaction or control
-is added. Existing gesture/undo behavior is verified by the editor suite.
+The artifact renderer itself remains an inert placeholder with no interaction
+surface. The existing clipboard interaction changes are covered by the named
+contract; the earlier blanket `ux-contract: none` opt-out no longer describes
+this rework. No viewer, placement workflow, controls or new gesture is added.

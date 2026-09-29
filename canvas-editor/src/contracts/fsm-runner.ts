@@ -323,10 +323,12 @@ function seedScene(doc: LoroCanvasDoc, contract: Contract): void {
     const v = validateShape({
       id: s.id, kind: s.kind, parentId: s.parentId ?? 'page:p', index: 'a1',
       x: s.x, y: s.y, rotation: 0, isLocked: false, opacity: 1, meta: {},
-      props: { w: s.w, h: s.h },
+      props: { ...s.props, w: s.w, h: s.h },
     })
     if (!v.ok) throw new Error(`seedScene: invalid SceneShape ${JSON.stringify(s.id)} (kind ${JSON.stringify(s.kind)}): ${v.error}`)
-    doc.putShape(v.shape)
+    // Fixture stored history, not a Release N authoring path.
+    if (s.kind === 'artifact') doc.putShapeUnchecked(v.shape)
+    else doc.putShape(v.shape)
   }
   doc.commit()
 }

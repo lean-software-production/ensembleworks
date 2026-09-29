@@ -112,7 +112,7 @@ export interface CanvasRoomHostOptions {
 }
 
 export class CanvasRoomHost {
-  readonly peer: SyncServerPeer;
+  #peer = new SyncServerPeer({ peerId: SERVER_PEER_ID });
   readonly room: string;
   readonly #store: CanvasStore;
   readonly #publish: (message: CanvasServerMessage) => void;
@@ -123,9 +123,9 @@ export class CanvasRoomHost {
   #updatesSinceSnapshot = 0;
   #closed = false;
   #outbox: CanvasServerMessage[] | null = null;
-  /** Set once this host finds the room stamped by a newer storage format.
+  /** Set after a newer storage format or any failed storage transaction.
    * From then on it serves nothing and writes nothing (see `refusal`). */
-  #refused: CanvasFormatRefusedError | null = null;
+  #refused: Error | null = null;
 
   constructor(options: CanvasRoomHostOptions) {
     this.room = options.room ?? ROOM_ID;
@@ -138,26 +138,35 @@ export class CanvasRoomHost {
     // The lock covers checking, reading BOTH blobs, import/repair, and the
     // stamp. No newer writer can commit between any of these operations.
     try {
-      this.peer = this.#store.withCurrentFormat(this.room, () => this.#restorePeer());
+      this.#store.withCurrentFormat(this.room, () => this.#restorePeer());
     } catch (error) {
+      this.#peer.close();
       if (!(error instanceof CanvasFormatRefusedError)) throw error;
-      this.peer = new SyncServerPeer({ peerId: SERVER_PEER_ID });
       this.#refuse(error);
     }
   }
 
-  #restorePeer(): SyncServerPeer {
+  #restorePeer(): void {
     const snapshot = this.#store.loadSnapshot(this.room);
     const peer = new SyncServerPeer({
       peerId: SERVER_PEER_ID,
       ...(snapshot === null ? {} : { initialSnapshot: snapshot }),
-      // Durable-first: canvas-sync calls this BEFORE repair/commit/relay, so
-      // no client can observe a delta we have not written down yet.
+      // Import precedes this callback. Even a failed append must discard
+      // that imported state; canvas-sync catches callback exceptions. The
+      // outer host boundary checks refusal and rolls back before publishing.
       onUpdatePayload: (payload) => {
-        this.#store.appendUpdate(this.room, payload);
-        this.#updatesSinceSnapshot += 1;
+        try {
+          this.#store.appendUpdate(this.room, payload);
+          this.#updatesSinceSnapshot += 1;
+        } catch (error) {
+          this.#storageFailed(error);
+          throw error;
+        }
       },
     });
+
+    this.#peer.close();
+    this.#peer = peer; // constructor catch also closes a partially restored peer
 
     // Replay whatever accumulated after the snapshot. These imports go
     // straight at the doc, not through a frame, so onUpdatePayload does not
@@ -173,8 +182,10 @@ export class CanvasRoomHost {
     this.#log(
       `room "${this.room}" restored: snapshot ${snapshot?.length ?? 0} bytes, ${logged.length} logged updates, ${peer.doc.listShapes().length} shapes`,
     );
-    return peer;
   }
+
+  /** The current peer; a storage failure replaces it with an empty closed peer. */
+  get peer(): SyncServerPeer { return this.#peer; }
 
   /** Why this host refuses to serve the room, or null while it serves it. */
   get refusal(): string | null {
@@ -278,6 +289,7 @@ export class CanvasRoomHost {
       }
       entry.lastSeenMs = nowMs;
       entry.transport.deliver(bytes);
+      this.#throwIfRefused(); // persistence errors are swallowed by the sync peer
       // Compact here rather than inside onUpdatePayload: by now the peer has
       // finished import + repair + commit for this frame, so the snapshot we
       // take is fully current.
@@ -320,9 +332,9 @@ export class CanvasRoomHost {
     try {
       this.#store.compact(this.room, (stored) => this.#mergedSnapshot(stored));
     } catch (error) {
-      if (!(error instanceof CanvasFormatRefusedError)) throw error;
-      this.#refuse(error);
-      return;
+      if (error instanceof CanvasFormatRefusedError) { this.#refuse(error); return; }
+      this.#storageFailed(error);
+      throw error;
     }
     this.#updatesSinceSnapshot = 0;
   }
@@ -375,9 +387,10 @@ export class CanvasRoomHost {
     const outbox: CanvasServerMessage[] = [];
     this.#outbox = outbox;
     try {
-      this.#store.withCurrentFormat(this.room, use);
+      this.#store.withCurrentFormat(this.room, () => { use(); this.#throwIfRefused(); });
     } catch (error) {
       if (error instanceof CanvasFormatRefusedError) this.#refuse(error);
+      else this.#storageFailed(error);
       throw error;
     } finally {
       this.#outbox = null;
@@ -387,17 +400,37 @@ export class CanvasRoomHost {
   }
 
   #emit(message: CanvasServerMessage): void {
+    if (this.#refused !== null) return;
     if (this.#outbox !== null) this.#outbox.push(message);
     else this.#publish(message);
   }
 
   /** Enter refused mode: log why, once, and drop every client. */
-  #refuse(error: CanvasFormatRefusedError): void {
+  #refuse(error: Error): void {
     if (this.#refused !== null) return;
     this.#refused = error;
     this.#log(error.message);
     for (const entry of [...this.#clients.values()]) entry.transport.close();
     this.#clients.clear();
+  }
+
+  #throwIfRefused(): void {
+    if (this.#refused !== null) throw this.#refused;
+  }
+
+  /** SQLite rollback cannot undo Loro imports, repairs, causal caches or
+   * counters. Discard the entire peer on ANY storage boundary failure (BEGIN,
+   * reads, writes/savepoints, COMMIT or rollback cleanup). Do not reload here:
+   * rollback itself may have failed, leaving the connection's state unknown.
+   * A fresh host after storage recovery must read committed history again. */
+  #storageFailed(error: unknown): void {
+    if (this.#refused !== null) return;
+    this.#refuse(new Error(`Canvas room "${this.room}" stopped after storage failure: ${String(error)}. Reload after storage recovers.`, { cause: error }));
+    this.#peer.close();
+    this.#peer = new SyncServerPeer({ peerId: SERVER_PEER_ID });
+    this.#peer.close();
+    this.#updatesSinceSnapshot = 0;
+    this.#outbox?.splice(0);
   }
 
   #maybeCompact(): void {
