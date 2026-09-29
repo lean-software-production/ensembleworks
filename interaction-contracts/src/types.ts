@@ -144,6 +144,9 @@ export interface Obs {
   visibleWorldRectAtStart(): { minX: number; minY: number; maxX: number; maxY: number }
   /** Total world-space displacement of a shape from the gesture's start. */
   shapeDisplacement(id: string): { dx: number; dy: number }
+  /** Current stored origin in the shape's parent frame. Both adapters read
+   * the doc; page-root resize contracts use this to pin the fixed anchor. */
+  shapePosition(id: string): { x: number; y: number } | null
   /** Total change in a shape's LOCAL size (w/h) since the gesture's start —
    * the resize analogue of shapeDisplacement. A resize anchored at a corner
    * OTHER than the moving one keeps x/y fixed (only w/h change), so

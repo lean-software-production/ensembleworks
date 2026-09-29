@@ -99,7 +99,7 @@ export interface TranslateShapes { readonly type: 'TranslateShapes'; readonly id
  * frame instead of being transformed a second time.
  *
  * MINIMUM-SIZE CLAMP (editor.ts's clampScale): the per-shape/per-axis scale
- * is floored so stored props.w/h never drop below 1 world unit — in
+ * is floored by kind (artifact 320x200, default 1x1) — in
  * particular a negative scale (corner dragged THROUGH the opposite anchor)
  * can never persist negative stored geometry. tldraw instead FLIPS the
  * shape across the anchor; flip semantics (with their routing/bound-anchor
@@ -110,6 +110,14 @@ export interface ResizeShapes {
   readonly anchor: Point
   readonly scaleX: number
   readonly scaleY: number
+  /** Gesture-start geometry: when present, scales are ABSOLUTE from these
+   * pre-images, not incremental against the already-clamped live geometry.
+   * Only x/y/w/h are read; current props/metadata are retained. Missing or
+   * reparented/retyped live shapes are skipped, never created/restored. */
+  readonly basis?: readonly Shape[]
+  /** Corner Shift constraint: one factor satisfies all selected roots' floors,
+   * preserving both shape ratios and the whole selection's relative layout. */
+  readonly uniform?: boolean
 }
 
 /** Rotate every shape in `ids` by `dRadians` about the fixed world point

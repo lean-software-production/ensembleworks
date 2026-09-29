@@ -443,6 +443,7 @@ async function sampleWorldRect(page: Page) {
 interface ActorSample {
   readonly spans: number
   readonly editingShape: string | null
+  readonly positions: Readonly<Record<string, { x: number; y: number } | null>>
   readonly editingState: { id: string | null; region: 'body' | 'name' | null }
   readonly worldRect: { minX: number; minY: number; maxX: number; maxY: number }
   readonly editingIndicators: Readonly<Record<string, boolean>>
@@ -493,6 +494,13 @@ async function sampleActor(page: Page, sceneShapeIds: readonly string[]): Promis
   // "shape absent" (null) regardless of the shape's real stored props.
   const styleIds = [...new Set([...sceneShapeIds, ...selection])]
   const styles = await sampleShapeStyles(page, styleIds)
+  const positions = await page.evaluate((ids) => {
+    const doc = (window as any).__ew.doc
+    return Object.fromEntries(ids.map(id => {
+      const s = doc.getShape(id)
+      return [id, s ? { x: s.x, y: s.y } : null]
+    }))
+  }, styleIds)
   // create-edit-flow fixer task: same union rationale as styleIds above — a
   // just-selected/just-edited shape's text is what `shapeText` needs to
   // answer for, and the union already covers both seeded and gesture-
@@ -528,7 +536,7 @@ async function sampleActor(page: Page, sceneShapeIds: readonly string[]): Promis
       (flyout) => flyout.parentElement?.querySelector(':scope > [data-canvas-tool]')?.getAttribute('data-canvas-tool') ?? '(unattached)',
     ),
   )
-  return { spans, editingShape, editingState, worldRect, editingIndicators, styles, texts, selection, shapeCount, paintOrder, kinds, assetSrcs, pageCount, bindings, shapeIds, labelOverflow, hoveredId, renderedArrowIds, openStylePopover, armedFlyoutTools, parents }
+  return { spans, editingShape, positions, editingState, worldRect, editingIndicators, styles, texts, selection, shapeCount, paintOrder, kinds, assetSrcs, pageCount, bindings, shapeIds, labelOverflow, hoveredId, renderedArrowIds, openStylePopover, armedFlyoutTools, parents }
 }
 
 /** Build a synchronous, pre-sampled Obs for exactly the observation(s) a
@@ -558,6 +566,7 @@ function pageObs(
     visibleWorldRectAtStart: () => startRect,
     visibleWorldRect: () => ({ ...sample.worldRect }),
     shapeDisplacement: () => { throw new Error('use async sampler') },
+    shapePosition: (id: string) => sample.positions[id] ? { ...sample.positions[id] } : null,
     shapeSizeDelta: () => { throw new Error('use async sampler') },
     cursorWorldDisplacement: () => { throw new Error('use async sampler') },
     snapRadius: () => { throw new Error('use async sampler') },

@@ -143,6 +143,10 @@ function makeObs(
       if (!shape) return { dx: 0, dy: 0 }
       return { dx: shape.x - start.x, dy: shape.y - start.y }
     },
+    shapePosition(id: string) {
+      const shape = editor.doc.getShape(id)
+      return shape ? { x: shape.x, y: shape.y } : null
+    },
     shapeSizeDelta(id: string) {
       const start = startSizes.get(id)
       if (!start) throw new Error(`shapeSizeDelta: no seeded shape with id ${JSON.stringify(id)}`)

@@ -76,3 +76,81 @@ console.log('ok: minimum is an interaction policy, not destructive reader valida
   assert.deepEqual(decodeClipboard(encodeClipboard({ 'ensembleworks/clipboard': 1, shapes: [artifact], bindings: [] })).shapes, [], 'clipboard still refuses artifact authoring')
 }
 console.log('ok: focus stays local; CreateShape/doc/clipboard artifact creation guards remain intact')
+
+// Rework: absolute geometry is independent of the previous floor-clamped
+// frame, while each write keeps live non-geometry props and actual preimages
+// for undo (it is not a CreateShape/whole-snapshot restore path).
+{
+  const geo: Shape = { ...artifact, id: 'shape:geo', kind: 'geo', props: { w: 100, h: 100 } }
+  const { doc, editor } = fixture([geo])
+  const basis = [doc.getShape(artifact.id)!, doc.getShape(geo.id)!]
+  const resize = (scale: number, uniform = false) => editor.apply({ type: 'ResizeShapes', ids: basis.map(s => s.id), anchor: { x: 120, y: 80 }, scaleX: scale, scaleY: scale, basis, uniform })
+  resize(0.1, true)
+  assert.deepEqual([doc.getShape(artifact.id)!.props.w, doc.getShape(artifact.id)!.props.h], [320, 240])
+  near(doc.getShape(geo.id)!.props.w as number, 100 * 320 / 720)
+  near(doc.getShape(geo.id)!.props.h as number, 100 * 320 / 720) // common group ratio, not a geo minimum
+  editor.apply({ type: 'UpdateProps', id: artifact.id, props: { title: 'new live title' } })
+  resize(0.5, true)
+  assert.deepEqual([doc.getShape(artifact.id)!.props.w, doc.getShape(artifact.id)!.props.h], [360, 270])
+  assert.equal(doc.getShape(artifact.id)!.props.title, 'new live title')
+  assert.deepEqual([doc.getShape(geo.id)!.props.w, doc.getShape(geo.id)!.props.h], [50, 50])
+  const version = doc.versionBytes()
+  resize(0.5, true)
+  assert.deepEqual(doc.versionBytes(), version, 'same absolute geometry adds no commit/history')
+  editor.undo()
+  assert.deepEqual([doc.getShape(artifact.id)!.props.w, doc.getShape(artifact.id)!.props.h], [320, 240], 'undo uses the preceding live frame, not gesture start')
+  assert.equal(doc.getShape(artifact.id)!.props.title, 'new live title')
+  editor.redo()
+  assert.equal(doc.getShape(artifact.id)!.props.w, 360)
+}
+console.log('ok: gesture basis reverses floors, preserves live props, mixed-kind floors and undo/redo')
+
+for (const mutation of ['delete', 'reparent', 'retype'] as const) {
+  const { doc, editor } = fixture()
+  const basis = [doc.getShape(artifact.id)!]
+  if (mutation === 'delete') editor.apply({ type: 'DeleteShapes', ids: [artifact.id] })
+  if (mutation === 'reparent') {
+    doc.putPage({ id: 'page:other', name: 'Other' })
+    doc.commit()
+    editor.apply({ type: 'ReparentShapes', ids: [artifact.id], parentId: 'page:other' })
+  }
+  if (mutation === 'retype') doc.putShape({ ...artifact, kind: 'geo', props: { w: 720, h: 540 } })
+  doc.commit()
+  const before = doc.getShape(artifact.id)
+  editor.apply({ type: 'ResizeShapes', ids: [artifact.id, 'shape:never-existed'], anchor: { x: 0, y: 0 }, scaleX: 0.1, scaleY: 0.1, basis, uniform: true })
+  assert.deepEqual(doc.getShape(artifact.id), before, `${mutation} cannot be undone by an old gesture basis`)
+  assert.equal(doc.getShape('shape:never-existed'), undefined)
+}
+console.log('ok: stale gesture basis skips deleted/reparented/retyped/missing ids; never originates artifacts')
+
+{
+  const parent: Shape = { ...artifact, id: 'shape:parent', kind: 'frame', x: 100, y: 100, rotation: Math.PI / 3, props: { w: 1000, h: 800 } }
+  const { doc, editor } = fixture([parent], { parentId: parent.id, x: 10, y: 20 })
+  const basis = [doc.getShape(artifact.id)!]
+  for (const scale of [0.1, 0, -0.2, 0.5]) {
+    editor.apply({ type: 'ResizeShapes', ids: [artifact.id], anchor: { x: 100, y: 100 }, scaleX: scale, scaleY: scale, basis, uniform: true })
+  }
+  const s = doc.getShape(artifact.id)!
+  assert.deepEqual([s.props.w, s.props.h], [360, 270])
+  near(s.x, 5)
+  near(s.y, 10)
+  assert.equal(s.parentId, parent.id)
+}
+console.log('ok: absolute resize retains parent-frame conversion under a rotated ancestor')
+
+for (const kind of ['bbthread', 'geo', 'text', 'image'] as const) {
+  const other: Shape = { ...artifact, id: 'shape:other', kind, props: { w: 720, h: 540 } }
+  const { doc, editor } = fixture([other])
+  const basis = [doc.getShape(other.id)!]
+  for (const uniform of [false, true]) {
+    for (const scale of [0.001, 0.5, 0, -0.1, 0.0001, 0.5]) {
+      editor.apply({ type: 'ResizeShapes', ids: [other.id], anchor: { x: 120, y: 80 }, scaleX: scale, scaleY: scale, basis, uniform })
+      const s = doc.getShape(other.id)!
+      near(s.props.w as number, uniform ? 720 * Math.max(scale, 1 / 540) : Math.max(1, 720 * scale))
+      near(s.props.h as number, Math.max(1, 540 * scale))
+      near(s.x, 120)
+      near(s.y, 80)
+    }
+  }
+}
+console.log('ok: bbthread/geo/text/image retain 1-unit floors, Shift ratios and absolute reversal at their own floor')
