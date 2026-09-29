@@ -57,7 +57,7 @@ export interface EditorState {
   /** WHICH part of `editingId` is being edited — 'name' (a frame-like
    * shape's header-band rename input, FrameNameEditor.tsx) or 'body' (the
    * shape's own content: TextEditor.tsx's richText textarea for a
-   * text-capable kind, or a bbthread's thread pane). Pane input routing
+   * text-capable kind, a bbthread's thread pane, or private artifact focus). Pane input routing
    * task (docs/plans/2026-09-15-bb-thread-frame.md's "Pane input routing"
    * follow-up) — null iff `editingId` is null; the two fields are always
    * written together (BeginEdit sets both, EndEdit clears both) so this
@@ -489,7 +489,8 @@ export class Editor {
         // Scale the shape's own origin about the fixed anchor, then scale
         // any explicit w/h props by the same per-axis factor — CLAMPED per
         // shape/axis so stored w/h can never go negative or below
-        // MIN_STORED_SIZE (see clampScale). ANCESTOR DEDUPE (the same rule
+        // its per-kind floor (default MIN_STORED_SIZE; see clampScale).
+        // ANCESTOR DEDUPE (the same rule
         // TranslateShapes has always had, extended here after a reviewer
         // probe proved the double-transform): a selection containing both a
         // parent and its descendant transforms the PARENT only — the
@@ -518,8 +519,9 @@ export class Editor {
           // while its size floors). Different shapes in one intent may
           // clamp to different factors (each has its own w/h) — the
           // per-shape putShape below already makes that coherent.
-          const scaleX = clampScale(intent.scaleX, w)
-          const scaleY = clampScale(intent.scaleY, h)
+          const minimum = MIN_STORED_SIZE_BY_KIND[shape.kind]
+          const scaleX = clampScale(intent.scaleX, w, minimum?.w)
+          const scaleY = clampScale(intent.scaleY, h, minimum?.h)
           const anchor = worldToParentFrame(this.doc, shape, intent.anchor)
           const x = anchor.x + (shape.x - anchor.x) * scaleX
           const y = anchor.y + (shape.y - anchor.y) * scaleY
@@ -1286,7 +1288,7 @@ function worldToParentFrame(doc: CanvasDoc, shape: Shape, worldPoint: Point): Po
   return toLocalPoint(liveDocAdapter(doc), parent, worldPoint)
 }
 
-// The ResizeShapes minimum stored size, in world units: stored props.w/h may
+// The default ResizeShapes minimum stored size, in world units: props.w/h may
 // never drop below this (and, transitively, never go NEGATIVE — a corner
 // dragged THROUGH the opposite anchor implies a negative scale, which
 // uncorrected would persist inverted geometry forever; geometry.ts's size()
@@ -1296,9 +1298,14 @@ function worldToParentFrame(doc: CanvasDoc, shape: Shape, worldPoint: Point): Po
 // implications for bound arrows, handle relabeling), deferred as a
 // documented Phase-4 parity item; the clamp is the safe v1 behavior.
 const MIN_STORED_SIZE = 1
+// Per-kind interaction floors, not schema validation: imported positive
+// dimensions remain readable even when smaller than today's resize minimum.
+const MIN_STORED_SIZE_BY_KIND: Readonly<Partial<Record<Shape['kind'], { w: number; h: number }>>> = {
+  artifact: { w: 320, h: 200 },
+}
 
 // Clamp one axis's scale factor so `dim * scale` (the stored size this
-// resize would write) stays >= MIN_STORED_SIZE. Shapes without a stored
+// resize would write) stays >= the per-kind minimum (default 1). Shapes without a stored
 // dimension on this axis (note — kind-default-sized, no props.w/h) pass the
 // scale through untouched: there is no stored geometry to corrupt, and their
 // position legitimately scales about the anchor like any other shape's. A
@@ -1311,10 +1318,10 @@ const MIN_STORED_SIZE = 1
 // the pointer returns past the floor — dragging through the anchor and back
 // lands near the floor rather than exactly retracing; exact retrace (like
 // flip itself) is part of the same Phase-4 parity item.
-function clampScale(scale: number, dim: number | undefined): number {
+function clampScale(scale: number, dim: number | undefined, minimum: number = MIN_STORED_SIZE): number {
   if (dim === undefined) return scale
   if (!(dim > 0)) return Math.max(scale, 0)
-  return Math.max(scale, MIN_STORED_SIZE / dim)
+  return Math.max(scale, minimum / dim)
 }
 
 // Drop any id that has an ANCESTOR also present in `ids` — the shared

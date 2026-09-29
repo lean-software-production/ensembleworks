@@ -94,10 +94,11 @@ function composeTransform(parent: RigidTransform, local: RigidTransform): RigidT
   return { x: parent.x + rotated.x, y: parent.y + rotated.y, rotation: parent.rotation + local.rotation }
 }
 
-const DEFAULTS: Partial<Record<Shape['kind'], { w: number; h: number }>> = {
+export const DEFAULT_SIZE: Readonly<Partial<Record<Shape['kind'], { readonly w: number; readonly h: number }>>> = {
   geo: { w: 220, h: 120 }, frame: { w: 800, h: 600 },
   text: { w: 200, h: 40 }, image: { w: 200, h: 200 },
   bbthread: { w: 960, h: 600 },
+  artifact: { w: 720, h: 540 },
 }
 // Rendered size, clamped to >= 0 so inverted bounds can never reach downstream
 // rectangle math. Notes never store w/h in tldraw: their real rendered size is
@@ -113,8 +114,8 @@ function size(s: Shape): { w: number; h: number } {
     const growY = typeof p?.growY === 'number' ? p.growY : 0
     return { w: Math.max(0, 200 * scale), h: Math.max(0, (200 + growY) * scale) }
   }
-  const w = typeof p?.w === 'number' ? p.w : DEFAULTS[s.kind]?.w ?? 100
-  const h = typeof p?.h === 'number' ? p.h : DEFAULTS[s.kind]?.h ?? 100
+  const w = typeof p?.w === 'number' ? p.w : DEFAULT_SIZE[s.kind]?.w ?? 100
+  const h = typeof p?.h === 'number' ? p.h : DEFAULT_SIZE[s.kind]?.h ?? 100
   if (s.kind === 'geo') {
     const growY = typeof p?.growY === 'number' ? p.growY : 0
     return { w: Math.max(0, w), h: Math.max(0, h + growY) }
@@ -123,10 +124,10 @@ function size(s: Shape): { w: number; h: number } {
 }
 
 // The shape's unrotated local box: (0,0)..(w,h), pivot at the local origin per
-// the NORMATIVE convention above. Reuses `size()` (the same per-kind/DEFAULTS
+// the NORMATIVE convention above. Reuses `size()` (the same per-kind/DEFAULT_SIZE
 // sizing pageBounds already uses) so kind defaults are defined in exactly one
 // place: note falls back to 200×200 (200 base × scale 1, +0 growY), text to
-// 200×40 (the existing DEFAULTS entry — chosen to match pageBounds/DEFAULTS
+// 200×40 (the existing DEFAULT_SIZE entry — chosen to match pageBounds/DEFAULT_SIZE
 // rather than inventing a second, inconsistent text default).
 export function localBounds(shape: Shape): Bounds {
   const { w, h } = size(shape)
@@ -627,6 +628,17 @@ export function isPointInBbthreadPane(doc: CanvasDocument, shape: Shape, point: 
   const local = toLocalPoint(doc, shape, point)
   const pane = bbthreadPaneLocalBounds(shape)
   return local.x >= pane.minX && local.x <= pane.maxX && local.y >= pane.minY && local.y <= pane.maxY
+}
+
+/** Whether this WORLD point opens a non-text body edit. Thread focus is
+ * restricted to its solid pane; artifact focus covers its local box. This
+ * predicate does not create a viewer or start Present: editing is local. */
+export function opensBodyEdit(doc: CanvasDocument, shape: Shape, point: Point): boolean {
+  if (shape.kind === 'bbthread') return isPointInBbthreadPane(doc, shape, point)
+  if (shape.kind !== 'artifact') return false
+  const local = toLocalPoint(doc, shape, point)
+  const bounds = localBounds(shape)
+  return local.x >= bounds.minX && local.x <= bounds.maxX && local.y >= bounds.minY && local.y <= bounds.maxY
 }
 
 // Is `point` (world/page space) inside this shape's rotated box? Inverse-

@@ -170,6 +170,9 @@ export interface Obs {
    * at fsm level; the mounted [data-text-editor-input] element in the browser
    * adapter.) */
   editingShape(): string | null
+  /** Editor-local focus state, including non-text embed bodies. Both adapters
+   * read the editor; this does not claim DOM/iframe focus or Present state. */
+  editingState(): { id: string | null; region: 'body' | 'name' | null }
   /** Observe from a named actor's client (Pilot 5's MULTI-actor extension).
    * Single-actor contracts never call this — every method above answers
    * from actor 'A''s own view by default, exactly as before this method
@@ -389,6 +392,10 @@ export interface Contract {
   readonly tool?: 'select' | 'select+transform' | 'create:note' | 'create:text' | 'create:geo' | 'create:frame' | 'create:bbthread'
   /** Shapes to seed before the gesture. Default: none. */
   scene?(): readonly SceneShape[]
+  /** Test fixture: establish an existing local edit before the gesture, so
+   * exit guards do not depend on the entry behavior under test. Both runners
+   * assert the seeded state before playing any input. */
+  readonly initialEdit?: { readonly id: string; readonly region: 'body' | 'name' }
   /** Task H1 — a payload to pre-seed the OS clipboard with, BEFORE the
    * gesture runs. Browser-only by construction: only `e2e/lib/contracts.ts`
    * reads this field (`level:'browser'` contracts write it via

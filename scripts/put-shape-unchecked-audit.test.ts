@@ -33,6 +33,9 @@ const ALLOWED: readonly string[] = [
   'canvas-doc/src/repair-cost.test.ts',
   'canvas-doc/src/write-validation.test.ts',
   'canvas-doc/src/serialization-seam.test.ts',
+  // Stage 1b unit fixture: raw bytes in a throwaway peer, then fromSnapshot
+  // into the reader under test. Never a production artifact authoring path.
+  'canvas-editor/src/artifact-editor.test.ts',
   'server/src/canvas-v2/reconcile.test.ts',
   'scripts/put-shape-unchecked-audit.test.ts',  // this gate
 ]

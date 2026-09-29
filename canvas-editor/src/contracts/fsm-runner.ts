@@ -181,6 +181,10 @@ function makeObs(
     editingShape() {
       return editor.get().editingId
     },
+    editingState() {
+      const state = editor.get()
+      return { id: state.editingId, region: state.editingRegion }
+    },
     on() {
       // Pilot 5 is browser-only (types.ts's Obs.on/peerEditingIndicator doc
       // comments): a REMOTE peer's rendered editing indicator is a DOM
@@ -348,13 +352,26 @@ export interface FsmRunResult {
  * contracts. The former "hardwired select tool" limitation is discharged. */
 export function runContractFsm(contract: Contract, seed: number): FsmRunResult {
   const rng: Rng = mulberry32(seed)
-  const doc = LoroCanvasDoc.create({ peerId: 1n })
-  seedScene(doc, contract)
+  const fixture = LoroCanvasDoc.create({ peerId: 1n })
+  seedScene(fixture, contract)
+  // Artifact fixtures must be READ as stored history by a different doc,
+  // not locally authored. This keeps Release N's write guards exercised.
+  const doc = contract.scene?.().some(s => s.kind === 'artifact')
+    ? LoroCanvasDoc.fromSnapshot(fixture.exportSnapshot(), { peerId: 2n })
+    : fixture
   // Injected clock/PRNG: fixed clock, and an id source derived from a SECOND
   // seeded stream so run() stays deterministic without consuming the gesture's
   // own rng draws.
   const idRng = mulberry32(seed ^ 0x9e3779b9)
   const editor = new Editor({ doc, now: () => 0, random: () => idRng.next(), pageId: 'page:p' })
+  if (contract.initialEdit) {
+    if (!doc.getShape(contract.initialEdit.id)) throw new Error(`initialEdit names an absent fixture shape: ${contract.initialEdit.id}`)
+    editor.apply({ type: 'BeginEdit', ...contract.initialEdit })
+    const state = editor.get()
+    if (state.editingId !== contract.initialEdit.id || state.editingRegion !== contract.initialEdit.region) {
+      throw new Error(`could not seed initialEdit for ${contract.name}`)
+    }
+  }
   const ctx = createToolContext(editor)
   // TOOL SEAM (Phase E extension): build the FSM the contract asks for.
   // Default 'select'; 'select+transform' drives the SAME composite the client

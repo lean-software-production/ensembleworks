@@ -132,3 +132,21 @@ const rngDriven: Contract = {
   assert.throws(() => runContractFsm(badKind, 1), /seedScene: invalid SceneShape "shape:s1"/, 'unknown scene kind throws loudly')
   console.log('ok: seedScene rejects malformed SceneShapes loudly')
 }
+
+// Exit contracts start from a REAL existing focus state, not a failed entry
+// gesture. This tests the fixture seam and the non-text region observation.
+{
+  const initialFocus: Contract = {
+    name: 'smoke-initial-edit', level: 'fsm', when: 'at-end',
+    scene: () => [{ id: 'shape:thread', kind: 'bbthread', x: 0, y: 0, w: 900, h: 600 }],
+    initialEdit: { id: 'shape:thread', region: 'body' },
+    gesture: () => [],
+    check: obs => {
+      assert.deepEqual(obs.editingState(), { id: 'shape:thread', region: 'body' })
+      return null
+    },
+  }
+  assert.equal(runContractFsm(initialFocus, 1).failure, null)
+  assert.throws(() => runContractFsm({ ...initialFocus, initialEdit: { id: 'shape:absent', region: 'body' } }, 1), /initialEdit names an absent fixture shape/)
+  console.log('ok: initialEdit seeds real focus and rejects absent fixture targets')
+}
