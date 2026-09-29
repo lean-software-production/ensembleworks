@@ -1,5 +1,6 @@
 import "./identity.css";
 import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
+import * as Dialog from "@radix-ui/react-dialog";
 import * as Popover from "@radix-ui/react-popover";
 import {
   definePluginApp,
@@ -11,54 +12,84 @@ import {
   useRpc,
 } from "@get-bb/plugin-sdk/app";
 import type {
-  ColorWriteAnswer,
   MachineList,
   PresenceLocation,
   PresentPerson,
-  RosterAnswer,
   rpcContract,
   ThreadOwnership,
   WhoAmI,
 } from "./server.js";
 import { initials, presenceLabel } from "./presence-labels.js";
-import { seenPhrase, SEEN_UNKNOWN_CAVEAT } from "./roster.js";
 import {
   composerBanner,
   headerChip,
   ownershipRowStatus,
   readOnlyBanner,
+  type OwnershipBanner,
 } from "./ownership-labels.js";
 import {
-  colorInputValue,
   readableInk,
   resolvePersonColor,
-  shouldCommitColor,
 } from "./person-colors.js";
 import {
   mountThreadStatusFallback,
   replaceThreadStatuses,
   type ThreadStatus,
 } from "./sidebar-fallback.js";
+import { IdentityPicker } from "./components/IdentityPicker.js";
+import { Explain } from "./components/Explain.js";
+import { IdentitySettings } from "./components/settings/IdentitySettings.js";
+
+export { IdentityPicker };
 
 const HEARTBEAT_MS = 10_000;
 const REFRESH_MS = 5_000;
 /** Ownership is durable, so it is polled far less often than presence. */
 const OWNERSHIP_REFRESH_MS = 60_000;
+const volatileIds = new Map<string, string>();
+const IDENTITY_PROMPT_SESSION_KEY = "bb.identity.picker.prompted.v3";
+
+function claimIdentityPrompt(): boolean {
+  try {
+    if (sessionStorage.getItem(IDENTITY_PROMPT_SESSION_KEY) !== null) return false;
+    sessionStorage.setItem(IDENTITY_PROMPT_SESSION_KEY, "1");
+    return true;
+  } catch {
+    if (volatileIds.has(IDENTITY_PROMPT_SESSION_KEY)) return false;
+    volatileIds.set(IDENTITY_PROMPT_SESSION_KEY, "1");
+    return true;
+  }
+}
 
 function stableId(storage: Storage, key: string): string {
-  const current = storage.getItem(key);
-  if (current !== null) return current;
   const next = crypto.randomUUID();
-  storage.setItem(key, next);
+  try {
+    const current = storage.getItem(key);
+    if (current !== null) return current;
+    storage.setItem(key, next);
+  } catch { /* Private or ephemeral WebViews may deny storage. */ }
+  const existing = volatileIds.get(key);
+  if (existing) return existing;
+  volatileIds.set(key, next);
   return next;
 }
 
 function viewerId(): string {
-  return stableId(localStorage, "bb-presence-viewer-id");
+  try { return stableId(localStorage, "bb-presence-viewer-id"); }
+  catch { return volatileId("bb-presence-viewer-id"); }
 }
 
 function tabId(): string {
-  return stableId(sessionStorage, "bb-presence-tab-id");
+  try { return stableId(sessionStorage, "bb-presence-tab-id"); }
+  catch { return volatileId("bb-presence-tab-id"); }
+}
+
+function volatileId(key: string): string {
+  const existing = volatileIds.get(key);
+  if (existing) return existing;
+  const next = crypto.randomUUID();
+  volatileIds.set(key, next);
+  return next;
 }
 
 function PresenceCoordinator() {
@@ -275,10 +306,12 @@ function ThreadOwnershipChip({ threadId }: { threadId: string }) {
   }, [ownViewerId, rpc, threadId]);
   useEffect(() => {
     let live = true;
-    void rpc.call("identity_whoami").then((result) => {
+    const refresh = () => void rpc.call("identity_whoami").then((result) => {
       if (live) setMe(result);
     }).catch(() => undefined);
-    return () => { live = false; };
+    refresh();
+    const timer = window.setInterval(refresh, REFRESH_MS);
+    return () => { live = false; window.clearInterval(timer); };
   }, [rpc]);
   useEffect(() => {
     refreshPresence();
@@ -296,6 +329,7 @@ function ThreadOwnershipChip({ threadId }: { threadId: string }) {
     enforcement: list?.enforcement ?? "off",
     me: list?.me ?? null,
     meViaFallback: list?.meViaFallback === true,
+    meProvenance: list?.meProvenance,
   });
   const row = ownershipRowStatus(ownership);
   const { color } = resolvePersonColor(
@@ -418,6 +452,7 @@ function ThreadOwnershipChip({ threadId }: { threadId: string }) {
               </div>
             </>
           )}
+          <IdentityPicker />
         </Popover.Content>
       </Popover.Portal>
     </Popover.Root>
@@ -427,22 +462,32 @@ function ThreadOwnershipChip({ threadId }: { threadId: string }) {
 /** Who I am, which machines exist, and whether the guardrail is switched on. */
 function useMachineList(): MachineList | null {
   const rpc = useRpc<typeof rpcContract>();
+  const rpcRef = useRef(rpc);
+  rpcRef.current = rpc;
   const [list, setList] = useState<MachineList | null>(null);
   useEffect(() => {
     let live = true;
-    void rpc.call("identity_machines").then((result) => {
+    const refresh = () => void rpcRef.current.call("identity_machines").then((result) => {
       if (live) setList(result);
     }).catch(() => undefined);
-    return () => { live = false; };
-  }, [rpc]);
+    refresh();
+    const timer = window.setInterval(refresh, REFRESH_MS);
+    const onVisible = () => { if (document.visibilityState === "visible") refresh(); };
+    document.addEventListener("visibilitychange", onVisible);
+    return () => { live = false; window.clearInterval(timer); document.removeEventListener("visibilitychange", onVisible); };
+  }, []);
   return list;
 }
 
-function BannerBody({ title, detail }: { title: string; detail: string }) {
+function BannerBody({ title, detail, note, suffix }: OwnershipBanner & { suffix?: string }) {
   return (
     <div style={{ display: "flex", flexDirection: "column", fontSize: 12, gap: 2, lineHeight: 1.4 }}>
       <span style={{ fontWeight: 600 }}>{title}</span>
-      <span style={{ color: "var(--muted-foreground)" }}>{detail}</span>
+      <span style={{ color: "var(--muted-foreground)" }}>
+        {detail}
+        {note === undefined ? null : <> <Explain term={note.term}>{note.text}</Explain></>}
+        {suffix}
+      </span>
     </div>
   );
 }
@@ -457,21 +502,18 @@ function BannerBody({ title, detail }: { title: string; detail: string }) {
 function StartingAsBanner() {
   const list = useMachineList();
   if (list === null) return null;
-  const banner = composerBanner({ me: list.me, machines: list.machines, enforcement: list.enforcement });
-  return (
-    <BannerBody
-      title={banner.title}
-      detail={`${banner.detail}${list.unavailable === null ? "" : ` ${list.unavailable}.`}`}
-    />
-  );
+  const banner = composerBanner({ me: list.me, provenance: list.meProvenance,
+    machines: list.machines, enforcement: list.enforcement });
+  return <BannerBody {...banner} suffix={list.unavailable === null ? undefined : ` ${list.unavailable}.`} />;
 }
 
 /**
  * The composer banner on a thread somebody else started: "Read-only: Matt's thread".
  *
- * Rule B is what makes it true, so it ships with rule B and reads the same setting: with
- * enforcement off it says the thread is Matt's and that nothing enforces that, and in
- * audit that a message here is logged as a would-refuse and goes through anyway.
+ * The own-thread rule is what makes it true, so it ships with that rule and reads the
+ * same setting: with enforcement off it says the thread is Matt's and that nothing
+ * enforces that, and in audit that a message here is logged as a would-refuse and goes
+ * through anyway. Send now skips the check in every mode, and the banner says so.
  */
 function ReadOnlyThreadBanner() {
   const rpc = useRpc<typeof rpcContract>();
@@ -491,11 +533,11 @@ function ReadOnlyThreadBanner() {
   const banner = readOnlyBanner({
     me: list.me,
     meViaFallback: list.meViaFallback,
-    starter: ownership.starter,
+    starter: ownership.provenance ? null : ownership.starter,
     enforcement: list.enforcement,
   });
   if (banner === null) return null;
-  return <BannerBody title={banner.title} detail={banner.detail} />;
+  return <BannerBody {...banner} />;
 }
 
 /** Invisible composer surface: observes text, never sends draft content. */
@@ -552,10 +594,76 @@ function anonymousViewerDetail(presence: { viewers: number; people: PresentPerso
   return `${count} anonymous ${count === 1 ? "viewer" : "viewers"}`;
 }
 
-function identityFooter(me: WhoAmI | null): string {
-  if (me?.person) return `You are ${me.person.displayName}.`;
-  if (me?.email) return `Signed in as ${me.email}, not in the Identity directory.`;
-  return "You are anonymous here. Names appear once Identity's directory is configured and this BB server sits behind Cloudflare Access.";
+function identityFooter(me: WhoAmI | null): ReactNode {
+  if (me?.provenance === "self-selected" && me.person) {
+    return <>You are shown as {me.person.displayName}, chosen in this browser — <Explain term="attribution-only">attribution only</Explain>.</>;
+  }
+  if (me?.provenance === "configured-fallback" && me.person) {
+    return <>You are shown as {me.person.displayName} from the fallback email — <Explain term="attribution-only">attribution only</Explain>.</>;
+  }
+  // A fallback email outside the directory still arrives as `email`; it is not an Access email.
+  if (me?.provenance === "configured-fallback" && me.email) return `The fallback email, ${me.email}, is not in Identity's directory.`;
+  if (me?.person) return `You are ${me.person.displayName}, from your Access email.`;
+  if (me?.email) return `Your Access email, ${me.email}, is not in Identity's directory.`;
+  return "You are anonymous here.";
+}
+
+
+function IdentityPromptOverlay() {
+  const rpc = useRpc<typeof rpcContract>();
+  const rpcRef = useRef(rpc);
+  rpcRef.current = rpc;
+  const [me, setMe] = useState<WhoAmI | null>(null);
+  const [open, setOpen] = useState(false);
+  const refresh = useCallback(() => {
+    void rpcRef.current.call("identity_whoami").then(setMe).catch(() => undefined);
+  }, []);
+  useEffect(() => {
+    refresh();
+    const timer = window.setInterval(refresh, REFRESH_MS);
+    const onVisible = () => { if (document.visibilityState === "visible") refresh(); };
+    document.addEventListener("visibilitychange", onVisible);
+    return () => { window.clearInterval(timer); document.removeEventListener("visibilitychange", onVisible); };
+  }, [refresh]);
+  const ready = me?.provenance === "unknown"
+    && me.picker.enabled
+    && me.picker.status === "ready"
+    && me.picker.people.length > 0;
+  useEffect(() => {
+    if (ready && claimIdentityPrompt()) setOpen(true);
+    if (me !== null && !ready) setOpen(false);
+  }, [me, ready]);
+  if (!ready) return null;
+  return (
+    <Dialog.Root open={open} onOpenChange={setOpen}>
+      <Dialog.Portal>
+        <Dialog.Overlay style={{ position: "fixed", inset: 0, background: "rgb(0 0 0 / 0.45)", zIndex: 79 }} />
+        <Dialog.Content
+          aria-describedby="identity-prompt-description"
+          style={{
+            boxSizing: "border-box", position: "fixed", left: "50%", top: "50%",
+            transform: "translate(-50%, -50%)", width: 380, maxWidth: "calc(100vw - 24px)",
+            maxHeight: "calc(100dvh - 24px)", overflowY: "auto", overflowWrap: "anywhere",
+            background: "var(--popover, var(--background))", color: "var(--popover-foreground, var(--foreground))",
+            border: "1px solid var(--border)", borderRadius: 10, padding: 16, zIndex: 80,
+            boxShadow: "0 18px 48px rgb(0 0 0 / 0.25)",
+          }}
+        >
+          <Dialog.Title style={{ fontSize: 16, fontWeight: 700, margin: 0 }}>Choose your identity</Dialog.Title>
+          <Dialog.Description id="identity-prompt-description" style={{ color: "var(--muted-foreground)", fontSize: 12, margin: "6px 0 0" }}>
+            Identity cannot tell who is using this browser.
+          </Dialog.Description>
+          <IdentityPicker onIdentityChange={setMe} />
+          <div style={{ display: "flex", justifyContent: "flex-end", marginTop: 12 }}>
+            <Dialog.Close className="identity-ownership-button" style={{
+              minHeight: 40, padding: "0 14px", borderRadius: 6,
+              border: "1px solid var(--border)", background: "transparent", color: "inherit", cursor: "pointer",
+            }}>Not now</Dialog.Close>
+          </div>
+        </Dialog.Content>
+      </Dialog.Portal>
+    </Dialog.Root>
+  );
 }
 
 function PersonRow({ entry, list }: { entry: PresentPerson; list?: MachineList | null }) {
@@ -592,7 +700,12 @@ function PersonRow({ entry, list }: { entry: PresentPerson; list?: MachineList |
           style={{ borderRadius: "50%", flex: "0 0 auto" }}
         />
       )}
-      <span style={{ flex: "1 1 auto" }}>{entry.displayName}</span>
+      <span style={{ flex: "1 1 auto" }}>{entry.displayName}
+        {entry.provenance === "self-selected" ? " · chosen in a browser" :
+          entry.provenance === "configured-fallback" ? " · configured fallback" :
+            entry.provenance === "upstream-header" ? " · upstream header" :
+              entry.provenance === "mixed" ? " · mixed sources" : ""}
+      </span>
       {entry.typing ? (
         <span style={{ alignItems: "center", color: "var(--warning, var(--foreground))", display: "inline-flex", gap: 4 }}>
           <TypingIcon />
@@ -649,243 +762,6 @@ function TypingIcon() {
   );
 }
 
-
-/**
- * The people page: who is registered on this server, and the colour associated with each
- * of them.
- *
- * Follows this file's existing conventions — inline styles against BB's CSS variables, no
- * component library, every RPC failure degrading to "show nothing" rather than throwing.
- *
- * Anyone may change anyone's colour. That is the owner's decision and it matches the
- * plugin's trust model (a guardrail against mistakes; the Access email header is never
- * verified), plus a teammate who never opens this page still needs a colour someone can
- * fix for them. What makes it safe is visibility, not permission: every change writes an
- * audit line naming who changed whose, from and to.
- */
-
-/** A small, fixed set of well-separated colours, so the common case is one click. */
-const SWATCHES = [
-  "#b4322e", "#b9651b", "#9a7b10", "#3f7d33", "#1f7a6b",
-  "#2f6bb8", "#5b4bc4", "#96379a", "#b02e6e", "#5b6570",
-] as const;
-
-function RosterPersonRow({
-  row,
-  busy,
-  onChoose,
-  onReset,
-}: {
-  row: RosterAnswer["people"][number];
-  busy: boolean;
-  onChoose: (color: string) => void;
-  onReset: () => void;
-}) {
-  const inputId = `identity-color-${row.person}`;
-  return (
-    <div
-      style={{
-        alignItems: "flex-start",
-        borderTop: "1px solid var(--border)",
-        display: "flex",
-        gap: 12,
-        opacity: busy ? 0.6 : 1,
-        padding: "12px 0",
-      }}
-    >
-      <span
-        aria-hidden="true"
-        style={{
-          alignItems: "center",
-          background: row.color,
-          borderRadius: 999,
-          // The ink is chosen FROM the fill, so a pale choice is still readable. See
-          // person-colors.ts for why the ink adapts rather than the choice being clamped.
-          color: row.ink,
-          display: "inline-flex",
-          flex: "0 0 auto",
-          fontSize: 12,
-          fontWeight: 700,
-          height: 32,
-          justifyContent: "center",
-          width: 32,
-        }}
-      >
-        {initials(row.displayName)}
-      </span>
-
-      <div style={{ display: "flex", flexDirection: "column", flex: 1, gap: 4, minWidth: 0 }}>
-        <div style={{ alignItems: "baseline", display: "flex", flexWrap: "wrap", gap: 8 }}>
-          <span style={{ fontWeight: 600 }}>{row.displayName}</span>
-          <span style={{ color: "var(--muted-foreground)", fontSize: 12 }}>{row.person}</span>
-          <span style={{ color: "var(--muted-foreground)", fontSize: 12 }}>@{row.github}</span>
-        </div>
-        <span style={{ color: "var(--muted-foreground)", fontSize: 12, wordBreak: "break-all" }}>
-          {row.emails.join(", ")}
-        </span>
-        <span style={{ color: "var(--muted-foreground)", fontSize: 12 }}>
-          {row.machines.length > 0
-            ? `Machines: ${row.machines.join(", ")}`
-            : "No machines of their own are known"}
-        </span>
-        {/* The caveat is stated ONCE, under the heading. Repeating it on every row —
-            which is what the first version did, and what looking at the rendered page
-            showed — buried the rows it was supposed to qualify under three copies of the
-            same sentence. It stays reachable per-row as the title. */}
-        <span style={{ color: "var(--muted-foreground)", fontSize: 12 }} title={SEEN_UNKNOWN_CAVEAT}>
-          {seenPhrase(row.seen)}
-        </span>
-
-        {row.clashesWith.length > 0 && (
-          <span style={{ color: "var(--warning, #b45309)", fontSize: 12 }}>
-            ⚠ This colour reads the same as {row.clashesWith.join(", ")}
-            {"'"}s. Still applied — pick another if you want them to look different.
-          </span>
-        )}
-
-        <div style={{ alignItems: "center", display: "flex", flexWrap: "wrap", gap: 6, marginTop: 4 }}>
-          {SWATCHES.map((swatch) => (
-            <button
-              key={swatch}
-              type="button"
-              disabled={busy}
-              onClick={() => onChoose(swatch)}
-              aria-label={`Give ${row.displayName} the colour ${swatch}`}
-              aria-pressed={row.color === swatch}
-              title={swatch}
-              style={{
-                background: swatch,
-                border: row.color === swatch ? "2px solid var(--foreground)" : "1px solid var(--border)",
-                borderRadius: 999,
-                cursor: busy ? "default" : "pointer",
-                height: 20,
-                padding: 0,
-                width: 20,
-              }}
-            />
-          ))}
-          <label htmlFor={inputId} style={{ color: "var(--muted-foreground)", fontSize: 12, marginLeft: 4 }}>
-            Custom
-          </label>
-          <input
-            id={inputId}
-            type="color"
-            disabled={busy}
-            // ALWAYS #rrggbb — see colorInputValue. A dealt colour is an hsl() string,
-            // which this element cannot hold; handing it one made the browser coerce the
-            // value and write the coerced colour back as a "choice" nobody made.
-            value={colorInputValue(row)}
-            onChange={(event) => {
-              // A native picker fires input and change in one tick; a pick that changes
-              // nothing is not a pick.
-              if (!shouldCommitColor(row, event.target.value)) return;
-              onChoose(event.target.value);
-            }}
-            style={{ background: "none", border: "none", height: 24, padding: 0, width: 32 }}
-          />
-          <span style={{ color: "var(--muted-foreground)", fontSize: 12 }}>
-            {row.overridden ? "chosen" : "dealt"}
-          </span>
-          {row.overridden && (
-            <button
-              type="button"
-              disabled={busy}
-              onClick={onReset}
-              style={{
-                background: "none",
-                border: "1px solid var(--border)",
-                borderRadius: 6,
-                color: "var(--foreground)",
-                cursor: busy ? "default" : "pointer",
-                fontSize: 12,
-                padding: "2px 8px",
-              }}
-            >
-              Reset to dealt
-            </button>
-          )}
-        </div>
-      </div>
-    </div>
-  );
-}
-
-function PeopleSettings() {
-  const rpc = useRpc<typeof rpcContract>();
-  const [roster, setRoster] = useState<RosterAnswer | null>(null);
-  const [error, setError] = useState<string | null>(null);
-  const [busy, setBusy] = useState<string | null>(null);
-
-  const load = useCallback(() => {
-    void rpc.call("identity_roster").then((result) => {
-      setRoster(result);
-      setError(null);
-    }).catch((failure: unknown) => setError(`Identity could not read the people list: ${String(failure)}`));
-  }, [rpc]);
-
-  useEffect(load, [load]);
-
-  /**
-   * One handler for both writes. A refusal comes back as an ANSWER (`ok: false`) rather
-   * than a thrown error, so it is shown as a sentence instead of disappearing.
-   */
-  const write = useCallback((person: string, color: string | null) => {
-    setBusy(person);
-    const call = color === null
-      ? rpc.call("identity_clear_person_color", { person })
-      : rpc.call("identity_set_person_color", { person, color });
-    void call.then((written: ColorWriteAnswer) => {
-      setError(written.ok ? null : `Could not change ${person}'s colour: ${written.reason}`);
-      load();
-    }).catch((failure: unknown) => {
-      setError(`Could not change ${person}'s colour: ${String(failure)}`);
-    }).finally(() => setBusy(null));
-  }, [load, rpc]);
-
-  if (error !== null && roster === null) {
-    return <span style={{ color: "var(--muted-foreground)", fontSize: 12 }}>{error}</span>;
-  }
-  if (roster === null) return null;
-
-  return (
-    <div style={{ display: "flex", flexDirection: "column", fontSize: 13, gap: 0 }}>
-      <span style={{ color: "var(--muted-foreground)", fontSize: 12, paddingBottom: 8 }}>
-        Everyone in Identity{"'"}s directory. A colour is dealt by roster position; anyone can choose a
-        different one for anyone, and every change is written to Identity{"'"}s log.
-        {roster.me === null
-          ? " This sign-in is not in the directory, so a change will be logged with no name against it."
-          : ` You are signed in as ${roster.me.displayName}.`}
-      </span>
-      <span style={{ color: "var(--muted-foreground)", fontSize: 12, paddingBottom: 8 }}>
-        {SEEN_UNKNOWN_CAVEAT}
-      </span>
-      {roster.unavailable !== null && (
-        <span style={{ color: "var(--muted-foreground)", fontSize: 12, paddingBottom: 8 }}>
-          Machines are not listed: {roster.unavailable}.
-        </span>
-      )}
-      {error !== null && (
-        <span style={{ color: "var(--destructive, #b91c1c)", fontSize: 12, paddingBottom: 8 }}>{error}</span>
-      )}
-      {roster.people.length === 0
-        ? (
-          <span style={{ color: "var(--muted-foreground)", fontSize: 12 }}>
-            Nobody is registered yet. Identity reads its people from the {'"'}directory{'"'} setting above.
-          </span>
-        )
-        : roster.people.map((row) => (
-          <RosterPersonRow
-            key={row.person}
-            row={row}
-            busy={busy === row.person}
-            onChoose={(color) => write(row.person, color)}
-            onReset={() => write(row.person, null)}
-          />
-        ))}
-    </div>
-  );
-}
-
 export default definePluginApp((app) => {
   app.contentScripts.register({
     id: "thread-presence-status",
@@ -895,6 +771,7 @@ export default definePluginApp((app) => {
     }),
   });
   app.slots.experimental_appOverlay({ id: "presence-coordinator", component: PresenceCoordinator });
+  app.slots.experimental_appOverlay({ id: "identity-prompt", component: IdentityPromptOverlay });
   app.composer.customize({ id: "typing-awareness", scopes: ["thread"], actions: [{ id: "typing-pulse", component: TypingPulse }] });
   app.slots.experimental_threadHeaderAction({
     id: "thread-ownership",
@@ -913,8 +790,8 @@ export default definePluginApp((app) => {
   });
   app.slots.settingsSection({
     id: "people",
-    title: "People",
-    description: "Who is registered on this server, and the colour associated with each of them.",
-    component: PeopleSettings,
+    title: "People & machines",
+    description: "Who and what Identity recognises, why, and what it does about it.",
+    component: IdentitySettings,
   });
 });

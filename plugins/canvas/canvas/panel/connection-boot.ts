@@ -2,6 +2,7 @@ import { useEffect, type Dispatch, type MutableRefObject, type SetStateAction } 
 import { Editor, createToolContext, createToolSet } from "@ensembleworks/canvas-editor";
 import { PresenceStore, SyncClientPeer } from "@ensembleworks/canvas-sync";
 import { registerCoreShapes, registerShape } from "@ensembleworks/canvas-react";
+import { ArtifactPlaceholderShape } from "../shapes/ArtifactPlaceholderShape.js";
 import { BbThreadShape } from "../shapes/BbThreadShape.js";
 import { GithubIssueShape } from "../shapes/GithubIssueShape.js";
 import { createBbTransport, newPeerId, type BbTransport } from "../../transport.js";
@@ -90,6 +91,9 @@ export function useConnectionBoot({
       // errors on a second call), so re-running this effect on reconnect is
       // safe.
       registerShape("bbthread", BbThreadShape);
+      // Kept, not shown, in this release: an inert placeholder until the
+      // artifact viewer lands. A plain body, not an embed — it takes no input.
+      registerShape("artifact", ArtifactPlaceholderShape);
       registerShape("github-issue", GithubIssueShape);
       const next: Session = {
         peer,

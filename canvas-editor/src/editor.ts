@@ -420,6 +420,10 @@ export class Editor {
   private applyOne(intent: Intent, state: EditorState): ApplyResult {
     switch (intent.type) {
       case 'CreateShape':
+        // Release N can preserve artifact history but cannot originate it.
+        // Refuse before creating undo entries (which could delete an existing
+        // ordinary shape if this intent attempted a kind conversion).
+        if (intent.shape.kind === 'artifact') return { state, docMutated: false, stateChanged: false }
         this.doc.putShape(intent.shape)
         return {
           state, docMutated: true, stateChanged: false,

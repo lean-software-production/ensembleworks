@@ -20,12 +20,12 @@ import type { AttributionFacts, DispatchOrigin, GuardOutcome, StarterSummary, Vi
  */
 
 /** Bumped whenever a line's shape changes, so a later format change is detectable. */
-export const AUDIT_SCHEMA_VERSION = 1;
+export const AUDIT_SCHEMA_VERSION = 2;
 
 /**
- * Every audit line starts with this token. `bb plugin logs identity` prefixes each line
- * with its own timestamp and level, so a consumer needs something to cut on:
- * `bb plugin logs identity | sed -n 's/.*identity-audit //p' | jq`.
+ * Every audit line starts with this token. `bb plugin logs identity` wraps each line in a
+ * `{ts, level, message}` JSON envelope, so a consumer parses the envelope and cuts on the
+ * token inside `.message` (see `AUDIT_JQ_COMMAND` in settings-admin.ts).
  */
 export const AUDIT_LINE_PREFIX = "identity-audit";
 
@@ -149,12 +149,13 @@ export type AuditRequestFacts = {
   url: string | undefined;
   email: string | null;
   person: StarterSummary | null;
+  provenance?: string;
 };
 
 export const ROLLUP_MS = 60_000;
 export const MAX_ROLLUP_BUCKETS = 200;
 
-type Bucket = { method: string; path: string; access: boolean; person: string | null; count: number };
+type Bucket = { method: string; path: string; access: boolean; person: string | null; provenance: string; count: number };
 
 /**
  * The request stream (a), and its volume policy in force.
@@ -201,6 +202,8 @@ export class RequestAuditor {
         path,
         access: facts.email !== null,
         person: facts.person?.person ?? null,
+        provenance: facts.provenance ?? (facts.email ? "upstream-header" : "unknown"),
+        captureSource: "request",
       });
       return;
     }
@@ -208,7 +211,8 @@ export class RequestAuditor {
     this.#total += 1;
     const person = facts.person?.person ?? null;
     const access = facts.email !== null;
-    const key = `${method} ${path} ${access ? "1" : "0"} ${person ?? ""}`;
+    const provenance = facts.provenance ?? (access ? "upstream-header" : "unknown");
+    const key = `${method} ${path} ${access ? "1" : "0"} ${person ?? ""} ${provenance}`;
     const bucket = this.#buckets.get(key);
     if (bucket !== undefined) {
       bucket.count += 1;
@@ -218,7 +222,7 @@ export class RequestAuditor {
       this.#dropped += 1;
       return;
     }
-    this.#buckets.set(key, { method, path, access, person, count: 1 });
+    this.#buckets.set(key, { method, path, access, person, provenance, count: 1 });
   }
 
   /** Emit the current window's counters, if it saw anything. */
@@ -283,6 +287,8 @@ export function dispatchAuditLine(input: DispatchAuditInput): AuditLine {
     email: input.facts.email,
     person: input.facts.person?.person ?? null,
     viaFallback: input.facts.viaFallback,
+    provenance: input.facts.provenance ?? (input.facts.email ? "upstream-header" : "unknown"),
+    captureSource: input.facts.captureSource ?? "unknown",
     origin: input.facts.origin satisfies DispatchOrigin,
     originPluginId: input.facts.originPluginId,
     lineage: [...input.facts.lineage],
@@ -311,6 +317,11 @@ export type PostDispatchAuditInput = {
   senderThreadId: string | null;
   email: string | null;
   person: StarterSummary | null;
+  provenance?: string;
+  captureSource?: string;
+  triggerPerson?: StarterSummary | null;
+  triggerProvenance?: string | null;
+  contentUnchanged?: boolean | null;
 };
 
 /**
@@ -333,9 +344,14 @@ export function postDispatchAuditLine(input: PostDispatchAuditInput): AuditLine 
     entryId: input.entryId,
     threadId: input.threadId,
     senderThreadId: input.senderThreadId,
-    access: input.email !== null,
+    access: input.provenance ? input.provenance === "upstream-header" : input.email !== null,
     email: input.email,
     person: input.person?.person ?? null,
+    provenance: input.provenance ?? (input.email ? "upstream-header" : "unknown"),
+    captureSource: input.captureSource ?? "unknown",
+    ...(input.triggerPerson !== undefined ? { triggerPerson: input.triggerPerson?.person ?? null,
+      triggerProvenance: input.triggerProvenance ?? "unknown" } : {}),
+    ...(input.contentUnchanged !== undefined ? { contentUnchanged: input.contentUnchanged } : {}),
   };
 }
 
@@ -348,6 +364,7 @@ export type ColorChangeAuditInput = {
   /** Who made the change, from the request's own identity. Null when unidentified. */
   by: StarterSummary | null;
   byEmail: string | null;
+  byProvenance?: string;
   /** Whose colour was changed. */
   subject: string;
   from: string | null;
@@ -382,7 +399,76 @@ export function colorChangeAuditLine(input: ColorChangeAuditInput): AuditLine {
     mode: input.mode,
     by: input.by?.person ?? null,
     email: input.byEmail,
+    provenance: input.byProvenance ?? (input.byEmail ? "upstream-header" : "unknown"),
     subject: input.subject,
+    from: input.from,
+    to: input.to,
+  };
+}
+
+/** Who made an admin change, from the request's own identity — shared by the lines below. */
+type AdminActorInput = {
+  at: number;
+  requestId: string | null;
+  requestMethod: string | null;
+  requestPath: string | null;
+  mode: EnforcementMode;
+  by: StarterSummary | null;
+  byEmail: string | null;
+  byProvenance?: string;
+};
+
+function adminActorFields(input: AdminActorInput) {
+  return {
+    at: input.at,
+    req: input.requestId,
+    method: input.requestMethod,
+    path: input.requestPath,
+    mode: input.mode,
+    by: input.by?.person ?? null,
+    email: input.byEmail,
+    provenance: input.byProvenance ?? (input.byEmail ? "upstream-header" : "unknown"),
+  };
+}
+
+export type SettingsChange = { key: string; from: string | boolean; to: string | boolean };
+export type SettingsChangeAuditInput = AdminActorInput & { changes: readonly SettingsChange[] };
+
+/**
+ * The settings stream: every write from the Identity settings section, naming who
+ * changed which settings from what to what. Not gated on `enforcement`, for the same
+ * reason as the colour stream. The signing key is never written, whatever the caller
+ * hands in: its change always reads `[secret]` → `[rotated]`.
+ */
+export function settingsChangeAuditLine(input: SettingsChangeAuditInput): AuditLine {
+  return {
+    v: AUDIT_SCHEMA_VERSION,
+    kind: "settings.change",
+    ...adminActorFields(input),
+    changes: input.changes.map((change) => change.key === "selectionSigningKey"
+      ? { key: change.key, from: "[secret]", to: "[rotated]" }
+      : { key: change.key, from: change.from, to: change.to }),
+  };
+}
+
+export type PinChangeAuditInput = AdminActorInput & {
+  hostId: string;
+  hostName: string;
+  action: "keep" | "repin" | "unpin";
+  /** The pinned person before and after, or null when there was / is no pin. */
+  from: string | null;
+  to: string | null;
+};
+
+/** The host-pin stream: an operator keeping, moving or forgetting a machine's pin. Not gated on `enforcement`. */
+export function pinChangeAuditLine(input: PinChangeAuditInput): AuditLine {
+  return {
+    v: AUDIT_SCHEMA_VERSION,
+    kind: "host.pin",
+    ...adminActorFields(input),
+    hostId: input.hostId,
+    hostName: input.hostName,
+    action: input.action,
     from: input.from,
     to: input.to,
   };

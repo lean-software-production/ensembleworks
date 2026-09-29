@@ -3,6 +3,7 @@ import { decideGuardrail } from "./guardrail.js";
 import type { HostClassification } from "./hosts.js";
 import type { StarterSummary, Via } from "./attribution.js";
 import type { EnforcementMode } from "./audit.js";
+import type { GlossaryId } from "./lib/glossary.js";
 
 /**
  * The wording of the ownership UI (option B in the design note): who started a thread,
@@ -16,6 +17,7 @@ import type { EnforcementMode } from "./audit.js";
 
 export type OwnershipView = {
   starter: StarterSummary | null;
+  provenance?: "self-selected" | "configured-fallback" | "unknown";
   via: Via;
   inheritedFrom: string | null;
   /** The machine the thread runs on, already classified; null when it is not known. */
@@ -25,6 +27,8 @@ export type OwnershipView = {
 /** "David", "an agent for David", "an automation", "someone not recorded". */
 export function starterPhrase(view: OwnershipView): string {
   const name = view.starter?.displayName ?? null;
+  if (name !== null && view.provenance === "self-selected") return `${name} (chosen in a browser; attribution only)`;
+  if (name !== null && view.provenance === "configured-fallback") return `${name} (configured fallback)`;
   switch (view.via) {
     case "agent":
       return name === null ? "an agent" : `an agent for ${name}`;
@@ -80,8 +84,9 @@ export type OwnershipChip = { text: string; tone: "default" | "muted" };
  * the honest answer to "what would have happened?" is usually "nothing".
  *
  * It ASKS THE GUARDRAIL — `decideGuardrail`, the same function the dispatch hook and the
- * audit log run — rather than re-deciding rules A and B from the chip's own facts. A dry
- * run whose UI disagrees with its own enforcement is worse than no dry run, and a second
+ * audit log run — rather than re-deciding the own-machine and own-thread rules from the
+ * chip's own facts. A dry run whose UI disagrees with its own enforcement is worse than
+ * no dry run, and a second
  * copy of the rules is how that happens: the first version of this function did exactly
  * that and diverged on a `fallbackEmail` viewer, whom the guardrail ignores.
  *
@@ -113,7 +118,7 @@ export function wouldBeRefused(input: {
   // Question 1: would MY next message into this thread be refused? (rule B)
   const sending = ask(input.starter === null ? null : { starter: input.starter });
   if (sending.action === "reject" && sending.rule === "follow-up-by-non-starter" && input.starter !== null) {
-    return `would be refused — ${input.starter.displayName}'s thread (audit mode, so it went through)`;
+    return `your next message would be refused — ${input.starter.displayName}'s thread (audit mode lets it through)`;
   }
   // Question 2: would a start on this machine be refused? (rule A, which only ever applies
   // to a thread with no record — hence the explicit `null`. Asking it of the recorded
@@ -121,7 +126,7 @@ export function wouldBeRefused(input: {
   // claimed a refusal the guardrail would never have made.)
   const starting = ask(null);
   if (starting.action === "reject" && starting.rule === "start-on-another-persons-machine" && input.host !== null) {
-    return `this start would be refused — ${machineDescription(input.host)} (audit mode, so it went through)`;
+    return `a new thread from you here would be refused — ${machineDescription(input.host)} (audit mode lets it through)`;
   }
   return null;
 }
@@ -136,10 +141,11 @@ export function headerChip(
     sharedUser: string;
     /** The mode in force; only `audit` adds a would-have clause. */
     enforcement?: EnforcementMode;
-    /** Who is reading the chip, so rule B's "someone else's thread" can be answered. */
+    /** Who is reading the chip, so the own-thread rule's "someone else's thread" can be answered. */
     me?: StarterSummary | null;
     /** True when `me` came from fallbackEmail; the guardrail ignores such an identity. */
     meViaFallback?: boolean;
+    meProvenance?: "upstream-header" | "self-selected" | "configured-fallback" | "unknown";
   },
 ): OwnershipChip {
   const known = view.starter !== null || view.via === "plugin";
@@ -148,7 +154,7 @@ export function headerChip(
     enforcement: options.enforcement ?? "off",
     me: options.me ?? null,
     meViaFallback: options.meViaFallback === true,
-    starter: view.starter,
+    starter: view.provenance ? null : view.starter,
     host: view.host,
   });
   const audit = would === null ? "" : ` · ${would}`;
@@ -226,71 +232,72 @@ export function ownershipRowStatus(view: OwnershipView): OwnershipRowStatus {
   };
 }
 
-export type OwnershipBanner = { title: string; detail: string };
+export type OwnershipBanner = { title: string; detail: string; note?: { text: string; term: GlossaryId } };
 
 /**
  * The new-thread composer banner.
  *
  * Deliberately makes NO promise about the machine you picked: spike S3-lite found that a
  * `new-thread` composer customization sees only the project, the draft and submit state
- * (SDK `ComposerView`), never the selected machine — so the banner states who you are and
- * which machines are yours, and says plainly where a wrong machine is actually caught.
+ * (SDK `ComposerView`), never the selected machine. So the banner says who you are and
+ * which machines are yours; the `composer-check` popover says where a wrong one is caught.
  */
 export function composerBanner(input: {
   me: StarterSummary | null;
+  provenance?: "upstream-header" | "self-selected" | "configured-fallback" | "unknown";
   machines: readonly HostClassification[];
   /** The mode in force, which changes what this banner may promise. */
   enforcement: EnforcementMode;
 }): OwnershipBanner {
+  const attributionOnly = { text: "Attribution only.", term: "attribution-only" } as const;
+  if (input.me !== null && input.provenance === "self-selected") {
+    return { title: `Starting as ${input.me.displayName}`, detail: "Chosen in this browser.", note: attributionOnly };
+  }
+  if (input.me !== null && input.provenance === "configured-fallback") {
+    return { title: `Starting as ${input.me.displayName}`, detail: "From the fallback email.", note: attributionOnly };
+  }
   if (input.me === null) {
+    // Name the source by provenance, and the email to add only when there is one: the
+    // fallback's is not "yours", and an anonymous request (no email, or a stale, expired or
+    // invalid browser name) has none. Only an Access email is a sign-in.
+    if (input.provenance === "configured-fallback") return {
+      title: "Starting from the fallback email",
+      detail: "Threads you start get no starter of their own until the fallback email is in Identity's directory.",
+    };
+    if (input.provenance === "unknown") {
+      return { title: "Starting anonymously", detail: "Threads you start get no starter of their own." };
+    }
     return {
       title: "Starting as an unrecognised sign-in",
-      detail: "Threads you start will show no starter. Add your email to Identity's directory setting to be named.",
+      detail: "Threads you start get no starter of their own until your email is in Identity's directory.",
     };
   }
   const mine = input.machines
     .filter((host) => host.kind === "person" && host.person.person === input.me?.person)
     .map((host) => host.hostName);
   const team = input.machines.filter((host) => host.kind === "team").map((host) => host.hostName);
-  const title = `Starting as ${input.me.displayName}`;
-  const lists = [
-    mine.length > 0 ? `Your machines: ${mine.join(", ")}.` : "No machines of your own are known yet.",
-    team.length > 0 ? `Team machine: ${team.join(", ")}.` : null,
-  ].filter((part): part is string => part !== null).join(" ");
-  // What happens after you press send is the only part of this that the setting changes.
-  // With enforcement off nothing refuses anything; in audit the same decision is taken
-  // and then not acted on. Saying otherwise would be a lie told in the user's own
-  // composer (there is a test for exactly that, in both modes).
-  const afterwards = input.enforcement === "enforce"
-    ? "The dispatch itself is checked though: starting on someone else's machine is refused, with a message "
-      + "naming whose it is."
+  const detail = [
+    mine.length > 0 ? `Yours: ${mine.join(", ")}` : "No machines of yours known yet",
+    team.length > 0 ? `Team: ${team.join(", ")}` : null,
+  ].filter((part): part is string => part !== null).join(" · ");
+  // What happens at Send is the only part the mode changes, and the one thing this banner
+  // can always answer truthfully; the popover says why it cannot check the machine itself.
+  const text = input.enforcement === "enforce"
+    ? "Starting on someone else's machine is refused at Send."
     : input.enforcement === "audit"
-      ? "The dispatch itself is judged though: in audit mode, starting on someone else's machine is written to "
-        + "Identity's log as a would-refuse, and then goes ahead anyway."
-      : "Nothing else checks it yet either: starting on someone else's machine is recorded, not refused.";
-  if (mine.length === 0 && team.length === 0) {
-    // Even with nothing to list, the mode sentence still ships: "what happens when I
-    // press send" is the one thing this banner can always answer truthfully.
-    return {
-      title,
-      detail: "No machines of yours are known yet. BB does not tell a plugin which machine this composer has "
-        + `selected. ${afterwards}`,
-    };
-  }
-  return {
-    title,
-    detail: `${lists} BB does not tell a plugin which machine this composer has selected, so this banner cannot `
-      + `check it for you. ${afterwards}`,
-  };
+      ? "In audit mode, starting on someone else's machine is logged, then goes ahead."
+      : "Starting on someone else's machine is recorded, not refused.";
+  return { title: `Starting as ${input.me.displayName}`, detail, note: { text, term: "composer-check" } };
 }
 
 /**
  * The composer banner on a thread someone else started.
  *
- * Step 4 left this unbuilt on purpose: it is rule B — other people's threads are
- * read-only (answer 1) — that makes it true, so it ships with rule B. It says "read-only"
- * only when `restrictStarts` is actually on; with the setting off the thread is someone
- * else's but nothing stops you, and the banner says that instead of pretending.
+ * Step 4 left this unbuilt on purpose: it is the own-thread rule — other people's threads
+ * are read-only (answer 1) — that makes it true, so it ships with the own-thread rule. It
+ * says "read-only" only when `enforcement` is `enforce`; otherwise the thread is someone
+ * else's but nothing stops you, and the banner says that instead of pretending. Send now
+ * bypasses the dispatch hook in every mode, so no wording may promise it is judged.
  *
  * Null (no banner at all) on your own thread, on a thread with no recorded starter, and
  * for a sign-in Identity cannot name — in none of those can it say anything true.
@@ -308,22 +315,21 @@ export function readOnlyBanner(input: {
   const me = input.meViaFallback === true ? null : input.me;
   if (me === null || starter === null || me.person === starter.person) return null;
   const name = starter.displayName;
+  const note = { text: "Own-thread rule", term: "rule-own-thread" } as const;
   if (input.enforcement === "off") {
-    return {
-      title: `${name}'s thread`,
-      detail: `Other people's threads are meant to be ${name}'s to drive, but nothing enforces that here: `
-        + "Identity's enforcement setting is off.",
-    };
+    return { title: `${name}'s thread`, detail: `Meant for ${name} to drive; enforcement is off, so nothing stops you.`, note };
   }
   if (input.enforcement === "audit") {
     return {
       title: `${name}'s thread`,
-      detail: `Other people's threads are meant to be ${name}'s to drive. In audit mode a message from you here `
-        + "is written to Identity's log as a would-refuse, and then goes through anyway.",
+      detail: `Meant for ${name} to drive. In audit mode a message from you here is logged as a would-refuse, `
+        + "then goes through; Send now skips the check.",
+      note,
     };
   }
   return {
     title: `Read-only: ${name}'s thread`,
-    detail: `Only ${name} can send to it. Ask ${name}, or start a thread of your own.`,
+    detail: `Enforce refuses a message from you here; Send now skips the check. Ask ${name}, or start a thread of your own.`,
+    note,
   };
 }

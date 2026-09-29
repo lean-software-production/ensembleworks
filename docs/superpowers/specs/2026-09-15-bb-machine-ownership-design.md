@@ -454,6 +454,10 @@ on `127.0.0.1:38886`, on the same box as every person's daemon.
   changed by anyone** (`PATCH /hosts/:id`, `updateHostRequestSchema` L8642). So
   **derive ownership from the name, then pin it by host id**. On first sight, record
   `hostId → person`. If a later name disagrees with the pin, don't follow it: flag it.
+
+  > Amended 2026-09-26: an operator can now choose **Keep pin**, which stores the
+  > accepted name as `keptName`; `classifyHost` (`hosts.ts`) reports no conflict while
+  > the host's name still matches it.
 - **Source of truth: the infra repo.** Extend `ew_bb_people` with `emails: [...]`
   (and `github:`, because of Trevoke/trevoke) and a `team_machines` list. Ansible renders it
   into the plugin config with `bb plugin config people set directory '<json>'`, run on the
@@ -957,6 +961,10 @@ new storage call is time-bounded and swallows its own errors.
   `classifyHost` labels every host `person | team | unclaimed`, in that order of evidence:
   the new `teamMachines` setting wins (team membership is configuration), then the pin,
   then the name, and anything left is **unclaimed**, never folded into "team" (answer 6).
+
+  > Amended 2026-09-26: a later disagreeing name still isn't followed, except one an
+  > operator accepted with **Keep pin** (`keptName`); `classifyHost` reports no conflict
+  > while the host still has that name.
 - **Row glyph.** The app polls `identity_thread_ownership` for the sidebar's threads and
   merges two maps on every paint — ownership underneath, **presence on top** — so a row
   someone is viewing or typing in still shows presence, exactly as before. The

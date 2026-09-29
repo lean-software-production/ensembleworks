@@ -7,6 +7,11 @@ import type { rpcContract } from "../server.js";
 import type { CanvasRoomHost } from "./room.js";
 import { CANVAS_SCHEMA_VERSION } from "./wire.js";
 
+/**
+ * Refuse a bundle built for any other document schema, before it touches the
+ * room (see CANVAS_SCHEMA_VERSION). Exact match, not "at least": a NEWER tab
+ * against this backend is just as unsafe, and reopening fixes both.
+ */
 function requireCompatibleCanvas(schemaVersion: number | undefined): void {
   if (schemaVersion !== CANVAS_SCHEMA_VERSION) {
     throw new Error("Canvas has been updated. Reopen this panel to continue editing.");

@@ -1,5 +1,6 @@
 import { AsyncLocalStorage } from "node:async_hooks";
 import http from "node:http";
+import { readNamedCookie, SELECTION_COOKIE } from "./selection.js";
 
 /**
  * Who made the HTTP request the current code is running for.
@@ -19,8 +20,12 @@ export type RequestFacts = {
    */
   id: string;
   email: string | null;
+  /** Opaque, bounded cookie value. Only the plugin generation may interpret it. */
+  selection: string | null;
   method: string | undefined;
   url: string | undefined;
+  startedAt: number;
+  finishedAt?: number;
 };
 
 /** Called with the facts of every http request bb handles. Must not throw; wrapped anyway. */
@@ -36,7 +41,7 @@ export type RequestObserver = (facts: RequestFacts) => void;
  * whenever `RequestContext` gains or changes a member, and a running server will migrate
  * on reload instead of handing a new generation an object it cannot use.
  */
-export const REQUEST_CONTEXT_VERSION = 2;
+export const REQUEST_CONTEXT_VERSION = 4;
 
 export type RequestContext = {
   /** The shape version this context was built at. Absent on a version-1 context. */
@@ -51,6 +56,9 @@ export type RequestContext = {
    * reloaded generation's observer is never removed by the old generation's dispose.
    */
   observe(observer: RequestObserver): () => void;
+  /** Configure the single named selection cookie captured by this process. */
+  setCookieName(name: string): void;
+  cookieName(): string;
 };
 
 export const ACCESS_EMAIL_HEADER = "cf-access-authenticated-user-email";
@@ -105,6 +113,7 @@ export function installRequestContext(): RequestContext {
 
   const als = new AsyncLocalStorage<RequestFacts>();
   const observers = new Set<RequestObserver>();
+  let cookieName = SELECTION_COOKIE;
   let counter = 0;
   const boot = Math.floor(Math.random() * 0xffffff).toString(36);
   const originalEmit = http.Server.prototype.emit;
@@ -116,9 +125,14 @@ export function installRequestContext(): RequestContext {
       const facts: RequestFacts = {
         id: `${boot}-${counter.toString(36)}`,
         email: normalizeEmail(request.headers[ACCESS_EMAIL_HEADER]),
+        selection: readNamedCookie(request.headers.cookie, cookieName),
         method: request.method,
         url: request.url,
+        startedAt: Date.now(),
       };
+      const response = args[1] as http.ServerResponse | undefined;
+      response?.once("finish", () => { facts.finishedAt = Date.now(); });
+      response?.once("close", () => { facts.finishedAt ??= Date.now(); });
       for (const observer of observers) {
         try {
           observer(facts);
@@ -139,6 +153,8 @@ export function installRequestContext(): RequestContext {
       observers.add(observer);
       return () => observers.delete(observer);
     },
+    setCookieName: (name) => { if (/^ew-identity-selection-v1(?:-[0-9a-f]{12})?$/.test(name)) cookieName = name; },
+    cookieName: () => cookieName,
   };
   globals[GLOBAL_KEY] = context;
   return context;
@@ -150,9 +166,10 @@ export function requestContextPatchIsLive(): boolean {
   return emit[PATCH_MARKER] === true;
 }
 
-export type SelfTestResult = { ok: boolean; detail: string };
+export type SelfTestResult = { ok: boolean; detail: string; cookie: { ok: boolean; detail: string } };
 
 export const SELF_TEST_EMAIL = "identity-self-test@localhost.invalid";
+export const SELF_TEST_COOKIE = "identity-cookie-probe-v3";
 
 /**
  * Prove the patch is live IN THIS PROCESS: check that the `emit` on the prototype is
@@ -170,7 +187,7 @@ export async function selfTestRequestContext(
   options: { probe: (headers: Record<string, string>) => Promise<unknown> },
 ): Promise<SelfTestResult> {
   if (!requestContextPatchIsLive()) {
-    return { ok: false, detail: "the live http.Server.prototype.emit is not Identity's patch" };
+    return { ok: false, detail: "the live http.Server.prototype.emit is not Identity's patch", cookie: { ok: false, detail: "patch unavailable" } };
   }
   // The plugin factory — and any timer it schedules — runs inside the async context of
   // the request that loaded the plugin (`bb plugin reload` is an HTTP request), so this
@@ -181,11 +198,19 @@ export async function selfTestRequestContext(
   try {
     seen = await options.probe({ [ACCESS_EMAIL_HEADER]: SELF_TEST_EMAIL });
   } catch (error) {
-    return { ok: false, detail: `the self-test probe failed: ${(error as Error).message}` };
+    return { ok: false, detail: `the self-test probe failed: ${(error as Error).message}`, cookie: { ok: false, detail: "probe unavailable" } };
   }
   const email = (seen as { email?: unknown } | null)?.email;
   if (email !== SELF_TEST_EMAIL) {
-    return { ok: false, detail: `the probe's request context had email ${JSON.stringify(email ?? null)}` };
+    return { ok: false, detail: `the probe's request context had email ${JSON.stringify(email ?? null)}`, cookie: { ok: false, detail: "email probe failed" } };
   }
-  return { ok: true, detail: `request context is live (probe saw its own tagged email${nested})` };
+  try {
+    const cookieSeen = await options.probe({ cookie: `${context.cookieName()}=${SELF_TEST_COOKIE}` });
+    const ok = (cookieSeen as { selection?: unknown } | null)?.selection === SELF_TEST_COOKIE;
+    return { ok: true, detail: `request context is live (probe saw its own tagged email${nested})`,
+      cookie: { ok, detail: ok ? "named cookie reached request context" : "named cookie did not reach request context" } };
+  } catch (error) {
+    return { ok: true, detail: `request context is live (probe saw its own tagged email${nested})`,
+      cookie: { ok: false, detail: `cookie probe failed: ${(error as Error).message}` } };
+  }
 }

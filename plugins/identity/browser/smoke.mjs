@@ -39,7 +39,7 @@ try {
     await expect(trigger).toHaveAttribute('aria-expanded', 'true');
     await expect(dialog.locator('p')).toHaveText(await trigger.getAttribute('title'));
     await expect(dialog).toContainText('runs as ensembleworks-agent on shared-machine-');
-    await expect(dialog).toContainText('would be refused — Erin Example\'s thread (audit mode, so it went through)');
+    await expect(dialog).toContainText('your next message would be refused — Erin Example\'s thread (audit mode lets it through)');
     await expect(dialog).toContainText('Viewing now');
     await expect(dialog).toContainText('Alex');
     await expect(dialog).toContainText('Sam');
@@ -67,6 +67,34 @@ try {
     console.log(`PASS ${width}px: compact owner/viewer bubbles, combined details, viewport bounds, keyboard, focus, touch/click and dismissal`);
     await context.close();
   }
+  for (const width of [320, 390]) {
+    const page = await browser.newPage({ viewport: { width, height: 720 } });
+    await page.goto(server.resolvedUrls.local[0] + '?variant=picker&screen=elsewhere');
+    const prompt = page.getByRole('dialog', { name: 'Choose your identity' });
+    await expect(prompt).toBeVisible();
+    await expect(page.getByText('Another BB screen with no thread header')).toBeVisible();
+    await expect(prompt.getByRole('combobox', { name: 'Your name' })).toBeVisible();
+    await expect(prompt).toContainText('This does not verify who you are.');
+    await expect(prompt.getByRole('button', { name: 'Use this name' })).toBeDisabled();
+    const bounds = await prompt.boundingBox();
+    expect(bounds.x).toBeGreaterThanOrEqual(8);
+    expect(bounds.x + bounds.width).toBeLessThanOrEqual(width - 8);
+    expect(await prompt.evaluate(el => el.scrollWidth <= el.clientWidth)).toBe(true);
+    await page.getByRole('button', { name: 'Not now' }).click();
+    await expect(prompt).toHaveCount(0);
+    await page.reload();
+    await expect(page.getByText('Another BB screen with no thread header')).toBeVisible();
+    await expect(prompt).toHaveCount(0);
+    await page.goto(server.resolvedUrls.local[0] + '?variant=picker');
+    const trigger = page.getByRole('button', { name: /Show thread details/ });
+    const details = page.getByRole('dialog', { name: 'Thread details' });
+    await expect(trigger).toBeVisible();
+    await trigger.click();
+    await expect(details).toBeVisible();
+    await expect(details.getByRole('combobox', { name: 'Your name' })).toBeVisible();
+    console.log(`PASS ${width}px picker: global prompt without thread header, dismissal survives reload, manual thread reopen`);
+    await page.close();
+  }
   const page = await browser.newPage({ viewport: { width: 320, height: 720 } });
   for (const [variant, text] of [
     ['unknown', 'Starter not recorded'],
@@ -84,6 +112,177 @@ try {
     console.log(`PASS ${variant}: popover preserves complete headerChip text`);
   }
   await page.close();
+  // The new-thread composer banner: one short note whose popover says when the machine is
+  // checked, naming the settings tab in words (there is no link into settings from here).
+  for (const [width, scheme] of [[320, 'light'], [390, 'light'], [390, 'dark']]) {
+    const shot = (name) => `${artifacts}/composer-${scheme === 'dark' ? 'dark-' : ''}${width}${name}.png`;
+    const context = await browser.newContext({ viewport: { width, height: 720 }, hasTouch: true, colorScheme: scheme });
+    const page = await context.newPage();
+    page.setDefaultTimeout(10000);
+    const errors = [];
+    page.on('pageerror', (error) => { errors.push(error.message); console.error(error.message); });
+    await page.goto(server.resolvedUrls.local[0] + '?screen=composer');
+    await expect(page.getByText('Starting as Alex Rivera')).toBeVisible();
+    expect(await page.evaluate(() => document.documentElement.scrollWidth), `${width}px composer: page width`).toBe(width);
+    await page.screenshot({ path: shot('') });
+    const note = page.getByRole('button', { name: /refused at Send/ });
+    expect(await note.evaluate((el) => getComputedStyle(el, '::before').height)).toBe('44px');
+    await note.tap();
+    const explain = page.getByRole('dialog', { name: 'When the machine is checked' });
+    await expect(explain).toBeVisible();
+    await expect(explain).toContainText('More: Identity settings › People & machines › Rules');
+    const bounds = await explain.boundingBox();
+    expect(bounds.x).toBeGreaterThanOrEqual(8);
+    expect(bounds.x + bounds.width).toBeLessThanOrEqual(width - 8);
+    await page.screenshot({ path: shot('-explain') });
+    await page.keyboard.press('Escape');
+    await expect(explain).toHaveCount(0);
+    await expect(note).toBeFocused();
+    expect(errors).toEqual([]);
+    console.log(`PASS ${width}px ${scheme} composer: banner without overflow, 44px note hit area, explain popover in bounds, Escape returns focus`);
+    await context.close();
+  }
+  // The People & machines settings section: every tab at three widths, the tabs' keys, and
+  // the two gated dialogs. Disclosures are opened first, so what they hide is measured too.
+  const tabs = [['people', 'People'], ['machines', 'Machines'], ['browser', 'This browser'], ['rules', 'Rules'], ['health', 'Health']];
+  const describe = (el) => `${el.tagName.toLowerCase()}${el.className ? '.' + String(el.className).split(' ').join('.') : ''} "${(el.textContent || el.getAttribute('aria-label') || '').trim().slice(0, 40)}"`;
+  for (const [width, scheme] of [[320, 'light'], [390, 'light'], [1280, 'light'], [390, 'dark']]) {
+    const shot = (name) => `${artifacts}/settings-${scheme === 'dark' ? 'dark-' : ''}${width}-${name}.png`;
+    const context = await browser.newContext({ viewport: { width, height: 800 }, hasTouch: width < 600, colorScheme: scheme });
+    const page = await context.newPage();
+    page.setDefaultTimeout(10000);
+    const errors = [];
+    page.on('pageerror', (error) => { errors.push(error.message); console.error(error.message); });
+    await page.goto(server.resolvedUrls.local[0] + '?screen=settings');
+    const section = page.locator('.identity-settings');
+    await expect(page.getByRole('tablist', { name: 'Identity settings' })).toBeVisible();
+    await expect(page.getByRole('list', { name: 'Identity readiness' })).toBeVisible();
+    for (const [key, name] of tabs) {
+      const tab = page.getByRole('tab', { name, exact: true });
+      if (width < 600) await tab.tap(); else await tab.click();
+      await expect(tab).toHaveAttribute('aria-selected', 'true');
+      const panel = page.getByRole('tabpanel', { name });
+      await expect(panel.getByRole('heading', { level: 3, name, exact: true })).toBeVisible();
+      await panel.evaluate((el) => el.querySelectorAll('details').forEach((details) => { details.open = true; }));
+      expect(await page.evaluate(() => document.documentElement.scrollWidth), `${width}px ${name}: page width`).toBe(width);
+      const overflowing = await section.evaluate((root, describeSource) => {
+        const label = new Function(`return ${describeSource}`)();
+        return [...root.querySelectorAll('*')]
+          .filter((el) => el.getClientRects().length > 0 && el.scrollWidth > el.clientWidth)
+          .filter((el) => !(el.matches('pre, code') && getComputedStyle(el).overflowX === 'auto'))
+          .map(label);
+      }, describe.toString());
+      expect(overflowing, `${width}px ${name}: elements wider than their box`).toEqual([]);
+      // A checkbox or radio is reached through its label, so the label is the target measured.
+      // An explained term is as tall as its text; its hit area is the ::before, measured below.
+      const small = await section.evaluate((root, describeSource) => {
+        const label = new Function(`return ${describeSource}`)();
+        return [...root.querySelectorAll('button:not(.identity-explain), input, select')]
+          .filter((el) => el.getClientRects().length > 0)
+          .map((el) => (el.matches('[type="checkbox"], [type="radio"]') ? el.closest('label') ?? el : el))
+          .filter((el) => el.getBoundingClientRect().height < 40)
+          .map((el) => `${label(el)} ${el.getBoundingClientRect().height}px`);
+      }, describe.toString());
+      expect(small, `${width}px ${name}: targets under 40px`).toEqual([]);
+      // Every explained term has a 44px hit area that nothing covers, and covers no control.
+      const hits = await page.evaluate(() => {
+        const failures = [];
+        const visible = (el) => el.getClientRects().length > 0 && getComputedStyle(el).visibility !== 'hidden';
+        for (const el of document.querySelectorAll('.identity-explain')) {
+          if (!visible(el)) continue;
+          el.scrollIntoView({ block: 'center' });
+          if (getComputedStyle(el, '::before').height !== '44px') failures.push(`hit area: ${el.textContent}`);
+          const r = el.getBoundingClientRect();
+          const top = document.elementFromPoint(r.left + r.width / 2, r.top + r.height / 2);
+          if (top?.closest('.identity-explain') !== el) failures.push(`covered: ${el.textContent}`);
+        }
+        for (const el of document.querySelectorAll('button:not(.identity-explain), input, select, summary, a')) {
+          if (!visible(el)) continue;
+          el.scrollIntoView({ block: 'center' });
+          const r = el.getBoundingClientRect();
+          const top = document.elementFromPoint(r.left + r.width / 2, r.top + r.height / 2);
+          const explain = top?.closest('.identity-explain');
+          if (explain && !el.contains(explain)) failures.push(`control under a term: ${el.textContent || el.tagName}`);
+        }
+        return failures;
+      });
+      expect(hits, `${width}px ${name}: explained terms' hit areas`).toEqual([]);
+      await page.screenshot({ path: shot(key), fullPage: true });
+    }
+
+    const people = page.getByRole('tab', { name: 'People', exact: true });
+    if (width < 600) await people.tap(); else await people.click();
+    await people.focus();
+    await page.keyboard.press('ArrowRight');
+    await expect(page.getByRole('tab', { name: 'Machines', exact: true })).toBeFocused();
+    await expect(page.getByRole('tab', { name: 'Machines', exact: true })).toHaveAttribute('aria-selected', 'true');
+    await page.keyboard.press('End');
+    await expect(page.getByRole('tab', { name: 'Health', exact: true })).toBeFocused();
+    await expect(page.getByRole('tab', { name: 'Health', exact: true })).toHaveAttribute('aria-selected', 'true');
+    await page.keyboard.press('Home');
+    await expect(people).toBeFocused();
+    await expect(people).toHaveAttribute('aria-selected', 'true');
+
+    // An explained term: its popover stays on screen, Escape hands focus back, Enter reopens
+    // it, and "More in …" selects and focuses the tab that holds the controls.
+    const term = page.getByRole('region', { name: 'Who you are here' }).getByRole('button', { name: 'Attribution only' });
+    if (width < 600) await term.tap(); else await term.click();
+    const explain = page.getByRole('dialog', { name: 'Attribution only' });
+    await expect(explain).toBeVisible();
+    const explainBounds = await explain.boundingBox();
+    expect(explainBounds.x).toBeGreaterThanOrEqual(8);
+    expect(explainBounds.x + explainBounds.width).toBeLessThanOrEqual(width - 8);
+    await page.screenshot({ path: shot('explain') });
+    await page.keyboard.press('Escape');
+    await expect(explain).toHaveCount(0);
+    await expect(term).toBeFocused();
+    await page.keyboard.press('Enter');
+    await expect(explain).toBeVisible();
+    const more = explain.getByRole('button', { name: 'More in This browser' });
+    expect((await more.boundingBox()).height).toBeGreaterThanOrEqual(44);
+    if (width < 600) await more.tap(); else await more.click();
+    await expect(explain).toHaveCount(0);
+    const browserTab = page.getByRole('tab', { name: 'This browser', exact: true });
+    await expect(browserTab).toHaveAttribute('aria-selected', 'true');
+    await expect(browserTab).toBeFocused();
+
+    await page.getByRole('tab', { name: 'Rules', exact: true }).click();
+    const enforce = page.getByRole('radio', { name: 'Enforce' });
+    if (width < 600) await enforce.tap(); else await enforce.click();
+    const enforceDialog = page.getByRole('dialog', { name: 'Turn on Enforce?' });
+    await expect(enforceDialog).toBeVisible();
+    await expect(enforceDialog.getByRole('button', { name: 'Cancel' })).toBeFocused();
+    const enforceBounds = await enforceDialog.boundingBox();
+    expect(enforceBounds.x).toBeGreaterThanOrEqual(8);
+    expect(enforceBounds.x + enforceBounds.width).toBeLessThanOrEqual(width - 8);
+    await page.screenshot({ path: shot('enforce-dialog') });
+    await page.keyboard.press('Escape');
+    await expect(enforceDialog).toHaveCount(0);
+    await expect(page.getByRole('radio', { name: 'Audit' })).toBeChecked();
+    await expect(page.getByRole('radio', { name: 'Audit' })).toBeFocused();
+    await expect(enforce).not.toBeChecked();
+
+    await page.getByRole('tab', { name: 'This browser', exact: true }).click();
+    const rotate = page.getByRole('button', { name: 'Rotate signing key' });
+    if (width < 600) await rotate.tap(); else await rotate.click();
+    const rotateDialog = page.getByRole('dialog', { name: 'Rotate the signing key?' });
+    await expect(rotateDialog).toBeVisible();
+    await expect(rotateDialog.getByRole('button', { name: 'Cancel' })).toBeFocused();
+    const confirmRotate = rotateDialog.getByRole('button', { name: 'Rotate key' });
+    await expect(confirmRotate).toBeDisabled();
+    await rotateDialog.getByRole('textbox', { name: 'Type rotate to confirm' }).fill('rotat');
+    await expect(confirmRotate).toBeDisabled();
+    await rotateDialog.getByRole('textbox', { name: 'Type rotate to confirm' }).fill('rotate');
+    await expect(confirmRotate).toBeEnabled();
+    await page.screenshot({ path: shot('rotate-dialog') });
+    await rotateDialog.getByRole('button', { name: 'Cancel' }).click();
+    await expect(rotateDialog).toHaveCount(0);
+    await expect(rotate).toBeFocused();
+
+    expect(errors).toEqual([]);
+    console.log(`PASS ${width}px ${scheme} settings: five tabs without overflow, 40px targets, 44px term hit areas, tab keys, explain popover and More, Enforce and rotate dialogs`);
+    await context.close();
+  }
 } finally {
   await browser?.close();
   await server.close();

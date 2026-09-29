@@ -107,7 +107,10 @@ async function connect(host: FakePluginHost, id: string): Promise<Connected> {
       throw error;
     },
   });
-  await host.harness.behavior.callRpc("canvas_join", { clientId: id, schemaVersion: CANVAS_SCHEMA_VERSION });
+  await host.harness.behavior.callRpc("canvas_join", {
+    clientId: id,
+    schemaVersion: CANVAS_SCHEMA_VERSION,
+  });
   const peer = new SyncClientPeer({ peerId: newPeerId(), transport });
   const pump = makePump(host, transport, id);
   await pump();
@@ -270,7 +273,8 @@ describe("the room over bb rpc + realtime", () => {
     await plugin(host.bb);
 
     await host.harness.behavior.callRpc("canvas_join", {
-      clientId: "watcher", schemaVersion: CANVAS_SCHEMA_VERSION,
+      clientId: "watcher",
+      schemaVersion: CANVAS_SCHEMA_VERSION,
     });
     expect(
       await host.harness.behavior.callRpc("canvas_ping", {

@@ -1,10 +1,11 @@
 // @vitest-environment jsdom
-import { afterEach, describe, expect, it } from "vitest";
-import { cleanup, screen } from "@testing-library/react";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { cleanup, fireEvent, screen, within } from "@testing-library/react";
 import { loadPluginApp, renderSlot } from "@get-bb/plugin-sdk/testing/app";
 import { headerChip, ownershipRowStatus } from "./ownership-labels.js";
 import { readableInk, resolvePersonColor } from "./person-colors.js";
-import type { MachineList, ThreadOwnership } from "./server.js";
+import type { MachineList, ThreadOwnership, WhoAmI } from "./server.js";
+import { stubPopoverDom } from "./popover-test-dom.js";
 
 const starter = { person: "erin", displayName: "Erin Example", github: "erin" };
 const ownership: ThreadOwnership = {
@@ -22,12 +23,14 @@ const presentPeople = [
   { person: "alex", displayName: "Alex", github: "alex", typing: false },
   { person: "sam", displayName: "Sam", github: "sam", typing: true },
 ];
-function mount(view = ownership, list = machines, people = presentPeople) {
+function mount(view = ownership, list = machines, people = presentPeople,
+  whoami: WhoAmI = { email: "alex@example.test", person: list.me, provenance: "upstream-header", selection: null,
+    picker: { enabled: true, status: "ready", people: [starter, list.me!] } }) {
   return renderSlot(registration, { threadId: view.threadId, projectId: "project-1", isCompactViewport: true }, {
     rpc: {
       identity_thread_ownership: () => ({ threads: [view] }),
       identity_machines: () => list,
-      identity_whoami: () => ({ email: "alex@example.com", person: list.me }),
+      identity_whoami: () => whoami,
       presence_thread: () => ({ viewers: people.length, typing: people.filter((entry) => entry.typing).length, people }),
     },
   });
@@ -92,5 +95,47 @@ describe("thread ownership interaction contract", () => {
     const trigger = await screen.findByRole("button", { name: new RegExp(`^${ownershipRowStatus(view).label.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}\\.`) });
     expect(trigger.querySelector('[data-identity-bubble="owner"]')?.textContent).toBe(ownershipRowStatus(view).badge);
     expect(trigger.title).toBe(headerChip(view, { ...machines, sharedUser: machines.sharedMachineUser }).text);
+  });
+});
+
+describe("the header popover's footer", () => {
+  const off = { enabled: false, status: "off", people: [] };
+  const alex = machines.me!;
+  beforeEach(stubPopoverDom);
+  afterEach(() => vi.unstubAllGlobals());
+  /** Opens Thread details and returns the footer: the one div whose whole text is the line. */
+  async function footer(whoami: WhoAmI, line: string) {
+    mount(ownership, machines, presentPeople, whoami);
+    fireEvent.click(await screen.findByRole("button", { name: /Show thread details/ }));
+    const dialog = await screen.findByRole("dialog", { name: "Thread details" });
+    const found = within(dialog).getAllByText((_, el) => el?.tagName === "DIV" && el.textContent === line);
+    expect(found).toHaveLength(1);
+    return found[0]!;
+  }
+
+  it("names where the name comes from, in one short sentence", async () => {
+    await footer({ email: "alex@example.test", person: alex, provenance: "upstream-header", selection: null, picker: off },
+      "You are Alex, from your Access email.");
+    cleanup();
+    await footer({ email: "who@example.test", person: null, provenance: "upstream-header", selection: null, picker: off },
+      "Your Access email, who@example.test, is not in Identity's directory.");
+    cleanup();
+    await footer({ email: null, person: null, provenance: "unknown", selection: { status: "expired" }, picker: off },
+      "You are anonymous here.");
+  });
+
+  it("does not call a fallback email outside the directory an Access email", async () => {
+    await footer({ email: "desk@example.test", person: null, provenance: "configured-fallback", selection: null, picker: off },
+      "The fallback email, desk@example.test, is not in Identity's directory.");
+  });
+
+  it("explains attribution only on click for a browser name or the fallback email", async () => {
+    const chosen = await footer({ email: null, person: alex, provenance: "self-selected", selection: { status: "valid" },
+      picker: off }, "You are shown as Alex, chosen in this browser — attribution only.");
+    fireEvent.click(within(chosen).getByRole("button", { name: "attribution only" }));
+    expect(await screen.findByRole("dialog", { name: "Attribution only" })).toBeTruthy();
+    cleanup();
+    await footer({ email: "desk@example.test", person: alex, provenance: "configured-fallback", selection: null, picker: off },
+      "You are shown as Alex from the fallback email — attribution only.");
   });
 });

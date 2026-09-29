@@ -9,8 +9,8 @@
 // persistence. The full duplex path is covered by tests/canvas-sync.test.ts.
 import assert from "node:assert/strict";
 import { SyncClientPeer } from "@ensembleworks/canvas-sync";
-import { createBbTransport, newClientId, newPeerId } from "../transport.js";
 import { CANVAS_SCHEMA_VERSION } from "../canvas/wire.js";
+import { createBbTransport, newClientId, newPeerId } from "../transport.js";
 
 const base = process.env.BB_SERVER_URL ?? "http://127.0.0.1:38886";
 const rpc = async (method: string, input: unknown): Promise<any> => {

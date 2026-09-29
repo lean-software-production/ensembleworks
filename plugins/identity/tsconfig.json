@@ -32,8 +32,13 @@
     "ownership-labels.ts",
     "people.ts",
     "presence-labels.ts",
+    "settings-admin.ts",
     "components",
     "lib",
     "hooks"
+  ],
+  "exclude": [
+    "**/*.test.ts",
+    "**/*.test.tsx"
   ]
 }

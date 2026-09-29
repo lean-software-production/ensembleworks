@@ -78,10 +78,12 @@ async function seedScene(page: Page, contract: Contract): Promise<void> {
       // (interaction-contracts' SceneShape doc comment) makes this single
       // in-array-order pass sufficient: a child seeded before its parent
       // would land at the root instead of failing loudly.
-      ew.doc.putShape({
+      // Fixture stored history, not a Release N authoring path.
+      const put = s.kind === 'artifact' ? ew.doc.putShapeUnchecked.bind(ew.doc) : ew.doc.putShape.bind(ew.doc)
+      put({
         id: s.id, kind: s.kind, parentId: s.parentId ?? ew.editor.pageId, index: 'a1',
         x: s.x, y: s.y, rotation: 0, isLocked: false, opacity: 1, meta: {},
-        props: { w: s.w, h: s.h, ...s.props },
+        props: { ...s.props, w: s.w, h: s.h },
       })
       ew.doc.setText(s.id, `text for ${s.id}`)
     }

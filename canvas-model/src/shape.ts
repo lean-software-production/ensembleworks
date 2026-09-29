@@ -4,10 +4,12 @@ import { shapeIdField, parentIdField, type ShapeId, type ParentId } from './ids.
 // The shape kinds a room can contain: tldraw defaults we use (incl. 'group' —
 // a structural container users create with Ctrl+G; dropping it would orphan
 // its children's parentId chains) + image + the six custom HTML-box shapes
-// (contracts/src/shapes.ts).
+// (contracts/src/shapes.ts) + the BB plugin's bbthread frame and artifact
+// viewer. A kind missing here is DROPPED by repair, so adding one is a
+// compatibility event for every older reader of the same room.
 export const SHAPE_KINDS = [
   'note', 'text', 'geo', 'arrow', 'frame', 'group', 'line', 'draw', 'highlight', 'image',
-  'terminal', 'iframe', 'neko', 'roadmap', 'screenshare', 'file-viewer', 'bbthread', 'github-issue',
+  'terminal', 'iframe', 'neko', 'roadmap', 'screenshare', 'file-viewer', 'bbthread', 'github-issue', 'artifact',
 ] as const
 export type ShapeKind = (typeof SHAPE_KINDS)[number]
 
@@ -236,6 +238,20 @@ const linePoint = z.looseObject({
 // plan's judgment call). Still a closed set, so a bad value is rejected.
 const LINE_SPLINE = z.enum(['line', 'cubic'])
 
+// artifact — the Canvas artifact viewer's shape. Its props SELECT A FILE a
+// later stage serves, so unlike every tldraw-parity kind above the schema is
+// STRICT (an unknown key is refused, not passed through) and VERSIONED
+// (`schemaVersion` is a literal: a future v2 shape is dropped by this reader
+// rather than half-understood). `path` is relative to the source root and can
+// never climb out of it. '' in threadId/path means "not linked to a file yet"
+// (UpdateProps cannot remove a key — the bbthread precedent). 'workspace' is
+// admitted now so enabling it later needs no new compatibility gate, but
+// nothing serves it yet.
+const artifactSource = z.enum(['thread-storage', 'workspace'])
+const relPath = z.string().max(1024).refine(
+  (p) => p === '' || (!p.startsWith('/') && !p.includes('\\') && p.split('/').every((s) => s !== '' && s !== '.' && s !== '..')),
+)
+
 const propsByKind: Record<ShapeKind, z.ZodTypeAny> = {
   note: withText.extend(styleProps('color', 'size', 'font', 'align', 'verticalAlign').shape),
   text: withText.extend(styleProps('color', 'size', 'font', 'textAlign').shape),
@@ -296,6 +312,11 @@ const propsByKind: Record<ShapeKind, z.ZodTypeAny> = {
     issueUrl: z.string().regex(/^https:\/\/github\.com\/[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+\/issues\/[1-9][0-9]*$/)
       .refine((url) => { const parts = url.split('/'); return parts[3] !== '.' && parts[3] !== '..' && parts[4] !== '.' && parts[4] !== '..' && Number.isSafeInteger(Number(parts[6])); }).optional(),
   })]),
+  artifact: z.strictObject({
+    w: z.number().finite().positive(), h: z.number().finite().positive(),
+    schemaVersion: z.literal(1), source: artifactSource,
+    threadId: z.string().max(64), path: relPath, title: z.string().max(200),
+  }),
 }
 
 // The strict envelope shared by every shape. props is refined per-kind below.

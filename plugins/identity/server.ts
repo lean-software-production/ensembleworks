@@ -1,7 +1,9 @@
 import { defineRpcContract, type BbPluginApi } from "@get-bb/plugin-sdk";
+import { randomBytes } from "node:crypto";
 import { z } from "zod";
 import {
   AttributionLedger,
+  MAX_STARTER_RECORDS,
   attributeDispatch,
   starterSummarySchema,
   type StarterRecord,
@@ -11,6 +13,7 @@ import {
   HostPins,
   classifyHost,
   parseTeamMachines,
+  personFromHostName,
   type HostClassification,
 } from "./hosts.js";
 import { makeGuardrail } from "./guardrail.js";
@@ -25,19 +28,41 @@ import {
   parseEnforcement,
   postDispatchAuditLine,
   colorChangeAuditLine,
+  pinChangeAuditLine,
+  settingsChangeAuditLine,
   type AuditLine,
   type EnforcementMode,
+  type SettingsChange,
 } from "./audit.js";
-import { identityFor, parseDirectory, type Person } from "./people.js";
+import { parseDirectory, resolveRequester, type Person, type ResolvedIdentity } from "./people.js";
+import { identityMutationAllowed, mintSelection, readNamedCookie, SELECTION_COOKIE, SelectionCommitStore, selectionCookie, selectionCookieName, verifySelection } from "./selection.js";
+import { MAX_QUEUED_REQUESTERS, QueuedRequesterLedger, digestQueuedContent } from "./queued-requester.js";
 import { PersonColorStore, SeenPeople } from "./person-store.js";
 import { buildRoster, SEEN_UNKNOWN_CAVEAT } from "./roster.js";
 import {
   ACCESS_EMAIL_HEADER,
   installRequestContext,
   normalizeEmail,
+  SELF_TEST_EMAIL,
   selfTestRequestContext,
   type SelfTestResult,
 } from "./request-context.js";
+import {
+  AUDIT_JQ_COMMAND,
+  PICKER_STATUSES,
+  checkSettingsPatch,
+  enforceRisks,
+  lintConfig,
+  readiness,
+  redactDiagnostics,
+  settingsPatchSchema,
+  validateSelectionOrigin,
+  type AdminFacts,
+  type LedgerFill,
+  type PickerStatus,
+  type SigningKeyStatus,
+  type WritableSettings,
+} from "./settings-admin.js";
 
 export const LEASE_TTL_MS = 25_000;
 export const TYPING_TTL_MS = 3_000;
@@ -54,7 +79,8 @@ const location = z.discriminatedUnion("kind", [
  * and a drift between them would have surfaced only as a runtime validation throw.
  */
 const personSummary = starterSummarySchema;
-const presentPerson = personSummary.extend({ typing: z.boolean() }).strict();
+const leasePerson = personSummary.extend({ provenance: z.enum(["upstream-header", "self-selected", "configured-fallback", "unknown", "mixed"]).optional() }).strict();
+const presentPerson = leasePerson.extend({ typing: z.boolean() }).strict();
 /**
  * `viewers` and `typing` count distinct viewer keys (person ?? viewerId), so one person
  * in two browsers counts once. `people` are the named ones among them; the rest
@@ -69,7 +95,16 @@ const threadPresence = z.object({
 const whoami = z.object({
   email: z.string().nullable(),
   person: personSummary.nullable(),
+  provenance: z.enum(["upstream-header", "self-selected", "configured-fallback", "unknown"]),
+  selection: z.object({ status: z.enum(["valid", "stale", "expired", "invalid", "overridden"]) }).nullable(),
+  picker: z.object({ enabled: z.boolean(), status: z.string(), people: z.array(z.object({
+    person: z.string(), displayName: z.string(),
+  }).strict()) }),
 }).strict();
+const selectionPreparation = z.discriminatedUnion("ok", [
+  z.object({ ok: z.literal(true), url: z.string() }).strict(),
+  z.object({ ok: z.literal(false), reason: z.string() }).strict(),
+]);
 const threadId = z.string().min(1).max(200);
 const hostPinConflict = z.object({
   pinnedName: z.string(),
@@ -95,6 +130,7 @@ const threadOwnership = z.object({
   via: z.enum(["browser", "agent", "plugin", "unknown"]),
   inheritedFrom: z.string().nullable(),
   host: hostClassification.nullable(),
+  provenance: z.enum(["self-selected", "configured-fallback", "unknown"]).optional(),
 }).strict();
 /** Who started a thread: the recorded starter, or null when nothing was ever recorded. */
 const threadStarter = z.object({
@@ -105,10 +141,11 @@ const threadStarter = z.object({
   recordedAt: z.number(),
   /** The machine bb resolved for the dispatch that recorded this; null for older rows. */
   host: hostRefSchema.nullable(),
+  provenance: z.enum(["self-selected", "configured-fallback", "unknown"]).optional(),
 }).strict().nullable();
 
 export type PresenceLocation = z.infer<typeof location>;
-export type LeasePerson = z.infer<typeof personSummary>;
+export type LeasePerson = z.infer<typeof leasePerson>;
 export type PresentPerson = z.infer<typeof presentPerson>;
 export type ThreadPresence = z.infer<typeof threadPresence>;
 export type WhoAmI = z.infer<typeof whoami>;
@@ -130,6 +167,7 @@ export function publicStarter(record: StarterRecord | null): ThreadStarter {
     inheritedFrom: record.inheritedFrom,
     recordedAt: record.recordedAt,
     host: record.host ?? null,
+    ...(record.provenance ? { provenance: record.provenance } : {}),
   });
 }
 
@@ -153,6 +191,7 @@ export function ownershipFor(
     via: starter.via,
     inheritedFrom: starter.inheritedFrom,
     host: starter.host === null ? null : host,
+    ...(starter.provenance ? { provenance: starter.provenance } : {}),
   });
 }
 
@@ -200,6 +239,7 @@ const machineList = z.object({
    * a chip would contradict the audit log it exists to illustrate.
    */
   meViaFallback: z.boolean(),
+  meProvenance: z.enum(["upstream-header", "self-selected", "configured-fallback", "unknown"]).optional(),
   /**
    * Every person in the directory, by id. The UI deals per-person colours by position in
    * this list (`personColor`), which is what makes two people reliably look different.
@@ -266,6 +306,76 @@ const colorWrite = z.discriminatedUnion("ok", [
   z.object({ ok: z.literal(false), person: z.string(), reason: z.string() }).strict(),
 ]);
 
+const selfTestSchema = z.object({
+  ok: z.boolean(),
+  detail: z.string(),
+  cookie: z.object({ ok: z.boolean(), detail: z.string() }).strict(),
+}).strict();
+const lintIssue = z.object({
+  id: z.string(),
+  severity: z.enum(["error", "warning", "info"]),
+  message: z.string(),
+  fix: z.string(),
+}).strict();
+const readinessItem = z.object({
+  id: z.enum(["profile", "people", "machines", "browser", "guardrail", "check"]),
+  label: z.string(),
+  status: z.enum(["ok", "attention", "off", "problem"]),
+  text: z.string(),
+  tab: z.enum(["profile", "people", "machines", "browser", "rules", "health"]),
+}).strict();
+const ledgerCount = z.object({ count: z.number().int().nonnegative().nullable(), max: z.number().int() }).strict();
+
+/**
+ * Everything the settings section reads in one call. It carries the signing key's
+ * STATUS only — never the key — and the directory as a count and an error, since the
+ * directory itself is owned by Ansible and edited in the infra repo, not here.
+ */
+const settingsOverview = z.object({
+  settings: z.object({
+    teamMachines: z.string(),
+    sharedMachineUser: z.string(),
+    enforcement: z.enum(ENFORCEMENT_MODES),
+    fallbackEmail: z.string(),
+    selfSelectedIdentity: z.boolean(),
+    selectionPublicOrigin: z.string(),
+    signingKey: z.enum(["valid", "invalid", "missing"]),
+  }).strict(),
+  directory: z.object({ ok: z.boolean(), error: z.string().nullable(), people: z.number().int().nonnegative() }).strict(),
+  /** Nobody registered and every writable setting at its default: the page shows its first-run path. */
+  firstRun: z.boolean(),
+  /** This request, or any since load, carried the Access header (the self-test's never counts). */
+  accessSeen: z.boolean(),
+  pickerStatus: z.enum(PICKER_STATUSES),
+  selfTest: selfTestSchema.nullable(),
+  ledgers: z.object({ starters: ledgerCount, queued: ledgerCount }).strict(),
+  conflicts: z.number().int().nonnegative(),
+  enforceRisks: z.array(z.string()),
+  readiness: z.array(readinessItem).length(6),
+  lint: z.array(lintIssue),
+  auditCommand: z.string(),
+}).strict();
+
+/** What a settings write did. A refusal is an ANSWER, not a thrown RPC error. */
+const settingsWrite = z.discriminatedUnion("ok", [
+  z.object({ ok: z.literal(true), changed: z.array(z.string()) }).strict(),
+  z.object({ ok: z.literal(false), reason: z.string() }).strict(),
+]);
+const rotateAnswer = z.discriminatedUnion("ok", [
+  z.object({ ok: z.literal(true) }).strict(),
+  z.object({ ok: z.literal(false), reason: z.string() }).strict(),
+]);
+const pinResolution = z.discriminatedUnion("ok", [
+  z.object({ ok: z.literal(true), machine: hostClassification.nullable() }).strict(),
+  z.object({
+    ok: z.literal(false),
+    reason: z.enum(["unknown-host", "no-pin", "not-in-directory", "no-person", "write-failed"]),
+  }).strict(),
+]);
+
+export type SettingsOverview = z.infer<typeof settingsOverview>;
+export type SettingsWriteAnswer = z.infer<typeof settingsWrite>;
+export type PinResolution = z.infer<typeof pinResolution>;
 export type RosterAnswer = z.infer<typeof roster>;
 export type ColorWriteAnswer = z.infer<typeof colorWrite>;
 
@@ -303,6 +413,13 @@ export const rpcContract = defineRpcContract({
     input: z.object({}).strict().nullish(),
     output: whoami,
   },
+  identity_prepare_selection: {
+    input: z.discriminatedUnion("action", [
+      z.object({ action: z.literal("select"), personId: z.string().min(1).max(80) }).strict(),
+      z.object({ action: z.literal("forget") }).strict(),
+    ]),
+    output: selectionPreparation,
+  },
   identity_thread_starter: {
     input: z.object({ threadId }).strict(),
     output: threadStarter,
@@ -338,6 +455,43 @@ export const rpcContract = defineRpcContract({
   identity_clear_person_color: {
     input: z.object({ person: z.string().min(1).max(128) }).strict(),
     output: colorWrite,
+  },
+  /** The settings section's whole picture: settings, readiness, lint, ledgers, self-test. */
+  identity_settings_overview: {
+    input: z.object({}).strict().nullish(),
+    output: settingsOverview,
+  },
+  /**
+   * Write the settings the section owns. `directory` and `selectionSigningKey` are NOT
+   * in the schema: the directory is Ansible's, and the key only ever changes by rotation.
+   * Every write that changes something logs one `settings.change` line.
+   */
+  identity_update_settings: {
+    input: settingsPatchSchema,
+    output: settingsWrite,
+  },
+  /** Mint a fresh signing key. Every existing browser selection expires at once. */
+  identity_rotate_signing_key: {
+    input: z.object({ confirm: z.literal("rotate") }).strict(),
+    output: rotateAnswer,
+  },
+  /** An operator's answer to a pin conflict: keep the pin, move it, or forget it. */
+  identity_resolve_pin: {
+    input: z.object({
+      hostId: z.string().min(1).max(200),
+      action: z.enum(["keep", "repin", "unpin"]),
+      person: z.string().min(1).max(200).optional(),
+    }).strict(),
+    output: pinResolution,
+  },
+  identity_rerun_self_test: {
+    input: z.object({}).strict().nullish(),
+    output: z.object({ selfTest: selfTestSchema, pickerStatus: z.enum(PICKER_STATUSES) }).strict(),
+  },
+  /** A redacted support bundle: counts and statuses, never an email or a key. */
+  identity_diagnostics: {
+    input: z.object({}).strict().nullish(),
+    output: z.object({ text: z.string() }).strict(),
   },
   presence_heartbeat: {
     input: z.object({ tabId: opaqueId, viewerId: opaqueId, location }).strict(),
@@ -460,6 +614,9 @@ export class PresenceStore {
           displayName: lease.person.displayName,
           github: lease.person.github,
           typing: typing || (known?.typing ?? false),
+          ...(lease.person.provenance || known?.provenance ? { provenance: known?.provenance
+            && lease.person.provenance && known.provenance !== lease.person.provenance
+              ? "mixed" as const : lease.person.provenance ?? known?.provenance } : {}),
         });
       }
       byThread.set(lease.location.threadId, entry);
@@ -505,11 +662,16 @@ function affectedThreads(...locations: Array<PresenceLocation | undefined>): Set
 
 function samePerson(left: LeasePerson | null, right: LeasePerson | null): boolean {
   if (left === null || right === null) return left === right;
-  return left.person === right.person && left.displayName === right.displayName && left.github === right.github;
+  return left.person === right.person && left.displayName === right.displayName && left.github === right.github
+    && left.provenance === right.provenance;
 }
 
 function summarize(person: Person | null): LeasePerson | null {
   return person ? { person: person.person, displayName: person.displayName, github: person.github } : null;
+}
+function summarizePresence(identity: ResolvedIdentity): LeasePerson | null {
+  const person = summarize(identity.person);
+  return person ? { ...person, provenance: identity.provenance } : null;
 }
 
 function sameLocation(left: PresenceLocation, right: PresenceLocation): boolean {
@@ -543,8 +705,8 @@ export default async function plugin(bb: BbPluginApi) {
       type: "string",
       label: "People directory",
       description:
-        'JSON array of { "person", "github", "displayName", "emails": [...] }. Emails are matched '
-        + "case-insensitively against the Cloudflare Access email header. Changes apply without a reload.",
+        'Managed in infrastructure. JSON array of { "person", "github", "displayName", "emails": [...] }; '
+        + "emails match the Access email case-insensitively.",
       experimental_multiline: true,
       default: "[]",
     },
@@ -552,9 +714,9 @@ export default async function plugin(bb: BbPluginApi) {
       type: "string",
       label: "Team machines",
       description:
-        "Host names of the shared team machines, one per line or comma separated (a JSON array is "
-        + "accepted too). A host that matches neither a person nor this list is shown as "
-        + '"unclaimed" — never silently as the team machine. Display only: Identity restricts nothing.',
+        "Shared machines, one per line or comma separated. Anyone may start threads on them, and automations "
+        + "may start threads only on them or with no machine named: Enforce refuses a stamped automation "
+        + "elsewhere; Audit logs it.",
       experimental_multiline: true,
       default: "",
     },
@@ -562,8 +724,8 @@ export default async function plugin(bb: BbPluginApi) {
       type: "string",
       label: "Shared machine user",
       description:
-        "The Linux account threads run as on the team machine and on unclaimed machines, shown in "
-        + "the thread header chip. Display only — Identity never sets or checks it.",
+        "The Linux account agents run as on team and unclaimed machines. Shown in the thread header; "
+        + "Identity never sets or checks it.",
       default: "ensembleworks-agent",
     },
     enforcement: {
@@ -571,33 +733,48 @@ export default async function plugin(bb: BbPluginApi) {
       label: "Enforcement",
       options: [...ENFORCEMENT_MODES],
       description:
-        "off: record who started what, label it in the UI, and never refuse anything. "
-        + "audit: take the SAME decision enforcement would, write it to the log (`bb plugin logs identity`) "
-        + "as a would-refuse, and let the message through anyway. "
-        + "enforce: act on that decision — refuse a known person's start on another person's machine, their "
-        + "message into someone else's thread, and an automation off a team machine. "
-        + "A dispatch Identity cannot tie to a person is ALWAYS allowed in every mode — that is the normal "
-        + "shape of every agent path — and an identity supplied by Fallback email counts as untied. "
-        + "audit and enforce both log; off logs nothing. Emails appear in those log lines by design.",
+        "Off (record only), Audit (log what Enforce would refuse) or Enforce (refuse it). Use People "
+        + "& machines, where turning on Enforce is confirmed and a change writes a settings.change line; a "
+        + "change made here is not confirmed and writes none.",
       default: "off",
     },
     fallbackEmail: {
       type: "string",
       label: "Fallback email",
       description:
-        "Used as the requester's email when a request carries no Cloudflare Access header, for a BB "
-        + "server not behind Access (e.g. a laptop). Every header-less caller, agents and CLI included, "
-        + "is then attributed to this email — so the guardrail ignores a fallback identity and never "
-        + "refuses on it. Leave empty on a shared server.",
+        "Only for a server one person uses. Requests with no Access email and no browser name are "
+        + "attributed to it; a stale, expired or invalid browser name stays anonymous. The guardrail ignores it. "
+        + "Leave empty on a shared server.",
       default: "",
     },
+    selfSelectedIdentity: {
+      type: "boolean", label: "Browser identity picker", default: false,
+      description: "Let browsers choose a name from the directory. Attribution only.",
+    },
+    selectionPublicOrigin: {
+      type: "string", label: "Identity picker public origin", default: "",
+      description: "The exact origin browsers use, such as https://bb.example.com. Needed for browser names.",
+    },
+    selectionSigningKey: {
+      type: "string", label: "Identity picker signing key", secret: true,
+      description: "32-byte base64url key that signs browser names. Setting a new one expires every browser's name.",
+    },
   });
+
 
   let people: Person[] = [];
   let fallbackEmail = "";
   let teamMachines: string[] = [];
   let sharedMachineUser = "ensembleworks-agent";
   let enforcement: EnforcementMode = "off";
+  let selfSelectedIdentity = false;
+  let selectionPublicOrigin = "";
+  let selectionKey: Buffer | null = null;
+  /** For the settings section: why the directory did not parse, and the key's state. */
+  let directoryError: string | null = null;
+  let signingKeyStatus: SigningKeyStatus = "missing";
+  /** Whether any request since load carried the Access header — a hint the server is shared. */
+  let accessSeen = false;
   const applySettings = (
     values: {
       directory: string;
@@ -605,14 +782,27 @@ export default async function plugin(bb: BbPluginApi) {
       teamMachines: string;
       sharedMachineUser: string;
       enforcement: string;
+      selfSelectedIdentity: boolean;
+      selectionPublicOrigin: string;
+      selectionSigningKey?: string;
     },
     reportInvalid: boolean,
   ) => {
     fallbackEmail = values.fallbackEmail;
     enforcement = parseEnforcement(values.enforcement);
+    selfSelectedIdentity = values.selfSelectedIdentity;
+    selectionPublicOrigin = validateSelectionOrigin(values.selectionPublicOrigin) ?? "";
+    requestContext.setCookieName(selectionPublicOrigin ? selectionCookieName(selectionPublicOrigin) : SELECTION_COOKIE);
+    const decoded = values.selectionSigningKey ? Buffer.from(values.selectionSigningKey, "base64url") : null;
+    selectionKey = decoded?.length === 32 ? decoded : null;
+    signingKeyStatus = !values.selectionSigningKey ? "missing" : selectionKey ? "valid" : "invalid";
     teamMachines = parseTeamMachines(values.teamMachines);
     sharedMachineUser = values.sharedMachineUser.trim() || "ensembleworks-agent";
+    // A settings change can reclassify every machine (the team list, the directory), so
+    // the next read lists them afresh rather than serving a stale label for 30 seconds.
+    machineCache = null;
     const parsed = parseDirectory(values.directory);
+    directoryError = parsed.ok ? null : parsed.error;
     if (parsed.ok) {
       people = parsed.people;
       pins.setPeople(people);
@@ -630,7 +820,12 @@ export default async function plugin(bb: BbPluginApi) {
     }
   };
   try {
-    applySettings(await settings.get(), true);
+    let initial = await settings.get();
+    if (!initial.selectionSigningKey) {
+      await settings.experimental_set({ selectionSigningKey: randomBytes(32).toString("base64url") });
+      initial = await settings.get();
+    }
+    applySettings(initial, true);
   } catch (error) {
     bb.log.warn(`identity: could not read settings: ${(error as Error).message}`);
   }
@@ -640,7 +835,7 @@ export default async function plugin(bb: BbPluginApi) {
   //
   // Three streams, all through `bb.log` and nothing else (owner's decision: no ring
   // buffer, no /audit route, no UI log page). One JSON object per line, prefixed so
-  // `bb plugin logs identity | sed -n 's/.*identity-audit //p' | jq` works.
+  // `AUDIT_JQ_COMMAND` can pick it out of `bb plugin logs identity`'s JSON envelopes.
   //
   // Nothing here may refuse or delay a dispatch: `emitAudit` swallows its own failures,
   // the dispatch stream runs inside the hook's existing 5s fail-open deadline, and the
@@ -649,6 +844,19 @@ export default async function plugin(bb: BbPluginApi) {
     bb.log.info(formatAuditLine(line));
   };
   const auditing = () => enforcement !== "off";
+  let selfTest: SelfTestResult | null = null;
+  const pickerStatus = (): PickerStatus => !selfSelectedIdentity ? "off"
+    : selectionPublicOrigin === "" ? "origin-not-configured"
+      : selectionKey === null ? "signing-key-unavailable"
+        : selfTest?.cookie.ok !== true ? "cookie-bridge-unavailable" : "ready";
+  const currentIdentity = (
+    email = requestContext.current()?.email ?? null,
+    selection = requestContext.current()?.selection ?? null,
+  ): ResolvedIdentity => resolveRequester({
+    people, email, selection: pickerStatus() === "ready" ? selection : null, fallbackEmail,
+    verify: (token) => selectionKey === null ? { status: "invalid" }
+      : verifySelection(token, selectionPublicOrigin, selectionKey),
+  });
 
   /**
    * Stream (a): the request stream. The ALS patch sees EVERY http request bb handles —
@@ -662,13 +870,15 @@ export default async function plugin(bb: BbPluginApi) {
    */
   const requestAuditor = new RequestAuditor({ emit: auditLine, now: () => Date.now() });
   const stopObserving = requestContext.observe((facts) => {
+    if (facts.email && facts.email !== SELF_TEST_EMAIL) accessSeen = true;
     if (!auditing()) return;
     requestAuditor.observe({
       id: facts.id,
       method: facts.method,
       url: facts.url,
       email: facts.email,
-      person: summarize(identityFor(people, facts.email, fallbackEmail).person),
+      person: summarize(currentIdentity(facts.email, facts.selection).person),
+      provenance: currentIdentity(facts.email, facts.selection).provenance,
     });
   });
 
@@ -683,28 +893,112 @@ export default async function plugin(bb: BbPluginApi) {
   };
 
   /** Identity of whoever made the current request; unknown outside a request (startup race). */
-  const currentIdentity = (email = requestContext.current()?.email ?? null) => identityFor(people, email, fallbackEmail);
   /** The current requester as attribution wants them: their email plus resolved person. */
   const whoamiPerson = () => {
     const identity = currentIdentity();
-    return { email: identity.email, person: summarize(identity.person), viaFallback: identity.viaFallback };
+    return { email: identity.email, person: summarize(identity.person), viaFallback: identity.viaFallback,
+      provenance: identity.provenance, captureSource: requestContext.current() ? "request" as const : "unknown" as const };
   };
-  const whoamiFor = (email: string | null): WhoAmI => {
-    const identity = currentIdentity(email);
-    return { email: identity.email, person: summarize(identity.person) };
+  const whoamiFor = (email = requestContext.current()?.email ?? null,
+    selection = requestContext.current()?.selection ?? null): WhoAmI => {
+    const identity = currentIdentity(email, selection);
+    return { email: identity.email, person: summarize(identity.person), provenance: identity.provenance,
+      selection: identity.selection,
+      picker: { enabled: pickerStatus() === "ready", status: pickerStatus(),
+        people: people.map(({ person, displayName }) => ({ person, displayName })) } };
   };
 
   const store = new PresenceStore();
+  const selectionCommits = new SelectionCommitStore();
   const publish = (threadIds: Iterable<string>) => {
     bb.realtime.publish("presence-changed", { threadIds: [...threadIds] });
   };
 
   bb.http.route("GET", "/whoami", (c) => {
-    return c.json(whoamiFor(normalizeEmail(c.req.header(ACCESS_EMAIL_HEADER))));
+    c.header("Cache-Control", "no-store");
+    return c.json(whoamiFor(normalizeEmail(c.req.header(ACCESS_EMAIL_HEADER)),
+      readNamedCookie(c.req.header("cookie"), requestContext.cookieName())));
+  }, { auth: "local" });
+
+  const jsonMutation = (c: { req: { header: (name: string) => string | undefined } }) => {
+    return identityMutationAllowed(c.req.header("content-type"), c.req.header("origin"), selectionPublicOrigin);
+  };
+  const logJsonMutationRejection = (c: { req: { header: (name: string) => string | undefined } }, action: "select" | "forget") => {
+    const bounded = (value: string | undefined) => value?.slice(0, 256) ?? null;
+    bb.log.warn(`identity: browser ${action} rejected ${JSON.stringify({
+      origin: bounded(c.req.header("origin")),
+      browserOrigin: bounded(c.req.header("x-identity-browser-origin")),
+      contentType: bounded(c.req.header("content-type")),
+      secFetchSite: bounded(c.req.header("sec-fetch-site")),
+    })}`);
+  };
+  bb.http.route("POST", "/select-identity", async (c) => {
+    if (pickerStatus() !== "ready") return c.json({ ok: false, reason: pickerStatus() }, 409);
+    if (!jsonMutation(c)) {
+      logJsonMutationRejection(c, "select");
+      return c.json({ ok: false, reason: "origin-or-content-type" }, 403);
+    }
+    if (normalizeEmail(c.req.header(ACCESS_EMAIL_HEADER))) return c.json({ ok: false, reason: "upstream-identity" }, 409);
+    const parsed = z.object({ personId: z.string().min(1).max(80) }).strict().safeParse(await c.req.json().catch(() => null));
+    if (!parsed.success) return c.json({ ok: false, reason: "invalid-input" }, 400);
+    if (!people.some((person) => person.person === parsed.data.personId)) return c.json({ ok: false, reason: "not-in-directory" }, 400);
+    const token = mintSelection(parsed.data.personId, selectionPublicOrigin, selectionKey!);
+    c.header("Set-Cookie", selectionCookie(token, selectionPublicOrigin.startsWith("https:"), selectionPublicOrigin));
+    c.header("Cache-Control", "no-store");
+    emitAudit(auditLine, { v: AUDIT_SCHEMA_VERSION, kind: "identity.selection", at: Date.now(),
+      action: "select", person: parsed.data.personId, provenance: "self-selected", ...currentRequestFields() });
+    return c.json({ ok: true, whoami: whoamiFor(null, token) });
+  }, { auth: "local" });
+  bb.http.route("POST", "/forget-identity", (c) => {
+    if (!jsonMutation(c)) {
+      logJsonMutationRejection(c, "forget");
+      return c.json({ ok: false, reason: "origin-or-content-type" }, 403);
+    }
+    c.header("Set-Cookie", selectionCookie(null, selectionPublicOrigin.startsWith("https:"), selectionPublicOrigin));
+    c.header("Cache-Control", "no-store");
+    emitAudit(auditLine, { v: AUDIT_SCHEMA_VERSION, kind: "identity.selection", at: Date.now(),
+      action: "forget", provenance: currentIdentity().provenance, ...currentRequestFields() });
+    return c.json({ ok: true, whoami: whoamiFor(null, null) });
+  }, { auth: "local" });
+  bb.http.route("GET", "/commit-identity", (c) => {
+    const commit = selectionCommits.consume(c.req.query("token") ?? "");
+    if (commit === null) return c.json({ ok: false, reason: "invalid-or-expired-capability" }, 400);
+    if (pickerStatus() !== "ready") return c.json({ ok: false, reason: pickerStatus() }, 409);
+    if (commit.action === "select" && normalizeEmail(c.req.header(ACCESS_EMAIL_HEADER))) {
+      return c.json({ ok: false, reason: "upstream-identity" }, 409);
+    }
+    if (commit.action === "select" && !people.some((person) => person.person === commit.personId)) {
+      return c.json({ ok: false, reason: "not-in-directory" }, 400);
+    }
+    const token = commit.action === "select"
+      ? mintSelection(commit.personId, selectionPublicOrigin, selectionKey!)
+      : null;
+    c.header("Set-Cookie", selectionCookie(token, selectionPublicOrigin.startsWith("https:"), selectionPublicOrigin));
+    c.header("Cache-Control", "no-store");
+    emitAudit(auditLine, { v: AUDIT_SCHEMA_VERSION, kind: "identity.selection", at: Date.now(),
+      action: commit.action, ...(commit.action === "select" ? { person: commit.personId } : {}),
+      provenance: commit.action === "select" ? "self-selected" : currentIdentity().provenance,
+      ...currentRequestFields() });
+    return c.json({ ok: true, whoami: whoamiFor(null, token) });
   }, { auth: "local" });
 
   // ── Attribution (step 3): observe and record who started each thread. ─────────────
   const ledger = new AttributionLedger(bb.storage.kv);
+  const queuedRequesters = new QueuedRequesterLedger(bb.storage.kv);
+  const submissionRequest = () => {
+    const facts = requestContext.current();
+    if (!facts || facts.method?.toUpperCase() !== "POST") return null;
+    if (Date.now() - facts.startedAt > 30_000 || (facts.finishedAt !== undefined && Date.now() - facts.finishedAt > 2_000)) return null;
+    const path = facts.url?.split("?")[0] ?? "";
+    return /^\/api\/v1\/threads(?:\/fork|\/[A-Za-z0-9_-]+\/send)?$/.test(path) ? facts : null;
+  };
+  const sendNowRequest = () => {
+    const facts = requestContext.current();
+    if (!facts || facts.method?.toUpperCase() !== "POST" || Date.now() - facts.startedAt > 30_000) return null;
+    const path = facts.url?.split("?")[0] ?? "";
+    return /^\/api\/v1\/threads\/[A-Za-z0-9_-]+\/queued-messages\/[A-Za-z0-9_-]+\/send$/.test(path)
+      ? facts : null;
+  };
 
   /**
    * The self-test's own route. It reports the email the ASYNC CONTEXT holds — not the
@@ -712,7 +1006,7 @@ export default async function plugin(bb: BbPluginApi) {
    * carrying facts through bb's real server into plugin code in this process.
    */
   bb.http.route("GET", "/request-context-probe", (c) => {
-    return c.json({ email: requestContext.current()?.email ?? null });
+    return c.json({ email: requestContext.current()?.email ?? null, selection: requestContext.current()?.selection ?? null });
   }, { auth: "local" });
 
   /** The boot self-test's verdict, so an operator can read it without digging in logs. */
@@ -727,8 +1021,9 @@ export default async function plugin(bb: BbPluginApi) {
   /**
    * The guardrail (step 5). It refuses only a POSITIVELY IDENTIFIED requester — a known
    * person, or a dispatch bb stamped as the automations plugin — and only while
-   * `restrictStarts` is on. See guardrail.ts for why an identity-less dispatch is always
-   * allowed (S9: that is the shape of every agent path).
+   * `enforcement` is `enforce` (`audit` logs the same verdict). See guardrail.ts for why a
+   * dispatch with no identity and no automations stamp is always allowed (S9: that is the
+   * shape of every agent path).
    *
    * The machine names in a refusal come from memory only: the team-machines setting, and
    * the machine list IF it happens to be warm. A refusal must never wait on the network
@@ -751,7 +1046,23 @@ export default async function plugin(bb: BbPluginApi) {
     attributeDispatch(context, {
       ledger,
       guard,
-      identity: whoamiPerson,
+      identity: async () => {
+        if (context.queuedMessages.length > 0) {
+          const rows = await Promise.all(context.queuedMessages.map((row) => queuedRequesters.lookup(row.id)));
+          const first = rows[0];
+          if (first && rows.every((row, index) => row && row.person?.person === first.person?.person
+            && row.provenance === first.provenance && row.contentDigest !== null
+            && row.contentDigest === digestQueuedContent(context.queuedMessages[index]?.content))) {
+            return { email: first.email, person: first.person, provenance: first.provenance,
+              viaFallback: first.provenance === "configured-fallback", captureSource: "queue-ledger" as const };
+          }
+          return { email: null, person: null, provenance: "unknown" as const, viaFallback: false,
+            captureSource: rows.some((row) => row === null) ? "capture-missing" as const : "queue-content-unknown" as const };
+        }
+        return submissionRequest() ? whoamiPerson() : {
+          email: null, person: null, provenance: "unknown" as const, viaFallback: false, captureSource: "unknown" as const,
+        };
+      },
       now: () => Date.now(),
       // Display-only side effect: every machine bb itself names gets pinned on first
       // sight. `HostPins` never throws and bounds its own storage calls.
@@ -799,24 +1110,44 @@ export default async function plugin(bb: BbPluginApi) {
    */
   for (const event of ["message.queued", "message.dispatched"] as const) {
     bb.events.on(event, ({ entry }) => {
-      if (!auditing()) return;
-      const facts = requestContext.current();
-      const identity = identityFor(people, facts?.email ?? null, fallbackEmail);
-      emitAudit(auditLine, postDispatchAuditLine({
+      const facts = event === "message.queued" ? submissionRequest() : null;
+      const identity = facts ? currentIdentity(facts.email, facts.selection) : null;
+      const triggerFacts = event === "message.dispatched" ? sendNowRequest() : null;
+      const trigger = triggerFacts ? currentIdentity(triggerFacts.email, triggerFacts.selection) : null;
+      if (event === "message.queued" && entry.id && entry.threadId) {
+        void queuedRequesters.record({ v: 1, id: entry.id, threadId: entry.threadId,
+          email: identity?.email ?? null, person: summarize(identity?.person ?? null),
+          provenance: identity?.provenance ?? "unknown", requestId: facts?.id ?? null, capturedAt: Date.now(),
+          contentDigest: digestQueuedContent(entry.content) });
+      }
+      void (async () => {
+        const stored = event === "message.dispatched" && entry.id ? await queuedRequesters.lookup(entry.id) : null;
+        const contentUnchanged = stored ? stored.contentDigest !== null && stored.contentDigest !== undefined
+          && stored.contentDigest === digestQueuedContent(entry.content) : null;
+        if (auditing()) emitAudit(auditLine, postDispatchAuditLine({
         kind: event,
         at: Date.now(),
-        ...currentRequestFields(),
+        requestId: facts?.id ?? triggerFacts?.id ?? null,
+        requestMethod: facts?.method?.toUpperCase() ?? triggerFacts?.method?.toUpperCase() ?? null,
+        requestPath: facts ? normalizeAuditPath(facts.url) : triggerFacts ? normalizeAuditPath(triggerFacts.url) : null,
         mode: enforcement,
         entryId: entry.id ?? null,
         threadId: entry.threadId ?? null,
         senderThreadId: entry.senderThreadId ?? null,
-        // A drain has no request at all, so it has no email either — that is the fact
-        // being reported, not a failure.
-        email: facts === undefined ? null : identity.email,
-        person: facts === undefined ? null : summarize(identity.person),
+        email: event === "message.queued" ? identity?.email ?? null : contentUnchanged ? stored?.email ?? null : null,
+        person: event === "message.queued" ? summarize(identity?.person ?? null) : contentUnchanged ? stored?.person ?? null : null,
+        provenance: event === "message.queued" ? identity?.provenance ?? "unknown" : contentUnchanged ? stored?.provenance ?? "unknown" : "unknown",
+        captureSource: event === "message.queued" ? facts ? "request" : "capture-missing"
+          : stored ? contentUnchanged ? "queue-ledger" : "queue-content-unknown" : "capture-missing",
+        ...(event === "message.dispatched" ? { triggerPerson: summarize(trigger?.person ?? null),
+          triggerProvenance: trigger?.provenance ?? "unknown", contentUnchanged } : {}),
       }));
+        if (event === "message.dispatched" && entry.id) await queuedRequesters.forget(entry.id);
+      })().catch(() => undefined);
     });
   }
+  bb.events.on("message.cancelled", ({ entry }) => { void queuedRequesters.forget(entry.id); });
+  bb.events.on("thread.deleted", ({ thread }) => { void queuedRequesters.forgetThread(thread.id); });
 
   /**
    * Log a colour change: who changed whose, from and to.
@@ -829,15 +1160,22 @@ export default async function plugin(bb: BbPluginApi) {
    *
    * A refused write logs nothing: nothing changed, so there is nothing to account for.
    */
-  const auditColorChange = (written: { ok: boolean; person: string; from?: string | null; to?: string | null }) => {
-    if (!written.ok) return;
+  /** Who is making an admin change right now, as the colour/settings/pin lines name them. */
+  const adminActor = () => {
     const identity = currentIdentity();
-    emitAudit(auditLine, colorChangeAuditLine({
+    return {
       at: Date.now(),
       ...currentRequestFields(),
       mode: enforcement,
       by: summarize(identity.person),
       byEmail: identity.email,
+      byProvenance: identity.provenance,
+    };
+  };
+  const auditColorChange = (written: { ok: boolean; person: string; from?: string | null; to?: string | null }) => {
+    if (!written.ok) return;
+    emitAudit(auditLine, colorChangeAuditLine({
+      ...adminActor(),
       subject: written.person,
       from: written.from ?? null,
       to: written.to ?? null,
@@ -907,7 +1245,6 @@ export default async function plugin(bb: BbPluginApi) {
    * A failure degrades Identity to "no identity": everything attributes as unknown, and
    * no dispatch is affected, because the hook always proceeds.
    */
-  let selfTest: SelfTestResult | null = null;
   const probe = async (headers: Record<string, string>): Promise<unknown> => {
     const response = await fetch(`${bb.server.loopbackBaseUrl}/api/v1/plugins/${bb.pluginId}/http/request-context-probe`, {
       headers,
@@ -915,18 +1252,29 @@ export default async function plugin(bb: BbPluginApi) {
     if (!response.ok) throw new Error(`probe route answered ${response.status}`);
     return await response.json();
   };
-  const runSelfTest = async (attemptsLeft: number): Promise<void> => {
+  /**
+   * Bumped by an operator's re-run and by dispose: a run from an older generation (the
+   * boot run whose probe is still in flight) drops its result and schedules no retry, so
+   * the re-run stays the one run and its result is the one that stands.
+   */
+  let selfTestGeneration = 0;
+  const runSelfTest = async (attemptsLeft: number, generation = selfTestGeneration): Promise<void> => {
+    let result: SelfTestResult;
     try {
-      selfTest = await selfTestRequestContext(requestContext, { probe });
+      result = await selfTestRequestContext(requestContext, { probe });
     } catch (error) {
-      selfTest = { ok: false, detail: `the self-test could not run: ${(error as Error).message}` };
+      result = { ok: false, detail: `the self-test could not run: ${(error as Error).message}`,
+        cookie: { ok: false, detail: "probe unavailable" } };
     }
+    if (generation !== selfTestGeneration) return;
+    selfTest = result;
     if (!selfTest.ok && attemptsLeft > 0) {
-      selfTestTimer = setTimeout(() => void runSelfTest(attemptsLeft - 1), 1_000);
+      selfTestTimer = setTimeout(() => void runSelfTest(attemptsLeft - 1, generation), 1_000);
       return;
     }
     if (selfTest.ok) {
       bb.log.info(`identity: request-context self-test PASSED — ${selfTest.detail}`);
+      if (!selfTest.cookie.ok) bb.log.warn(`identity: cookie bridge FAILED — ${selfTest.cookie.detail}; self-selected attribution disabled`);
       return;
     }
     bb.log.warn(
@@ -935,9 +1283,86 @@ export default async function plugin(bb: BbPluginApi) {
     );
   };
   let selfTestTimer: ReturnType<typeof setTimeout> | undefined = setTimeout(() => void runSelfTest(5), 500);
+  /** An operator's re-run, shared by every caller that asks while it is in flight. */
+  let selfTestRun: Promise<SelfTestResult> | null = null;
+  const rerunSelfTest = (): Promise<SelfTestResult> => {
+    if (selfTestRun !== null) return selfTestRun;
+    if (selfTestTimer !== undefined) clearTimeout(selfTestTimer);
+    selfTestTimer = undefined;
+    selfTestGeneration += 1;
+    selfTestRun = runSelfTest(0).then(() => selfTest!).finally(() => { selfTestRun = null; });
+    return selfTestRun;
+  };
+
+  // ── The settings section (2026-09-26): read the whole picture, write what it owns. ──
+  const WRITABLE_DEFAULTS: WritableSettings = {
+    teamMachines: "",
+    sharedMachineUser: "ensembleworks-agent",
+    enforcement: "off",
+    fallbackEmail: "",
+    selfSelectedIdentity: false,
+    selectionPublicOrigin: "",
+  };
+  const WRITABLE_KEYS = Object.keys(WRITABLE_DEFAULTS) as Array<keyof WritableSettings>;
+  const adminFacts = async (): Promise<AdminFacts & { stored: WritableSettings }> => {
+    const current = await settings.get();
+    const listed = await machines();
+    const email = requestContext.current()?.email ?? null;
+    return {
+      stored: {
+        teamMachines: current.teamMachines,
+        sharedMachineUser: current.sharedMachineUser,
+        enforcement: parseEnforcement(current.enforcement),
+        fallbackEmail: current.fallbackEmail,
+        selfSelectedIdentity: current.selfSelectedIdentity,
+        selectionPublicOrigin: current.selectionPublicOrigin,
+      },
+      directoryError,
+      people,
+      teamMachines,
+      machines: listed.machines,
+      machinesUnavailable: listed.unavailable,
+      enforcement,
+      fallbackEmail,
+      selfSelectedIdentity,
+      selectionPublicOrigin: current.selectionPublicOrigin,
+      signingKey: signingKeyStatus,
+      pickerStatus: pickerStatus(),
+      selfTest,
+      accessSeen: accessSeen || (email !== null && email !== SELF_TEST_EMAIL),
+    };
+  };
+  const ledgerFill = async (): Promise<LedgerFill> => ({
+    starters: { count: await ledger.count(), max: MAX_STARTER_RECORDS },
+    queued: { count: await queuedRequesters.count(), max: MAX_QUEUED_REQUESTERS },
+  });
+  /**
+   * Re-read and re-apply at once, rather than trusting `onChange` to have run by now. It
+   * runs after a write has already landed, so a failed read is reported, never thrown:
+   * the write stands, and `onChange` still applies it.
+   */
+  const reapply = async () => {
+    try {
+      applySettings(await settings.get(), false);
+    } catch (error) {
+      bb.log.warn(`identity: a settings write landed but re-reading the settings failed: ${(error as Error).message}`);
+    }
+  };
 
   bb.rpc.register(rpcContract, {
     identity_whoami: () => whoamiFor(requestContext.current()?.email ?? null),
+    identity_prepare_selection: (input) => {
+      if (pickerStatus() !== "ready") return { ok: false as const, reason: pickerStatus() };
+      if (input.action === "select" && normalizeEmail(requestContext.current()?.email)) {
+        return { ok: false as const, reason: "upstream-identity" };
+      }
+      if (input.action === "select" && !people.some((person) => person.person === input.personId)) {
+        return { ok: false as const, reason: "not-in-directory" };
+      }
+      const token = selectionCommits.issue(input);
+      return { ok: true as const,
+        url: `/api/v1/plugins/identity/http/commit-identity?token=${encodeURIComponent(token)}` };
+    },
     identity_thread_starter: async ({ threadId: wanted }) => publicStarter(await ledger.get(wanted)),
     identity_thread_ownership: async ({ threadIds }) => ({
       threads: await Promise.all(threadIds.map((wanted) => ownership(wanted))),
@@ -948,7 +1373,8 @@ export default async function plugin(bb: BbPluginApi) {
       const listed = await machines();
       return publicMachineList({
         me: whoamiFor(requestContext.current()?.email ?? null).person,
-        meViaFallback: currentIdentity().viaFallback,
+        meViaFallback: currentIdentity().provenance !== "upstream-header",
+        meProvenance: currentIdentity().provenance,
         roster: people.map((entry) => entry.person),
         // The chosen colours ride along, so the sidebar's badge and row tint paint the
         // override wherever there is one without a second call.
@@ -969,7 +1395,7 @@ export default async function plugin(bb: BbPluginApi) {
       const identity = currentIdentity();
       return publicRoster({
         me: summarize(identity.person),
-        meViaFallback: identity.viaFallback,
+        meViaFallback: identity.provenance !== "upstream-header",
         people,
         overrides: await colors.all(),
         machines: listed.machines,
@@ -987,8 +1413,96 @@ export default async function plugin(bb: BbPluginApi) {
       auditColorChange(written);
       return written;
     },
+    identity_settings_overview: async () => {
+      const { stored, ...facts } = await adminFacts();
+      const lint = lintConfig(facts);
+      return {
+        settings: { ...stored, signingKey: signingKeyStatus },
+        directory: { ok: directoryError === null, error: directoryError, people: people.length },
+        firstRun: people.length === 0 && WRITABLE_KEYS.every((key) => stored[key] === WRITABLE_DEFAULTS[key]),
+        accessSeen: facts.accessSeen,
+        pickerStatus: facts.pickerStatus,
+        selfTest,
+        ledgers: await ledgerFill(),
+        conflicts: facts.machines.filter((machine) => machine.conflict !== null).length,
+        enforceRisks: enforceRisks(facts),
+        readiness: readiness(facts, lint),
+        lint,
+        auditCommand: AUDIT_JQ_COMMAND,
+      };
+    },
+    identity_update_settings: async (input) => {
+      const verdict = checkSettingsPatch(input, { enforcement });
+      if (!verdict.ok) return verdict;
+      const current = await settings.get();
+      const changes: SettingsChange[] = [];
+      for (const key of WRITABLE_KEYS) {
+        const to = verdict.values[key];
+        if (to !== undefined && to !== current[key]) changes.push({ key, from: current[key], to });
+      }
+      if (changes.length === 0) return { ok: true as const, changed: [] };
+      // Who asked, captured before the write: a new fallback email or picker setting
+      // would otherwise re-resolve the caller as someone they were not.
+      const actor = adminActor();
+      try {
+        await settings.experimental_set(Object.fromEntries(changes.map(({ key, to }) => [key, to])));
+      } catch (error) {
+        bb.log.warn(`identity: a settings write failed: ${(error as Error).message}`);
+        return { ok: false as const, reason: "write-failed" };
+      }
+      emitAudit(auditLine, settingsChangeAuditLine({ ...actor, mode: verdict.values.enforcement ?? actor.mode, changes }));
+      await reapply();
+      return { ok: true as const, changed: changes.map(({ key }) => key) };
+    },
+    identity_rotate_signing_key: async () => {
+      // Captured first: the rotation expires the very selection that names the caller.
+      const actor = adminActor();
+      try {
+        await settings.experimental_set({ selectionSigningKey: randomBytes(32).toString("base64url") });
+      } catch (error) {
+        bb.log.warn(`identity: rotating the signing key failed: ${(error as Error).message}`);
+        return { ok: false as const, reason: "write-failed" };
+      }
+      emitAudit(auditLine, settingsChangeAuditLine({ ...actor,
+        changes: [{ key: "selectionSigningKey", from: "[secret]", to: "[rotated]" }] }));
+      await reapply();
+      return { ok: true as const };
+    },
+    identity_resolve_pin: async ({ hostId, action, person: wanted }) => {
+      const find = async () => {
+        machineCache = null;
+        return (await machines()).machines.find((machine) => machine.hostId === hostId) ?? null;
+      };
+      const found = await find();
+      if (found === null) return { ok: false as const, reason: "unknown-host" as const };
+      const host = { id: found.hostId, name: found.hostName };
+      const before = await pins.get(hostId);
+      let to: string | null;
+      if (action === "repin") {
+        const person = wanted ?? personFromHostName(host.name, people)?.person;
+        if (person === undefined) return { ok: false as const, reason: "no-person" as const };
+        if (!people.some((entry) => entry.person === person)) return { ok: false as const, reason: "not-in-directory" as const };
+        if (await pins.repin(host, person) === null) return { ok: false as const, reason: "write-failed" as const };
+        to = person;
+      } else {
+        if (before === null) return { ok: false as const, reason: "no-pin" as const };
+        const written = action === "keep" ? await pins.keep(host) !== null : await pins.unpin(hostId);
+        if (!written) return { ok: false as const, reason: "write-failed" as const };
+        to = action === "keep" ? before.person : null;
+      }
+      const machine = await find();
+      emitAudit(auditLine, pinChangeAuditLine({ ...adminActor(), hostId, hostName: host.name, action,
+        from: before?.person ?? null, to }));
+      return { ok: true as const, machine };
+    },
+    identity_rerun_self_test: async () => ({ selfTest: await rerunSelfTest(), pickerStatus: pickerStatus() }),
+    identity_diagnostics: async () => {
+      const { stored: _stored, ...facts } = await adminFacts();
+      return { text: redactDiagnostics({ ...facts, generatedAt: Date.now(), ledgers: await ledgerFill(),
+        sharedMachineUser, lint: lintConfig(facts) }) };
+    },
     presence_heartbeat: ({ tabId, viewerId, location }) => {
-      const person = summarize(currentIdentity().person);
+      const person = summarizePresence(currentIdentity());
       const affected = store.heartbeat(tabId, viewerId, location, Date.now(), person);
       if (affected.size > 0) publish(affected);
       return { ok: true } as const;
@@ -999,7 +1513,7 @@ export default async function plugin(bb: BbPluginApi) {
       return { ok: true } as const;
     },
     presence_typing: ({ tabId, viewerId, threadId, active }) => {
-      const person = summarize(currentIdentity().person);
+      const person = summarizePresence(currentIdentity());
       store.setTyping(tabId, viewerId ?? `legacy:${tabId}`, threadId, active, Date.now(), person);
       publish([threadId]);
       return { ok: true } as const;
@@ -1016,6 +1530,7 @@ export default async function plugin(bb: BbPluginApi) {
     // otherwise lose the counters gathered since the last one.
     requestAuditor.flush();
     if (selfTestTimer !== undefined) clearTimeout(selfTestTimer);
+    selfTestGeneration += 1;
     // Deliberately NOT unpatching the request context: bb disposes the old generation
     // after the new one has loaded, so restoring `emit` here would remove the live
     // patch (S7, lesson 1).

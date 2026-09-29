@@ -40,6 +40,7 @@ function mintBindingId(editor: Editor, j: number): string {
 // id set, which would select re-parented children too (D-6: "selection
 // after paste/duplicate = the new ROOT ids").
 function assembleIntents(clone: { shapes: Shape[]; bindings: Binding[]; rootIds: readonly string[] }): Intent[] {
+  if (clone.shapes.length === 0) return []
   return [
     ...clone.shapes.map((shape): Intent => ({ type: 'CreateShape', shape })),
     ...clone.bindings.map((binding): Intent => ({ type: 'PutBinding', binding })),

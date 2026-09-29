@@ -110,14 +110,14 @@ export type GestureOp =
  * the FSM runner seeds the doc directly, the browser runner seeds via
  * window.__ew.doc.putShape (lib/canvas-v2.ts's seedGrid pattern). */
 export interface SceneShape {
+  /** Extra stored fixture props; artifact history is seeded via the test-only raw helper. */
+  readonly props?: Readonly<Record<string, unknown>>
   readonly id: string
   readonly kind: string
   readonly x: number
   readonly y: number
   readonly w: number
   readonly h: number
-  /** Extra identity props for shapes whose schema requires them. */
-  readonly props?: Readonly<Record<string, string | number | boolean>>
   /** Optional parent — the id of ANOTHER scene shape this one is seeded
    * UNDER (its x/y are then that parent's LOCAL coordinates, exactly as in
    * the doc), defaulting to the scene's page when absent. frame-membership

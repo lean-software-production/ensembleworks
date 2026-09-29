@@ -82,13 +82,13 @@ export function buildRoster(input: {
 /**
  * The exact limit of what a seen-state answer means.
  *
- * Identity can only answer from the attribution records it still holds — the newest 2000
- * — plus everything it has recorded since seen-state shipped. It cannot know whether
+ * Identity can only answer from the attribution records it still holds — the newest 2000,
+ * swept once — plus the sightings it has kept since seen-state shipped, which outlive them. It cannot know whether
  * someone used this server before Identity was installed, or before their oldest retained
  * thread. So the UI says the narrow, true thing and never the broad, false one.
  */
 export const SEEN_UNKNOWN_CAVEAT =
-  "Identity can only answer from the attribution records it retains (the 2000 most recent threads), "
+  "Identity answers from the thread records it retains and the sightings it has kept since Seen tracking began, "
   + "so this means \"no thread of theirs is on record\", not that they have not used this server.";
 
 export function seenPhrase(seen: boolean): string {

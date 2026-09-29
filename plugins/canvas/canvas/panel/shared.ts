@@ -112,11 +112,14 @@ export function delay(ms: number): Promise<void> {
   return ms > 0 ? new Promise((resolve) => setTimeout(resolve, ms)) : Promise.resolve();
 }
 
+/** `canvas_join`'s input. Always carries this bundle's schema version: the
+ * backend refuses a join without it (see CANVAS_SCHEMA_VERSION). */
 export function joinInput(
   clientId: string,
   name: string | null,
 ): { clientId: string; name?: string; schemaVersion: number } {
-  return name === null ? { clientId, schemaVersion: CANVAS_SCHEMA_VERSION } : { clientId, name, schemaVersion: CANVAS_SCHEMA_VERSION };
+  const schemaVersion = CANVAS_SCHEMA_VERSION;
+  return name === null ? { clientId, schemaVersion } : { clientId, name, schemaVersion };
 }
 
 export function canvasDebugEnabled(): boolean {

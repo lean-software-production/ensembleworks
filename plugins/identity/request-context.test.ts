@@ -7,6 +7,7 @@ import {
   selfTestRequestContext,
   type SelfTestResult,
 } from "./request-context.js";
+import { SELECTION_COOKIE } from "./selection.js";
 
 const context = installRequestContext();
 let server: http.Server;
@@ -47,8 +48,8 @@ describe("installRequestContext", () => {
     const savedContext = globals[key];
     const savedEmit = http.Server.prototype.emit;
     try {
-      // A hypothetical future shape: has observe(), but is a version behind.
-      const stale = { version: REQUEST_CONTEXT_VERSION - 1, current: () => undefined, observe: () => () => undefined };
+      // The deployed audit shape (v2) has observe(), but lacks cookie capture.
+      const stale = { version: 2, current: () => undefined, observe: () => () => undefined };
       globals[key] = stale;
       const migrated = installRequestContext();
       expect(migrated).not.toBe(stale);
@@ -125,6 +126,25 @@ describe("installRequestContext", () => {
     for (const id of ids) expect(id).toMatch(/^[0-9a-z]+-[0-9a-z]+$/);
   });
 
+  it("keeps two simultaneous browser selections isolated", async () => {
+    gate = new Promise<void>((resolve) => { releaseGate = resolve; });
+    const pending = ["a", "b"].map((value) => get(`/selection-${value}`, {
+      cookie: `${SELECTION_COOKIE}=${value}`,
+    }));
+    await new Promise((resolve) => setTimeout(resolve, 25));
+    releaseGate();
+    expect(await Promise.all(pending)).toMatchObject([{ selection: "a" }, { selection: "b" }]);
+  });
+  it("captures only the configured origin's cookie after a name change", async () => {
+    gate = Promise.resolve();
+    const previous = context.cookieName();
+    context.setCookieName(`${SELECTION_COOKIE}-abcdef123456`);
+    try {
+      expect(await get("/port", { cookie: `${SELECTION_COOKIE}=old; ${context.cookieName()}=new` }))
+        .toMatchObject({ selection: "new" });
+    } finally { context.setCookieName(previous); }
+  });
+
   it("records a null email when the header is absent or empty", async () => {
     gate = Promise.resolve();
     expect(await get("/none")).toMatchObject({ email: null, method: "GET", url: "/none" });
@@ -148,10 +168,18 @@ describe("installRequestContext", () => {
 });
 
 describe("selfTestRequestContext", () => {
+  it("reports a broken cookie leg separately while keeping upstream live", async () => {
+    const result = await selfTestRequestContext(context, {
+      probe: async (headers) => "cookie" in headers ? { selection: null } : { email: "identity-self-test@localhost.invalid" },
+    });
+    expect(result.ok).toBe(true);
+    expect(result.cookie.ok).toBe(false);
+  });
   it("passes when the patch is live and the store reaches the handler", async () => {
     gate = Promise.resolve();
     const result = await selfTestRequestContext(context, { probe: (headers) => get("/self-test", headers) });
-    expect(result).toEqual({ ok: true, detail: "request context is live (probe saw its own tagged email)" });
+    expect(result).toEqual({ ok: true, detail: "request context is live (probe saw its own tagged email)",
+      cookie: { ok: true, detail: "named cookie reached request context" } });
   });
 
   it("fails, without throwing, when the live emit patch is not ours", async () => {

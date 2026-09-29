@@ -3,6 +3,7 @@
 // Registration = adding a declaration to CONTRACTS below (no mutable global —
 // the array is the registry). Pilots append their declarations here.
 export * from './types.js'
+import { cutPreservesArtifacts } from './contracts/cut-preserves-artifacts.js'
 import type { Contract } from './types.js'
 import { armedStyleAppliesToCreatedShape } from './contracts/armed-style-applies-to-created-shape.js'
 import { githubIssueCardResizeReadable } from './contracts/github-issue-card-resize-readable.js'
@@ -66,6 +67,7 @@ import { toolShortcutSwitchesAndArmsTool } from './contracts/tool-shortcut-switc
 export const CONTRACTS: readonly Contract[] = [
   githubIssueCardResizeReadable,
   unlinkedGithubIssueCardResize,
+  cutPreservesArtifacts,
   // Pilot declarations are added here, one per phase (B–F).
   scrollDirection,
   cursorLock,

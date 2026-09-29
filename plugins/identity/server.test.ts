@@ -120,6 +120,13 @@ describe("PresenceStore", () => {
       expect([...store.heartbeat("tab", "viewer", here, 3_000, matt)]).toEqual(["t"]);
       expect(store.thread("t", "local", 3_000).people).toEqual([{ ...matt, typing: false }]);
     });
+    it("keeps presence source visible and marks mixed sources honestly", () => {
+      const store = new PresenceStore();
+      store.heartbeat("selected", "viewer-a", here, 1_000, { ...matt, provenance: "self-selected" });
+      expect(store.thread("t", "local", 1_000).people[0]?.provenance).toBe("self-selected");
+      store.heartbeat("upstream", "viewer-b", here, 1_001, { ...matt, provenance: "upstream-header" });
+      expect(store.thread("t", "local", 1_001).people[0]?.provenance).toBe("mixed");
+    });
   });
 });
 

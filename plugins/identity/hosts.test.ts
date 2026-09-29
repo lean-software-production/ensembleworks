@@ -3,6 +3,7 @@ import {
   HostPins,
   classifyHost,
   decidePin,
+  hostPinSchema,
   parseTeamMachines,
   personFromHostName,
   type HostPin,
@@ -149,6 +150,16 @@ describe("classifyHost", () => {
     const pin: HostPin = { hostId: "h4", person: "mattwynne", name: "ew-lsp-001-mattwynne", pinnedAt: 1 };
     expect(classifyHost({ id: "h4", name: "ew-lsp-001-main" }, { people, teamMachines: team, pin }).kind).toBe("team");
   });
+
+  it("stays quiet about a disagreement an operator kept, only while the name still equals it", () => {
+    const pin: HostPin = {
+      hostId: "h1", person: "mrdavidlaing", name: "ew-lsp-001-mrdavidlaing", pinnedAt: 1, keptName: "ew-lsp-001-mattwynne",
+    };
+    expect(classifyHost({ id: "h1", name: "ew-lsp-001-mattwynne" }, { people, teamMachines: team, pin }).conflict)
+      .toBeNull();
+    expect(classifyHost({ id: "h1", name: "ew-lsp-001-other" }, { people, teamMachines: team, pin }).conflict)
+      .toEqual({ pinnedName: "ew-lsp-001-mrdavidlaing", pinnedPerson: "mrdavidlaing", currentName: "ew-lsp-001-other" });
+  });
 });
 
 describe("decidePin", () => {
@@ -220,5 +231,99 @@ describe("HostPins", () => {
     };
     const pins = new HostPins(wedged, people, { timeoutMs: 5 });
     expect(await pins.get("h1")).toBeNull();
+  });
+});
+
+describe("hostPinSchema", () => {
+  it("still parses a pin written before keptName existed", () => {
+    const old = { hostId: "h1", person: "mrdavidlaing", name: "ew-lsp-001-mrdavidlaing", pinnedAt: 1 };
+    expect(hostPinSchema.parse(old)).toEqual(old);
+  });
+});
+
+describe("HostPins operator actions", () => {
+  const davids = { id: "h1", name: "ew-lsp-001-mrdavidlaing" };
+  const renamed = { id: "h1", name: "ew-lsp-001-mattwynne" };
+
+  async function conflicted(store = kv()) {
+    const pins = new HostPins(store, people);
+    await pins.observe(davids, 5);
+    await pins.observe(renamed, 6);
+    expect(pins.conflicts()).toHaveLength(1);
+    return { store, pins };
+  }
+
+  it("keep records the current name and silences the conflict until the next rename", async () => {
+    const { store, pins } = await conflicted();
+    expect(await pins.keep(renamed)).toEqual({
+      hostId: "h1", person: "mrdavidlaing", name: "ew-lsp-001-mrdavidlaing", pinnedAt: 5, keptName: "ew-lsp-001-mattwynne",
+    });
+    expect(pins.conflicts()).toEqual([]);
+    expect(store.data.get("identity/host-pin/v1/h1")).toMatchObject({ keptName: "ew-lsp-001-mattwynne" });
+    await pins.observe(renamed, 7);
+    expect(pins.conflicts()).toEqual([]);
+    await pins.observe({ id: "h1", name: "ew-lsp-001-other" }, 8);
+    expect(pins.conflicts()).toEqual([
+      { pinnedName: "ew-lsp-001-mrdavidlaing", pinnedPerson: "mrdavidlaing", currentName: "ew-lsp-001-other" },
+    ]);
+  });
+
+  it("keep needs a pin", async () => {
+    const pins = new HostPins(kv(), people);
+    expect(await pins.keep({ id: "h2", name: "ew-scratch-002" })).toBeNull();
+  });
+
+  it("repin moves the pin to a directory person under the current name, without keptName", async () => {
+    const { store, pins } = await conflicted();
+    expect(await pins.repin(renamed, "mattwynne", 9)).toEqual({
+      hostId: "h1", person: "mattwynne", name: "ew-lsp-001-mattwynne", pinnedAt: 9,
+    });
+    expect(store.data.get("identity/host-pin/v1/h1")).toEqual({
+      hostId: "h1", person: "mattwynne", name: "ew-lsp-001-mattwynne", pinnedAt: 9,
+    });
+    expect(pins.conflicts()).toEqual([]);
+    expect((await pins.get("h1"))?.person).toBe("mattwynne");
+  });
+
+  it("repin refuses a person who is not in the directory", async () => {
+    const { store, pins } = await conflicted();
+    expect(await pins.repin(renamed, "stranger", 9)).toBeNull();
+    expect((store.data.get("identity/host-pin/v1/h1") as HostPin).person).toBe("mrdavidlaing");
+  });
+
+  it("unpin forgets the pin, so the next observe re-derives from the name", async () => {
+    const { store, pins } = await conflicted();
+    expect(await pins.unpin("h1")).toBe(true);
+    expect(store.data.has("identity/host-pin/v1/h1")).toBe(false);
+    expect(pins.conflicts()).toEqual([]);
+    expect(await pins.get("h1")).toBeNull();
+    expect((await pins.observe(renamed, 10))?.person).toBe("mattwynne");
+    expect(pins.conflicts()).toEqual([]);
+  });
+
+  it("never throws when storage rejects writes", async () => {
+    const store = kv();
+    const { pins } = await conflicted(store);
+    store.set = async () => {
+      throw new Error("kv down");
+    };
+    store.delete = async () => {
+      throw new Error("kv down");
+    };
+    expect(await pins.keep(renamed)).toBeNull();
+    expect(await pins.repin(renamed, "mattwynne", 9)).toBeNull();
+    expect(await pins.unpin("h1")).toBe(false);
+    expect((await pins.get("h1"))?.person).toBe("mrdavidlaing");
+  });
+
+  it("gives up rather than hanging when storage never answers a write", async () => {
+    const store = kv();
+    const pins = new HostPins(store, people, { timeoutMs: 5 });
+    await pins.observe(davids, 5);
+    store.set = () => new Promise(() => undefined);
+    store.delete = () => new Promise(() => undefined);
+    expect(await pins.keep(renamed)).toBeNull();
+    expect(await pins.repin(renamed, "mattwynne", 9)).toBeNull();
+    expect(await pins.unpin("h1")).toBe(false);
   });
 });

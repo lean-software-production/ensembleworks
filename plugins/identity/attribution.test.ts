@@ -12,6 +12,7 @@ import {
   attributeDispatch,
   HOOK_BUDGET_MS,
   SDK_HOOK_DECISION_CEILING_MS,
+  starterRecordSchema,
 } from "./attribution.js";
 
 const matt: StarterSummary = { person: "mattwynne", displayName: "Matt", github: "mattwynne" };
@@ -168,6 +169,15 @@ class FakeKv implements KvLike {
 }
 
 describe("AttributionLedger", () => {
+  it("keeps access rows readable by the previous strict schema; weak rows cannot claim legacy ownership", () => {
+    const oldSchema = starterRecordSchema.omit({ provenance: true }).strict();
+    const access = facts({ threadId: "thr_access", email: "matt@example.com", person: matt,
+      provenance: "upstream-header" });
+    const accessRow = decideAttribution(access, () => null);
+    expect(oldSchema.safeParse(accessRow).success).toBe(true);
+    const weak = decideAttribution({ ...access, email: null, provenance: "self-selected" }, () => null);
+    expect(oldSchema.safeParse(weak).success).toBe(false);
+  });
   let kv: FakeKv;
   let ledger: AttributionLedger;
 
@@ -263,6 +273,8 @@ describe("factsFromDispatch", () => {
       email: "david@example.com",
       person: david,
       viaFallback: false,
+      provenance: "upstream-header",
+      captureSource: "unknown",
       origin: "cli",
       originPluginId: null,
       lineage: ["thr_sender", "thr_queued_sender", "thr_hook_parent", "thr_fork_source"],
@@ -637,5 +649,42 @@ describe("AttributionLedger.starterSweep", () => {
       list: () => Promise.reject(new Error("kv is broken")),
     };
     expect(await new AttributionLedger(broken).starterSweep()).toEqual([]);
+  });
+});
+
+describe("AttributionLedger.count", () => {
+  it("answers how many records the index holds, from one index read", async () => {
+    const kv = new FakeKv();
+    const ledger = new AttributionLedger(kv);
+    await ledger.record(record({ threadId: "thr_1" }));
+    await ledger.record(record({ threadId: "thr_2" }));
+    const get = vi.spyOn(kv, "get");
+    expect(await ledger.count()).toBe(2);
+    expect(get).toHaveBeenCalledTimes(1);
+    expect(get).toHaveBeenCalledWith("identity/starter/v1/index");
+  });
+
+  it("answers zero for an empty ledger", async () => {
+    expect(await new AttributionLedger(new FakeKv()).count()).toBe(0);
+  });
+
+  it("answers null rather than throwing when the index cannot be read", async () => {
+    const broken: KvLike = {
+      get: () => Promise.reject(new Error("kv is broken")),
+      set: () => Promise.reject(new Error("kv is broken")),
+      delete: () => Promise.reject(new Error("kv is broken")),
+      list: () => Promise.reject(new Error("kv is broken")),
+    };
+    expect(await new AttributionLedger(broken).count()).toBeNull();
+  });
+
+  it("answers null rather than hanging when storage never answers", async () => {
+    const wedged: KvLike = {
+      get: () => new Promise(() => undefined),
+      set: () => new Promise(() => undefined),
+      delete: () => new Promise(() => undefined),
+      list: () => new Promise(() => undefined),
+    };
+    expect(await new AttributionLedger(wedged, { timeoutMs: 5 }).count()).toBeNull();
   });
 });
