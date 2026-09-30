@@ -70,6 +70,12 @@ async function seedScene(page: Page, contract: Contract): Promise<void> {
   if (shapes.length === 0) return
   await page.evaluate((shapes) => {
     const ew = (window as any).__ew
+    const hasArtifacts = shapes.some((s: { kind: string }) => s.kind === 'artifact')
+    // Raw fixture writes happen in a throwaway peer, then the live reader
+    // imports its history. Re-importing the live doc's own snapshot would
+    // be a no-op and would NOT mark these ids as imported history.
+    const doc = hasArtifacts ? ew.doc.constructor.create({ peerId: 999n }) : ew.doc
+    if (hasArtifacts) doc.putPage({ id: ew.editor.pageId, name: 'Fixture' })
     for (const s of shapes) {
       // SceneShape.parentId (frame-membership task) — seed this shape UNDER
       // another scene shape when it declares one (its x/y are then that
@@ -79,15 +85,19 @@ async function seedScene(page: Page, contract: Contract): Promise<void> {
       // in-array-order pass sufficient: a child seeded before its parent
       // would land at the root instead of failing loudly.
       // Fixture stored history, not a Release N authoring path.
-      const put = s.kind === 'artifact' ? ew.doc.putShapeUnchecked.bind(ew.doc) : ew.doc.putShape.bind(ew.doc)
+      const put = s.kind === 'artifact' ? doc.putShapeUnchecked.bind(doc) : doc.putShape.bind(doc)
       put({
         id: s.id, kind: s.kind, parentId: s.parentId ?? ew.editor.pageId, index: 'a1',
         x: s.x, y: s.y, rotation: 0, isLocked: false, opacity: 1, meta: {},
         props: { ...s.props, w: s.w, h: s.h },
       })
-      ew.doc.setText(s.id, `text for ${s.id}`)
+      doc.setText(s.id, `text for ${s.id}`)
     }
-    ew.doc.commit()
+    doc.commit()
+    if (hasArtifacts) {
+      ew.doc.import(doc.exportUpdate())
+      ew.doc.commit()
+    }
   }, shapes as any)
   await waitForShapesVisible(page, shapes)
 }
@@ -418,12 +428,24 @@ async function sampleShapeParents(page: Page, shapeIds: readonly string[]): Prom
   }, shapeIds)
 }
 
+async function sampleWorldRect(page: Page) {
+  const box = await viewportBox(page)
+  const camera = await page.evaluate(() => (window as any).__ew.editor.get().camera as { x: number; y: number; z: number })
+  return {
+    minX: -camera.x, minY: -camera.y,
+    maxX: box.width / camera.z - camera.x, maxY: box.height / camera.z - camera.y,
+  }
+}
+
 /** One actor's pre-sampled observation values — see `pageObs`'s doc comment
  * for why these must be sampled BEFORE `contract.check` runs rather than
  * read lazily from inside an `Obs` method. */
 interface ActorSample {
   readonly spans: number
   readonly editingShape: string | null
+  readonly positions: Readonly<Record<string, { x: number; y: number } | null>>
+  readonly editingState: { id: string | null; region: 'body' | 'name' | null }
+  readonly worldRect: { minX: number; minY: number; maxX: number; maxY: number }
   readonly editingIndicators: Readonly<Record<string, boolean>>
   readonly styles: Readonly<Record<string, { readonly opacity: number; readonly props: Readonly<Record<string, unknown>> } | null>>
   readonly texts: Readonly<Record<string, string | null>>
@@ -454,6 +476,11 @@ async function sampleActor(page: Page, sceneShapeIds: readonly string[]): Promis
   await nextFrame(page)
   const spans = await sampleTextSelectionSpans(page)
   const editingShape = await sampleEditingShape(page)
+  const editingState = await page.evaluate(() => {
+    const s = (window as any).__ew.editor.get()
+    return { id: s.editingId, region: s.editingRegion }
+  })
+  const worldRect = await sampleWorldRect(page)
   const editingIndicators = await samplePeerEditingIndicators(page, sceneShapeIds)
   const selection = await sampleSelection(page)
   // Task AS4: `shapeStyle` must also answer for a shape `check` discovers
@@ -467,6 +494,13 @@ async function sampleActor(page: Page, sceneShapeIds: readonly string[]): Promis
   // "shape absent" (null) regardless of the shape's real stored props.
   const styleIds = [...new Set([...sceneShapeIds, ...selection])]
   const styles = await sampleShapeStyles(page, styleIds)
+  const positions = await page.evaluate((ids) => {
+    const doc = (window as any).__ew.doc
+    return Object.fromEntries(ids.map(id => {
+      const s = doc.getShape(id)
+      return [id, s ? { x: s.x, y: s.y } : null]
+    }))
+  }, styleIds)
   // create-edit-flow fixer task: same union rationale as styleIds above — a
   // just-selected/just-edited shape's text is what `shapeText` needs to
   // answer for, and the union already covers both seeded and gesture-
@@ -502,7 +536,7 @@ async function sampleActor(page: Page, sceneShapeIds: readonly string[]): Promis
       (flyout) => flyout.parentElement?.querySelector(':scope > [data-canvas-tool]')?.getAttribute('data-canvas-tool') ?? '(unattached)',
     ),
   )
-  return { spans, editingShape, editingIndicators, styles, texts, selection, shapeCount, paintOrder, kinds, assetSrcs, pageCount, bindings, shapeIds, labelOverflow, hoveredId, renderedArrowIds, openStylePopover, armedFlyoutTools, parents }
+  return { spans, editingShape, positions, editingState, worldRect, editingIndicators, styles, texts, selection, shapeCount, paintOrder, kinds, assetSrcs, pageCount, bindings, shapeIds, labelOverflow, hoveredId, renderedArrowIds, openStylePopover, armedFlyoutTools, parents }
 }
 
 /** Build a synchronous, pre-sampled Obs for exactly the observation(s) a
@@ -530,13 +564,15 @@ function pageObs(
   if (!sample) throw new Error(`obs.on(${JSON.stringify(actor)}): no such actor was provisioned for this contract's gesture`)
   return {
     visibleWorldRectAtStart: () => startRect,
-    visibleWorldRect: () => { throw new Error('sync obs unavailable in browser adapter — use the async sampler') },
+    visibleWorldRect: () => ({ ...sample.worldRect }),
     shapeDisplacement: () => { throw new Error('use async sampler') },
+    shapePosition: (id: string) => sample.positions[id] ? { ...sample.positions[id] } : null,
     shapeSizeDelta: () => { throw new Error('use async sampler') },
     cursorWorldDisplacement: () => { throw new Error('use async sampler') },
     snapRadius: () => { throw new Error('use async sampler') },
     textSelectionSpans: () => sample.spans,
     editingShape: () => sample.editingShape,
+    editingState: () => ({ ...sample.editingState }),
     on: (a: Actor) => obsFor(a),
     peerEditingIndicator: (shapeId: string) => sample.editingIndicators[shapeId] ?? false,
     shapeStyle: (id: string, key: string) => {
@@ -646,6 +682,16 @@ const AT_END_POLL_INTERVAL_MS = 100
 export async function runContractBrowser(page: Page, contract: Contract, browser?: Browser): Promise<string | null> {
   await waitForBoot(page)
   await seedScene(page, contract)
+  if (contract.initialEdit) {
+    await page.evaluate((edit) => {
+      const ew = (window as any).__ew
+      const editor = ew.editor
+      if (!ew.doc.getShape(edit.id)) throw new Error(`initialEdit names an absent fixture shape: ${edit.id}`)
+      editor.apply({ type: 'BeginEdit', ...edit })
+      const s = editor.get()
+      if (s.editingId !== edit.id || s.editingRegion !== edit.region) throw new Error('could not seed initialEdit')
+    }, contract.initialEdit)
+  }
   const sceneShapes = contract.scene?.() ?? []
   const sceneShapeIds = sceneShapes.map((s) => s.id)
 
@@ -709,8 +755,7 @@ export async function runContractBrowser(page: Page, contract: Contract, browser
       }
     }
 
-    const startBox = boxes.get('A')!
-    const startRect = { minX: startBox.x, minY: startBox.y, maxX: startBox.x + startBox.width, maxY: startBox.y + startBox.height }
+    const startRect = await sampleWorldRect(page)
 
     const check = async (): Promise<string | null> => {
       const samples = new Map<Actor, ActorSample>()

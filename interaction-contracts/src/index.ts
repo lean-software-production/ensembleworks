@@ -3,6 +3,10 @@
 // Registration = adding a declaration to CONTRACTS below (no mutable global —
 // the array is the registry). Pilots append their declarations here.
 export * from './types.js'
+import { ARTIFACT_RESIZE_REWORK_CONTRACTS, ARTIFACT_RESIZE_AUDIT_CONTRACTS, RESIZE_KIND_PARITY_CONTRACTS } from './contracts/artifact-resize-gesture.js'
+export { ARTIFACT_RESIZE_REWORK_CONTRACTS, ARTIFACT_RESIZE_AUDIT_CONTRACTS, RESIZE_KIND_PARITY_CONTRACTS } from './contracts/artifact-resize-gesture.js'
+import { ARTIFACT_EDITOR_CONTRACTS } from './contracts/artifact-editor-behavior.js'
+export { ARTIFACT_EDITOR_CONTRACTS } from './contracts/artifact-editor-behavior.js'
 import { cutPreservesArtifacts } from './contracts/cut-preserves-artifacts.js'
 import type { Contract } from './types.js'
 import { armedStyleAppliesToCreatedShape } from './contracts/armed-style-applies-to-created-shape.js'
@@ -61,6 +65,10 @@ import { switchingPageChangesRenderedShapes } from './contracts/switching-page-c
 import { toolShortcutSwitchesAndArmsTool } from './contracts/tool-shortcut-switches-and-arms-tool.js'
 
 export const CONTRACTS: readonly Contract[] = [
+  ...ARTIFACT_RESIZE_REWORK_CONTRACTS,
+  ...ARTIFACT_RESIZE_AUDIT_CONTRACTS,
+  ...RESIZE_KIND_PARITY_CONTRACTS,
+  ...ARTIFACT_EDITOR_CONTRACTS,
   cutPreservesArtifacts,
   // Pilot declarations are added here, one per phase (B–F).
   scrollDirection,

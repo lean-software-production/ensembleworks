@@ -230,23 +230,10 @@ function computeTargetScale(anchor: Point, originalHandle: Point, axisScaled: { 
   return uniform ? { scaleX: rawX, scaleY: rawX } : { scaleX: rawX, scaleY: rawY }
 }
 
-// The PER-EVENT ResizeShapes factor to emit, given the ABSOLUTE
-// (from-gesture-start) target scale and the ABSOLUTE scale already applied
-// by every PRIOR event in this gesture (`last`). ResizeShapes composes
-// MULTIPLICATIVELY against the doc's CURRENT (already-scaled) shape state
-// (editor.ts's applyOne — same reasoning translate's INCREMENTAL delta
-// exists for, but multiplicative instead of additive since scale composes
-// by multiplication, not addition): applying `target` directly on every
-// event would compound (target1 then target1*target2, not target2), so
-// each event emits target/last, then updates last=target — see this tool's
-// COMMIT CADENCE note below for why this must be per-event rather than
-// batched into one intent. `last` at (or near) zero — the pointer dragged
-// exactly onto the anchor line, a genuinely degenerate gesture position —
-// falls back to emitting `target` directly rather than dividing by
-// (near-)zero: TOLERANT, matching axisScale's own philosophy.
-function incrementalRatio(last: number, target: number): number {
-  return Math.abs(last) < 1e-9 ? target : target / last
-}
+// Resize gestures emit ABSOLUTE target factors plus their existing start
+// pre-images. The editor applies its per-kind floors against that basis,
+// not against the last already-clamped frame. No requested/applied ratio
+// can drift at the floor, at zero, or while returning from the anchor.
 
 interface Idle {
   readonly mode: 'idle'
@@ -266,8 +253,6 @@ interface Resizing {
   readonly originalHandleWorld: Point
   readonly axisScaled: { readonly x: boolean; readonly y: boolean }
   readonly uniform: boolean
-  readonly lastScaleX: number
-  readonly lastScaleY: number
   /** Gesture-start pre-images (Task B5) — see captureStartShapes above. */
   readonly startShapes: readonly Shape[]
 }
@@ -462,9 +447,9 @@ export function createTransformTool(ctx: ToolContext): Tool<TransformState> {
     const uniform = state.handle.kind === 'corner' && state.shiftDown
 
     const target = computeTargetScale(anchorWorld, originalHandleWorld, axisScaled, uniform, worldOf(here))
-    const intents: Intent[] = [{ type: 'ResizeShapes', ids: state.ids, anchor: anchorWorld, scaleX: target.scaleX, scaleY: target.scaleY }]
+    const intents: Intent[] = [{ type: 'ResizeShapes', ids: state.ids, anchor: anchorWorld, scaleX: target.scaleX, scaleY: target.scaleY, basis: startShapes, uniform }]
     return {
-      state: { mode: 'resizing', ids: state.ids, anchorWorld, originalHandleWorld, axisScaled, uniform, lastScaleX: target.scaleX, lastScaleY: target.scaleY, startShapes },
+      state: { mode: 'resizing', ids: state.ids, anchorWorld, originalHandleWorld, axisScaled, uniform, startShapes },
       intents,
     }
   }
@@ -478,14 +463,11 @@ export function createTransformTool(ctx: ToolContext): Tool<TransformState> {
     if (event.type === 'pointermove' || event.type === 'pointerup') {
       const current = worldOf({ x: event.x, y: event.y })
       const target = computeTargetScale(state.anchorWorld, state.originalHandleWorld, state.axisScaled, state.uniform, current)
-      const scaleX = incrementalRatio(state.lastScaleX, target.scaleX)
-      const scaleY = incrementalRatio(state.lastScaleY, target.scaleY)
-      const intents: Intent[] = (scaleX !== 1 || scaleY !== 1)
-        ? [{ type: 'ResizeShapes', ids: state.ids, anchor: state.anchorWorld, scaleX, scaleY }]
-        : []
-      const next: TransformState = event.type === 'pointerup'
-        ? IDLE
-        : { ...state, lastScaleX: target.scaleX, lastScaleY: target.scaleY }
+      const intents: Intent[] = [{
+        type: 'ResizeShapes', ids: state.ids, anchor: state.anchorWorld,
+        scaleX: target.scaleX, scaleY: target.scaleY, basis: state.startShapes, uniform: state.uniform,
+      }]
+      const next: TransformState = event.type === 'pointerup' ? IDLE : state
       return { state: next, intents }
     }
     return { state, intents: [] }

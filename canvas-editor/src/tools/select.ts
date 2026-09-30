@@ -108,7 +108,7 @@ import {
   COARSE_BBTHREAD_DIVIDER_MARGIN,
   computeExcludedIds,
   isFrameLike,
-  isPointInBbthreadPane,
+  opensBodyEdit,
   isPointInFrameHeaderBand,
   isPointOnBbthreadDivider,
   isTextCapableKind,
@@ -255,7 +255,7 @@ interface Marquee {
  * `isPointOnBbthreadDivider`), taking precedence over BOTH the ordinary
  * pane-is-solid translate path (Pointing->Dragging, which the divider band
  * would otherwise also qualify for — it sits inside the solid pane) and the
- * pane double-click-to-edit gate (onPointing's `opensBbthreadPane`), which
+ * pane double-click-to-edit gate (onPointing's `opensBody`), which
  * never even gets a look-in because this mode is entered straight from
  * Idle's pointerdown, before a Pointing state (and hence a double-click
  * check) is ever created. Every pointermove commits a `paneFraction`
@@ -571,7 +571,7 @@ export function createSelectTool(ctx: ToolContext): Tool<SelectState> {
       // transition below ever runs — so it takes precedence over both the
       // pane-is-solid translate path (the divider sits inside that same
       // solid pane) and the pane double-click-to-edit gate (onPointing's
-      // opensBbthreadPane, which never gets a look-in: a Pointing state is
+      // opensBody, which never gets a look-in: a Pointing state is
       // never created for a divider-starting gesture in the first place).
       //
       // NOT GATED ON `hit` (mobile-touch task, scope 3): the grab band is now
@@ -748,11 +748,8 @@ export function createSelectTool(ctx: ToolContext): Tool<SelectState> {
         // the idle->pointing transition — see the module header) on a
         // TEXT-CAPABLE target begins editing, in place of the ordinary
         // shift/toggle-or-replace selection logic below. A double-click on
-        // a non-text-capable kind (an embed, a frame, …) falls through to
-        // the normal single-click resolution unchanged — canvas-model's
-        // isTextCapableKind is the ENTIRE gate; there is no separate
-        // "did the shape actually resolve" check needed because a vanished
-        // target can't be hit-tested as `targetId` in the first place.
+        // other kind falls through to single-click resolution unless the
+        // model grants a body edit or a frame header rename below.
         const shape = ctx.snapshot().byId.get(targetId)
         // FRAME RENAME (frame-interaction task, gap 1; extended to
         // 'bbthread' by isFrameLike, bb-thread-frame task): a double-click
@@ -768,19 +765,11 @@ export function createSelectTool(ctx: ToolContext): Tool<SelectState> {
         // — this FSM only decides WHEN to fire the intent, never what UI
         // renders for it.
         const opensFrameRename = shape !== undefined && isFrameLike(shape.kind) && isPointInFrameHeaderBand(ctx.snapshot(), shape, worldOf(event))
-        // PANE INPUT ROUTING (pane input routing task, docs/plans/
-        // 2026-09-15-bb-thread-frame.md's follow-up section): a double-click
-        // landing inside a bbthread's solid thread pane (canvas-model's
-        // isPointInBbthreadPane) also begins editing, exactly like
-        // isTextCapableKind/opensFrameRename above — 'bbthread' is never
-        // text-capable, and this is a DIFFERENT region of the shape than its
-        // header band, so it gets its own gate rather than folding into
-        // either existing condition. `region: 'body'` distinguishes this
-        // from a header-band rename (`region: 'name'`) so the CLIENT knows
-        // which editing surface to mount (FrameNameEditor vs the pane
-        // itself) — see editor.ts's EditorState.editingRegion.
-        const opensBbthreadPane = shape !== undefined && shape.kind === 'bbthread' && isPointInBbthreadPane(ctx.snapshot(), shape, worldOf(event))
-        if (state.doubleClick && shape && (isTextCapableKind(shape.kind) || opensFrameRename || opensBbthreadPane)) {
+        // Stage 1b: the model owns non-text body-entry policy. bbthread
+        // retains its pane-only gate; artifact enters private body focus.
+        // Header rename still has precedence and uses region:'name'.
+        const opensBody = shape !== undefined && opensBodyEdit(ctx.snapshot(), shape, worldOf(event))
+        if (state.doubleClick && shape && (isTextCapableKind(shape.kind) || opensFrameRename || opensBody)) {
           intents.push({ type: 'SetSelection', ids: [targetId] })
           intents.push({ type: 'BeginEdit', id: targetId, region: opensFrameRename ? 'name' : 'body' })
         } else if (state.shiftDown) {
