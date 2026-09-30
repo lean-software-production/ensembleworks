@@ -46,6 +46,10 @@ const ALLOWED: readonly string[] = [
 const STORED_HISTORY_FIXTURES: Readonly<Record<string, number>> = {
   // Validated artifact SceneShape seed only; imported by FSM tests, not index.ts.
   'canvas-editor/src/contracts/fsm-runner.ts': 1,
+  // Stage 1b unit-only throwaway peer -> snapshot -> separate reader history.
+  // Exercises resize/focus while checked CreateShape/doc/clipboard/duplicate
+  // origination refusals remain asserted in this suite; no production import.
+  'canvas-editor/src/artifact-editor.test.ts': 1,
   // Future-writer bytes through sync/relay/repair/restart; no local N authoring.
   'canvas-sync/src/artifact-compat.test.ts': 1,
   // Stored artifact Cut/Copy/Duplicate fixtures and concurrent remote arrival.
@@ -105,6 +109,7 @@ assert.deepEqual(
 // or tightening it below the inspected baseline must fail these regressions.
 const expectedFixtures = [
   { path: 'canvas-editor/src/contracts/fsm-runner.ts', references: 1 },
+  { path: 'canvas-editor/src/artifact-editor.test.ts', references: 1 },
   { path: 'canvas-sync/src/artifact-compat.test.ts', references: 1 },
   { path: 'canvas-ui/src/use-canvas-session.test.ts', references: 2 },
   { path: 'e2e/lib/contracts.ts', references: 1 },
@@ -118,6 +123,10 @@ const unauthorizedPaths = [
   'canvas-doc/src/new-hostile-state.test.ts',
   'canvas-editor/src/contracts/new-runner.ts',
   'canvas-editor/src/editor.ts',
+  'canvas-editor/src/artifact-editor.ts',
+  'canvas-editor/src/new-artifact-editor.test.ts',
+  'canvas-editor/src/contracts/artifact-editor.test.ts',
+  './canvas-editor/src/artifact-editor.test.ts',
   'canvas-sync/src/client-peer.ts',
   'canvas-sync/src/new-artifact-compat.test.ts',
   'canvas-ui/src/use-canvas-session.ts',
