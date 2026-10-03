@@ -1317,6 +1317,9 @@ const MIN_STORED_SIZE = 1
 // dimensions remain readable even when smaller than today's resize minimum.
 const MIN_STORED_SIZE_BY_KIND: Readonly<Partial<Record<Shape['kind'], { w: number; h: number }>>> = {
   artifact: { w: 320, h: 200 },
+  // GitHub issue cards stay readable at their compact floor (#118's
+  // github-issue-card-resize-readable contract).
+  'github-issue': { w: 260, h: 170 },
 }
 
 // Clamp one axis's scale factor so `dim * scale` (the stored size this

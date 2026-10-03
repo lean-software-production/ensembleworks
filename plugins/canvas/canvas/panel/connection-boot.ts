@@ -4,6 +4,7 @@ import { PresenceStore, SyncClientPeer } from "@ensembleworks/canvas-sync";
 import { registerCoreShapes, registerShape } from "@ensembleworks/canvas-react";
 import { ArtifactPlaceholderShape } from "../shapes/ArtifactPlaceholderShape.js";
 import { BbThreadShape } from "../shapes/BbThreadShape.js";
+import { GithubIssueShape } from "../shapes/GithubIssueShape.js";
 import { createBbTransport, newPeerId, type BbTransport } from "../../transport.js";
 import { fetchIdentity } from "../identity.js";
 import { resolvePageId } from "../page.js";
@@ -93,6 +94,7 @@ export function useConnectionBoot({
       // Kept, not shown, in this release: an inert placeholder until the
       // artifact viewer lands. A plain body, not an embed — it takes no input.
       registerShape("artifact", ArtifactPlaceholderShape);
+      registerShape("github-issue", GithubIssueShape);
       const next: Session = {
         peer,
         editor,
