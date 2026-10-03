@@ -47,7 +47,9 @@ function Panel({ threadId, params }: PluginThreadPanelProps) {
 
 export default definePluginApp((app) => {
   app.slots.messageDirective({ id: ACTION_ID, component: Directive });
-  app.slots.threadPanelAction({ id: ACTION_ID, title: "Attractor run", icon: "Workflow", layout: "flush", component: Panel });
+  // `attractor/main` is the Attractor mark (`bb.branding.experimental_icons.main`); a
+  // generic host glyph here would paint over the branding asset (BB 0.45.0+).
+  app.slots.threadPanelAction({ id: ACTION_ID, title: "Attractor run", icon: "attractor/main", layout: "flush", component: Panel });
   app.slots.pendingInteraction({ id: HUMAN_GATE_RENDERER_ID, component: HumanGate });
   app.composer.customize({ id: "attractor-status", scopes: ["thread"], banners: [{ id: "active-runs", chrome: "bare", component: ActiveRunsBanner }] });
 });

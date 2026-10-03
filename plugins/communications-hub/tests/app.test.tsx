@@ -1,5 +1,8 @@
 // @vitest-environment jsdom
 import { cleanup, fireEvent, waitFor } from "@testing-library/react";
+import { readFileSync } from "node:fs";
+import { dirname, join } from "node:path";
+import { fileURLToPath } from "node:url";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   loadPluginApp,
@@ -8,6 +11,11 @@ import {
 } from "@get-bb/plugin-sdk/testing/app";
 import { rpcContract } from "../src/contracts";
 import type { Conversation, Registrant, Room, TranscriptSegment } from "../src/domain";
+
+const packageJson = JSON.parse(readFileSync(join(dirname(fileURLToPath(import.meta.url)), "../package.json"), "utf8")) as {
+  name: string;
+  bb: { branding: unknown };
+};
 
 const conversation: Conversation = {
   id: "conversation-1",
@@ -186,15 +194,27 @@ describe("Communications Hub app", () => {
   it("registers the Communications navigation and thread surfaces", async () => {
     const app = await loadPluginApp(() => import("../app"));
 
-    expect(app.navPanels.map(({ id, path, title }) => ({ id, path, title }))).toEqual([
-      { id: "communications", path: "communications", title: "Communications" },
+    expect(app.navPanels.map(({ id, path, title, icon }) => ({ id, path, title, icon }))).toEqual([
+      { id: "communications", path: "communications", title: "Communications", icon: "communications-hub/main" },
     ]);
-    expect(app.threadPanelActions.map(({ id, title }) => ({ id, title }))).toEqual([
-      { id: "conversation", title: "Conversation" },
+    expect(app.threadPanelActions.map(({ id, title, icon }) => ({ id, title, icon }))).toEqual([
+      { id: "conversation", title: "Conversation", icon: "communications-hub/main" },
     ]);
     expect(app.threadHeaderActions.map(({ id, title }) => ({ id, title }))).toEqual([
       { id: "conversation", title: "Conversation" },
     ]);
+  });
+
+  // BB 0.45.0 paints a recognised contribution `icon` ahead of the plugin's
+  // branding asset, so the hub's own mark is declared as the named icon `main`
+  // and both identity-bearing surfaces above name it as `communications-hub/main`.
+  it("declares its existing mark as the named icon `main` alongside the branding icon", () => {
+    // BB derives the plugin id, and so the glyph namespace, from the package name.
+    expect(packageJson.name).toBe("bb-plugin-communications-hub");
+    expect(packageJson.bb.branding).toEqual({
+      icon: "./assets/icon.svg",
+      experimental_icons: { main: "./assets/icon.svg" },
+    });
   });
 
   it("imports pasted text and then opens the resulting conversation", async () => {

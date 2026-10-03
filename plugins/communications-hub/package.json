@@ -10,7 +10,10 @@
     "name": "Communications Hub",
     "description": "A persistent meeting library with transcript import, Zoom capture, and thread attachments.",
     "branding": {
-      "icon": "./assets/icon.svg"
+      "icon": "./assets/icon.svg",
+      "experimental_icons": {
+        "main": "./assets/icon.svg"
+      }
     },
     "server": "./server.ts",
     "app": "./app.tsx",

@@ -24,7 +24,9 @@ export default definePluginApp((app) => {
   app.slots.navPanel({
     id: "canvas",
     title: "Canvas",
-    icon: "Layers",
+    // The Canvas mark, declared as `bb.branding.experimental_icons.main`. A
+    // generic host glyph here would paint over the branding asset (BB 0.45.0+).
+    icon: "canvas/main",
     // Routed at /plugins/canvas/canvas. BB renders the title bar itself and
     // gives the component the full-bleed body below it with zero padding —
     // which is exactly what a canvas wants, so CanvasPanel fills it edge to
