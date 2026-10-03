@@ -83,5 +83,5 @@ export function useCanvasConnection({ subPath }: Pick<PluginNavPanelProps, "subP
     setError,
   });
   const connectionState = useConnectionState({ resync });
-  return { session, error, connectionState, identities, selfName };
+  return { session, error, connectionState, identities, selfName, rpc };
 }

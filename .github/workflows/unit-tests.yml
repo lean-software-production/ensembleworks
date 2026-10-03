@@ -30,11 +30,18 @@ jobs:
       - uses: actions/setup-node@v4
         with: { node-version: 22.12.0 }
       - run: bun install --frozen-lockfile
+      # The Canvas plugin keeps its own npm lockfile outside the Bun
+      # workspaces, but the root typecheck reaches its sources (the e2e
+      # workspace's scripts/render-github-issue-card.ts imports the issue-card
+      # shape). Install its dependencies first, or that typecheck cannot
+      # resolve @get-bb/plugin-sdk / better-sqlite3.
+      - name: canvas plugin dependencies
+        working-directory: plugins/canvas
+        run: npm ci
       - run: bun run typecheck
       - name: canvas plugin checks
         working-directory: plugins/canvas
         run: |
-          npm ci
           npm run typecheck
           npm test -- --reporter=dot
           npm run audit:quality:compare

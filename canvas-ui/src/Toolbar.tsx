@@ -1,4 +1,4 @@
-import type { CSSProperties } from 'react'
+import type { CSSProperties, ReactNode } from 'react'
 import { TOOL_SHORTCUT_LABEL, type ToolId } from '@ensembleworks/canvas-editor'
 import { ArmedStyleFlyout } from './ArmedStyleFlyout.js'
 import type { StyleChange } from './style-controls.js'
@@ -51,6 +51,8 @@ export interface ToolbarProps {
 	 * BB plugin's 'bbthread') passes its own extended list instead of
 	 * mutating the shared default. */
 	readonly tools?: readonly ToolbarRow[]
+	/** Host-owned actions in the same toolbar rail, after the shared tools. */
+	readonly afterTools?: ReactNode
 }
 
 const containerStyle: CSSProperties = {
@@ -98,7 +100,7 @@ const ROW_STYLE: CSSProperties = { display: 'flex', flexDirection: 'row', gap: 2
 
 const SEPARATOR_STYLE: CSSProperties = { height: 1, margin: '2px 4px', background: UI_VARS.panelBorder }
 
-export function Toolbar({ activeToolId, onSelectTool, style, orientation = 'horizontal', nextShapeStyle, onArmStyle, tools = TOOL_ORDER, coarsePointer }: ToolbarProps) {
+export function Toolbar({ activeToolId, onSelectTool, style, orientation = 'horizontal', nextShapeStyle, onArmStyle, tools = TOOL_ORDER, afterTools, coarsePointer }: ToolbarProps) {
 	const vertical = orientation === 'vertical'
 	const buttonSize = controlSizePx(coarsePointer ?? prefersCoarsePointer(), FINE_TOOL_BUTTON_PX)
 	const showFlyout = vertical && nextShapeStyle !== undefined && onArmStyle !== undefined
@@ -137,6 +139,7 @@ export function Toolbar({ activeToolId, onSelectTool, style, orientation = 'hori
 						</div>
 					)
 				})}
+				{afterTools}
 			</div>
 		</div>
 	)

@@ -99,6 +99,7 @@ export const DEFAULT_SIZE: Readonly<Partial<Record<Shape['kind'], { readonly w: 
   text: { w: 200, h: 40 }, image: { w: 200, h: 200 },
   bbthread: { w: 960, h: 600 },
   artifact: { w: 720, h: 540 },
+  'github-issue': { w: 470, h: 256 },
 }
 // Rendered size, clamped to >= 0 so inverted bounds can never reach downstream
 // rectangle math. Notes never store w/h in tldraw: their real rendered size is
