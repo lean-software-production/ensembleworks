@@ -9,9 +9,17 @@
  * resolve against fakes instead of throwing.
  */
 import { cleanup, waitFor } from "@testing-library/react";
+import { readFileSync } from "node:fs";
+import { dirname, join } from "node:path";
+import { fileURLToPath } from "node:url";
 import { afterEach, describe, expect, it } from "vitest";
 import { loadPluginApp, renderSlot } from "@get-bb/plugin-sdk/testing/app";
 import type { GraphView, RunView, StageView } from "../server/contracts";
+
+const packageJson = JSON.parse(readFileSync(join(dirname(fileURLToPath(import.meta.url)), "../package.json"), "utf8")) as {
+  name: string;
+  bb: { branding: unknown };
+};
 
 // See tests/ui/events.test.tsx's identical `afterEach(cleanup)` comment:
 // `renderSlot` renders through `@testing-library/react` too, so without this
@@ -71,7 +79,19 @@ describe("Attractor app", () => {
   it("registers the attractor-run message directive and thread panel action", async () => {
     const app = await loadPluginApp(() => import("../app"));
     expect(app.messageDirectives.map((d) => d.id)).toEqual(["attractor-run"]);
-    expect(app.threadPanelActions.map((a) => ({ id: a.id, title: a.title }))).toEqual([{ id: "attractor-run", title: "Attractor run" }]);
+    expect(app.threadPanelActions.map((a) => ({ id: a.id, title: a.title, icon: a.icon }))).toEqual([{ id: "attractor-run", title: "Attractor run", icon: "attractor/main" }]);
+  });
+
+  // BB 0.45.0 paints a recognised contribution `icon` (such as the generic
+  // "Workflow") ahead of the plugin's branding asset, so Attractor's own mark is
+  // declared as the named icon `main` and the panel action names `attractor/main`.
+  it("declares its existing mark as the named icon `main` alongside the branding icon", () => {
+    // BB derives the plugin id, and so the glyph namespace, from the package name.
+    expect(packageJson.name).toBe("bb-plugin-attractor");
+    expect(packageJson.bb.branding).toEqual({
+      icon: "./assets/icon.svg",
+      experimental_icons: { main: "./assets/icon.svg" },
+    });
   });
 
   it("registers the active-runs composer banner, scoped to the thread composer (active-runs composer banner follow-up)", async () => {

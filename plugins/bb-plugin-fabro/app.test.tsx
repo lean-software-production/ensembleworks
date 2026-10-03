@@ -1,9 +1,17 @@
 // @vitest-environment jsdom
 import { cleanup, fireEvent, waitFor } from "@testing-library/react";
+import { readFileSync } from "node:fs";
+import { dirname, join } from "node:path";
+import { fileURLToPath } from "node:url";
 import { afterEach, describe, expect, it } from "vitest";
 import { loadPluginApp, renderSlot } from "@get-bb/plugin-sdk/testing/app";
 import type { JobView } from "./contracts";
 import { graphImage, latestStages } from './graph-image';
+
+const packageJson = JSON.parse(readFileSync(join(dirname(fileURLToPath(import.meta.url)), "package.json"), "utf8")) as {
+  name: string;
+  bb: { branding: unknown };
+};
 
 const graph = { svg: '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 200 80"><g class="node"><title>plan</title><rect width="100" height="40"/><text x="10" y="20">Plan</text></g></svg>', stages: [{ node_id: 'plan', name: 'plan', status: 'running', visit: 1 }], stagesComplete: true };
 
@@ -73,13 +81,25 @@ describe("Fabro app", () => {
   });
   it("registers the thread directive, job panel, and navigation", async () => {
     const app = await loadPluginApp(() => import("./app"));
-    expect(app.navPanels.map(({ id, path }) => ({ id, path }))).toEqual([
-      { id: "fabro", path: "fabro" },
+    expect(app.navPanels.map(({ id, path, icon }) => ({ id, path, icon }))).toEqual([
+      { id: "fabro", path: "fabro", icon: "fabro/main" },
     ]);
-    expect(app.threadPanelActions.map(({ id, title }) => ({ id, title }))).toEqual([
-      { id: "job", title: "Fabro workflow" },
+    expect(app.threadPanelActions.map(({ id, title, icon }) => ({ id, title, icon }))).toEqual([
+      { id: "job", title: "Fabro workflow", icon: "fabro/main" },
     ]);
     expect(app.messageDirectives.map(({ id }) => id)).toEqual(["fabro-workflow"]);
+  });
+
+  // BB 0.45.0 paints a recognised contribution `icon` (such as the generic
+  // "Workflow") ahead of the plugin's branding asset, so Fabro's own mark is
+  // declared as the named icon `main` and both surfaces above name `fabro/main`.
+  it("declares its existing mark as the named icon `main` alongside the branding icon", () => {
+    // BB derives the plugin id, and so the glyph namespace, from the package name.
+    expect(packageJson.name).toBe("bb-plugin-fabro");
+    expect(packageJson.bb.branding).toEqual({
+      icon: "./assets/icon.svg",
+      experimental_icons: { main: "./assets/icon.svg" },
+    });
   });
 
   it("loads a live card and opens the thread panel with its job id", async () => {

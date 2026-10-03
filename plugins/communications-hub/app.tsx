@@ -939,12 +939,14 @@ export default definePluginApp((app) => {
       return () => strip.dispose();
     },
   });
+  // Both surfaces carry the hub's own mark (`bb.branding.experimental_icons.main`):
+  // a recognised host glyph here would paint over the branding asset (BB 0.45.0+).
   app.slots.navPanel({
-    id: "communications", title: "Communications", icon: "MessagesSquare",
+    id: "communications", title: "Communications", icon: "communications-hub/main",
     path: "communications", component: CommunicationsPage,
   });
   app.slots.threadPanelAction({
-    id: "conversation", title: "Conversation", icon: "MessageSquare",
+    id: "conversation", title: "Conversation", icon: "communications-hub/main",
     component: ThreadConversationPanel, layout: "flush",
   });
   app.slots.experimental_threadHeaderAction({

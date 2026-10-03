@@ -414,7 +414,9 @@ function JobsPage() {
 
 export default definePluginApp(app => {
   app.composer.customize({ id: "fabro-run", scopes: ["thread"], banners: [{ id: "dag", chrome: "bare", component: ComposerGraphBanner }] });
-  app.slots.navPanel({ id: "fabro", title: "Fabro", icon: "Workflow", path: "fabro", component: JobsPage });
-  app.slots.threadPanelAction({ id: ACTION, title: "Fabro workflow", icon: "Workflow", layout: "flush", component: Panel });
+  // `fabro/main` is the Fabro mark (`bb.branding.experimental_icons.main`); a generic
+  // host glyph here would paint over the branding asset (BB 0.45.0+).
+  app.slots.navPanel({ id: "fabro", title: "Fabro", icon: "fabro/main", path: "fabro", component: JobsPage });
+  app.slots.threadPanelAction({ id: ACTION, title: "Fabro workflow", icon: "fabro/main", layout: "flush", component: Panel });
   app.slots.messageDirective({ id: "fabro-workflow", component: Directive });
 });
