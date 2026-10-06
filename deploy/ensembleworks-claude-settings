@@ -1,0 +1,88 @@
+#!/usr/bin/env python3
+"""ensembleworks-claude-settings — lay the box's Claude Code settings fragment
+over the sandbox user's ~/.claude/settings.json without clobbering the rest.
+
+    ensembleworks-claude-settings FRAGMENT SETTINGS
+
+Installed to /usr/local/bin by deploy/deploy.sh, which runs it as the sandbox
+user on every deploy with FRAGMENT=/etc/ensembleworks/claude-settings.json
+(shipped from deploy/agent-home/.claude/ensembleworks-settings.json). The
+settings file is the user's own, edited by people and by /permissions, so this
+only touches what the fragment owns:
+
+- autoMode.<list>: each entry in the fragment's lists replaces any existing
+  entry with the same label (the text before the first ":"), so rewording a
+  rule in the repo updates it on every box instead of stacking duplicates.
+  Entries it doesn't own are kept. "$defaults" (Claude Code's token for the
+  shipped classifier rules) stays first.
+- removeAllowRules: permission allow rules to delete — ones a box picked up
+  by hand that the fragment supersedes. Never written to the settings file.
+
+A settings file that isn't valid JSON is left untouched (exit 1): it is
+someone's work in progress, not ours to overwrite.
+"""
+import json
+import os
+import sys
+import tempfile
+
+DEFAULTS = "$defaults"
+
+
+def label(entry):
+    return entry.split(":", 1)[0].strip() if ":" in entry else None
+
+
+def merge_list(existing, ours):
+    if existing is None:
+        return list(ours)
+    our_labels = {label(e) for e in ours if label(e)}
+    kept = [e for e in existing if e != DEFAULTS and e not in ours and label(e) not in our_labels]
+    head = [DEFAULTS] if DEFAULTS in ours or DEFAULTS in existing else []
+    return head + kept + [e for e in ours if e != DEFAULTS]
+
+
+def merge(settings, fragment):
+    for key, ours in fragment.get("autoMode", {}).items():
+        auto = settings.setdefault("autoMode", {})
+        auto[key] = merge_list(auto.get(key), ours)
+    retired = set(fragment.get("removeAllowRules", []))
+    allow = settings.get("permissions", {}).get("allow")
+    if retired and allow is not None:
+        settings["permissions"]["allow"] = [r for r in allow if r not in retired]
+    return settings
+
+
+def main(argv):
+    if len(argv) != 3:
+        print("usage: ensembleworks-claude-settings FRAGMENT SETTINGS", file=sys.stderr)
+        return 2
+    fragment_path, settings_path = argv[1], argv[2]
+    with open(fragment_path) as f:
+        fragment = json.load(f)
+    if os.path.exists(settings_path):
+        with open(settings_path) as f:
+            before = f.read()
+        try:
+            settings = json.loads(before)
+        except json.JSONDecodeError as e:
+            print(f"{settings_path} is not valid JSON ({e}); left untouched", file=sys.stderr)
+            return 1
+        mode = os.stat(settings_path).st_mode & 0o777
+    else:
+        before, settings, mode = None, {}, 0o644
+    after = json.dumps(merge(settings, fragment), indent=2) + "\n"
+    if after == before:
+        print(f"{settings_path}: unchanged")
+        return 0
+    fd, tmp = tempfile.mkstemp(dir=os.path.dirname(os.path.abspath(settings_path)), prefix=".settings.")
+    with os.fdopen(fd, "w") as f:
+        f.write(after)
+    os.chmod(tmp, mode)
+    os.replace(tmp, settings_path)
+    print(f"{settings_path}: updated")
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main(sys.argv))

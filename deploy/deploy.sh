@@ -96,9 +96,11 @@ for f in "$REQ_FILE" "$LIB_FILE" "$CADDY_PROD" \
 	deploy/git-credential-ensembleworks \
 	deploy/gh-shim \
 	deploy/ensembleworks-gh-doctor \
+	deploy/ensembleworks-claude-settings \
 	bin/gh-app-token.bash \
 	deploy/agent-home/AGENTS.md \
 	deploy/agent-home/.claude/CLAUDE.md \
+	deploy/agent-home/.claude/ensembleworks-settings.json \
 	deploy/agent-home/.claude/skills/publish-doc/SKILL.md \
 	deploy/agent-home/term.env.example \
 	deploy/agent-home/term-env.bashrc; do
@@ -328,6 +330,7 @@ if id -u "\${AGENT_USER}" >/dev/null 2>&1; then
     sudo install -m0755 /tmp/ew-gh-shim /usr/local/bin/gh
   fi
   sudo install -m0755 /tmp/ew-ensembleworks-gh-doctor /usr/local/bin/ensembleworks-gh-doctor
+  sudo install -m0755 /tmp/ew-ensembleworks-claude-settings /usr/local/bin/ensembleworks-claude-settings
   # Box-wide tmux conf the sandbox user CAN read (it can't read the app's 700 home
   # where deploy/tmux-ensembleworks.conf ships). The host-provisioned launcher
   # (/usr/local/bin/ensembleworks-term-launch) execs \`tmux -f /etc/ensembleworks/tmux.conf\`.
@@ -341,6 +344,16 @@ if id -u "\${AGENT_USER}" >/dev/null 2>&1; then
     sudo install -d -o "\${AGENT_USER}" -m0755 "\${AGENT_HOME}/.claude/skills/publish-doc"
     sudo install -o "\${AGENT_USER}" -m0644 /tmp/ew-agent-home/.claude/skills/publish-doc/SKILL.md \
       "\${AGENT_HOME}/.claude/skills/publish-doc/SKILL.md"
+    # Claude Code settings every agent on every box shares (today: the auto-mode
+    # classifier rule that lets a trainer's "merge it" count as the review). The
+    # user's settings.json is also edited by hand and by /permissions, so merge
+    # the fragment in rather than overwrite. The fragment gets a stable root-owned
+    # copy in /etc (like tmux.conf above) that the sandbox user reads but can't edit.
+    # Non-fatal, like the gh doctor below.
+    sudo install -D -m0644 /tmp/ew-agent-home/.claude/ensembleworks-settings.json /etc/ensembleworks/claude-settings.json
+    sudo -H -u "\${AGENT_USER}" /usr/local/bin/ensembleworks-claude-settings \\
+      /etc/ensembleworks/claude-settings.json "\${AGENT_HOME}/.claude/settings.json" ||
+      echo "    warn: ensembleworks-claude-settings failed (left settings.json as it was)" >&2
   fi
   # Tool env for canvas shells (OPENCODE_API_KEY, …): mirror the legacy app-user
   # term.env mechanism for the sandbox user — a 600 env file it owns, sourced by its
@@ -478,6 +491,7 @@ scp -q deploy/ensembleworks-gh-token "${SSH_TARGET}:/tmp/ew-ensembleworks-gh-tok
 scp -q deploy/git-credential-ensembleworks "${SSH_TARGET}:/tmp/ew-git-credential-ensembleworks"
 scp -q deploy/gh-shim "${SSH_TARGET}:/tmp/ew-gh-shim"
 scp -q deploy/ensembleworks-gh-doctor "${SSH_TARGET}:/tmp/ew-ensembleworks-gh-doctor"
+scp -q deploy/ensembleworks-claude-settings "${SSH_TARGET}:/tmp/ew-ensembleworks-claude-settings"
 scp -q bin/gh-app-token.bash "${SSH_TARGET}:/tmp/ew-gh-app-token.bash"
 # Pre-clean the remote dir: `scp -r src host:dest` is non-idempotent — if dest
 # already exists (a prior deploy's copy survives in /tmp until reboot), scp nests
