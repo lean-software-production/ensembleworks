@@ -10,7 +10,7 @@
 #   1. not the sandbox user            -> real gh, untouched
 #   2. caller already chose an identity -> real gh, untouched
 #   3. otherwise take a token from git's credential machinery, so gh and git
-#      share one code path and one warm cache
+#      share one code path
 #   4. no token -> fall through UNAUTHENTICATED, so the real gh prints its own
 #      diagnostic instead of this shim masking it
 #
@@ -37,10 +37,9 @@ fi
 creds="$(printf 'protocol=https\nhost=github.com\n\n' |
 	GIT_TERMINAL_PROMPT=0 git credential fill 2>/dev/null)" || creds=""
 
-# A warm `cache` helper answers this without a mint; a cache miss falls through
-# to git-credential-ensembleworks. (git populates that cache itself, via its own
-# `approve`, after a real git operation succeeds — the shim never stores a
-# token, so a gh-only session re-mints per call. That is the accepted ~½s cost.)
+# git-credential-ensembleworks answers this with a fresh mint. Nothing caches
+# the token (deploy.sh dropped the `cache` helper, which replayed expired
+# tokens), so every gh call re-mints. That is the accepted ~½s cost.
 token=""
 while IFS='=' read -r key value; do
 	if [ "$key" = "password" ]; then token="$value"; fi

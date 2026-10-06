@@ -65,14 +65,13 @@ through a replace op — regenerate the document and replace it.
 
 ## Pushing to GitHub
 
-You commit and push as the **`ensembleworks[bot]`** GitHub App, never a personal
-account — and you don't handle a token to do it. `git` and `gh` are wired to
-authenticate as the bot automatically in **any** shell: interactive, `sh -c`, a
-headless `claude -p`, or a Relay runner. Just use them:
+You commit and push as the box's **GitHub App bot** (`ensembleworks-lsp[bot]` on
+the prod boxes), never a personal account — and you don't handle a token to do
+it. Just use `git` and `gh`:
 
 ```sh
 git push origin HEAD:my-branch   # HTTPS remote — credentials are automatic
-gh pr create --fill              # acts as ensembleworks[bot]
+gh pr create --fill              # acts as the bot
 gh api /repos/lean-software-production/<repo>
 ```
 
@@ -81,12 +80,32 @@ Clones must use an **HTTPS remote**
 remote goes over SSH, which bypasses the credential helper entirely and will
 fail.
 
-`main` is branch-protected, so open a PR and let a human merge — pushes straight
-to `main` are rejected by design. Credit teammates who paired with you using
-`Co-authored-by:` trailers.
+Open a PR and let a human merge. Don't push to `main` or merge your own PR, even
+when GitHub lets you: most org repos don't enforce branch protection, and
+private ones like `workshops` can't on the org's plan, so nothing stops you but
+this rule. Credit teammates who paired with you using `Co-authored-by:`
+trailers.
 
-If GitHub auth fails, run **`ensembleworks-gh-doctor`**. It names the actual
-cause — App not provisioned on this box, missing sudo rule, stale credential
-config, expired token, an SSH remote — instead of the generic 403 every one of
-those used to produce. If it reports the App isn't provisioned here, GitHub
-pushing just isn't set up on this box: carry on without it.
+**When GitHub auth fails, match the symptom before doing anything else:**
+
+- **`gh auth login`, `could not read Username`, `CONNECT tunnel failed`, or a
+  `deny network-outbound github.com` violation** — you're inside an agent
+  sandbox, which blocks the credential path. Re-run the same `git`/`gh` command
+  outside the sandbox. Don't run `gh auth login`, switch to SSH, mint a token
+  by hand, or ask anyone for a personal token.
+- **`Bad credentials` or `Invalid username or token` in a BB thread** — the
+  `GH_TOKEN` BB injected at the start of your turn has expired (it lives ~1h).
+  Run `eval "$(bb github-app-auth env)"` and retry in that same shell.
+- **`Resource not accessible by integration` (403)** — auth worked; the App
+  lacks that permission, or isn't installed on that repo (personal repos never
+  are). Say so and carry on without it; don't work around it with other
+  credentials.
+- **A quiet `git fetch -q` can fail without you noticing.** Check its exit code
+  before trusting `origin/main`.
+
+Otherwise run **`ensembleworks-gh-doctor`**, outside the sandbox. It names the
+actual cause — an expired injected token, App not provisioned on this box,
+missing sudo rule, stale credential config, an SSH remote — instead of the
+generic 403 every one of those produces. If it reports the App isn't
+provisioned here, GitHub pushing just isn't set up on this box: carry on
+without it.
