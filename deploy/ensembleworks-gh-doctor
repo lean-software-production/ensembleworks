@@ -29,6 +29,7 @@ AGENT_USER="ensembleworks-agent"
 # path. They grant nothing beyond what the caller's own environment already
 # controls.
 HELPER_PATH="${EW_GH_DOCTOR_HELPER_PATH:-/usr/local/bin/git-credential-ensembleworks}"
+PROC_STATUS="${EW_GH_DOCTOR_PROC_STATUS:-/proc/self/status}"
 
 REPO_OWNER="lean-software-production"
 REPO_NAME="ensembleworks"
@@ -51,6 +52,42 @@ fail() {
 user="$(id -un)"
 [ "$user" = "$AGENT_USER" ] || fail "auth is provisioned for \`${AGENT_USER}\`; you are \`${user}\`"
 ok "invoking user is ${AGENT_USER}"
+
+# 1b. an injected token wins. When GH_TOKEN or GITHUB_TOKEN is set (BB's
+# github-app-auth plugin sets both at the start of every agent turn), gh uses
+# it and the shim never mints; inside a BB thread git does too, because the
+# plugin routes git's credentials through `gh auth git-credential`. That token
+# lives ~1h and is only refreshed when a turn starts, so a long turn outlives
+# it — and every git/gh call then fails while the mint path below is perfectly
+# healthy. Check the token actually in use before the one we could mint.
+injected="${GH_TOKEN:-${GITHUB_TOKEN:-}}"
+# Read up front: a sandbox's network filter also explains a failed API call.
+nnp="$(sed -n 's/^NoNewPrivs:[[:space:]]*//p' "$PROC_STATUS" 2>/dev/null)"
+if [ -n "$injected" ]; then
+	inj_out="$(GH_TOKEN="$injected" "$GH_BIN" api /rate_limit --jq .resources.core.limit 2>&1)"
+	inj_rc=$?
+	if [ "$inj_rc" -ne 0 ]; then
+		case "$inj_out" in
+		*"401"*|*"Bad credentials"*) fail "GH_TOKEN in this environment is expired or invalid — in a BB thread run \`eval \"\$(bb github-app-auth env)\"\` and retry in that same shell; elsewhere unset GH_TOKEN/GITHUB_TOKEN" ;;
+		*) [ "$nnp" = "1" ] && fail "running inside an agent sandbox that blocks GitHub (${inj_out}) — re-run the git/gh command (and this doctor) outside the sandbox"
+			fail "GH_TOKEN is set but an API call with it failed: ${inj_out}" ;;
+		esac
+	fi
+	ok "GH_TOKEN in the environment is valid (gh uses it; in a BB thread git does too)"
+fi
+
+# 1c. inside an agent sandbox (Claude Code's bash sandbox, Codex) the
+# no_new_privs flag is set, so sudo refuses to run at all and the mint path
+# below can't work no matter how the box is provisioned. Say so, rather than
+# letting check 2 misreport it as a missing sudoers rule.
+if [ "$nnp" = "1" ]; then
+	if [ -n "$injected" ]; then
+		ok "inside an agent sandbox: the injected GH_TOKEN authenticates here; re-run outside the sandbox to check the mint path"
+		[ "$QUIET" -eq 1 ] || echo "all checks passed (mint path not checked from inside the sandbox)"
+		exit 0
+	fi
+	fail "running inside an agent sandbox, where sudo can't mint a token — re-run the git/gh command (and this doctor) outside the sandbox; don't ask for a personal token or run \`gh auth login\`"
+fi
 
 # 2. the NOPASSWD sudoers rule that lets this user mint a token as the app
 # user must exist — without it, check 3's mint attempt just hangs or 403s with
@@ -81,9 +118,11 @@ fi
 [ -n "$token" ] || fail "token mint failed: ensembleworks-gh-token produced no output"
 ok "token mint succeeded (length ${#token})"
 
-# 4. ~/.gitconfig must chain BOTH the warm cache and our minting helper for
-# https://github.com — order is cache-first (deploy/deploy.sh seeds it that
-# way) but presence, not order, is what we can check reliably here.
+# 4. ~/.gitconfig must name our minting helper for https://github.com — and
+# must NOT put a `cache` helper in front of it. git re-stores the credential
+# after every successful operation, restarting the cache timer, so a busy
+# token stayed cached past its ~1h life and the next push failed with
+# "Invalid username or token". deploy/deploy.sh no longer seeds it.
 helpers="$(git config --get-all credential.https://github.com.helper 2>/dev/null || true)"
 has_cache=0
 has_ew=0
@@ -98,12 +137,13 @@ while IFS= read -r h; do
 done <<HELPERS
 ${helpers}
 HELPERS
-if [ "$has_cache" -eq 0 ] || [ "$has_ew" -eq 0 ]; then
+if [ "$has_ew" -eq 0 ]; then
 	msg="credential helper not configured in ~/.gitconfig — redeploy"
 	[ -n "$stale" ] && msg="${msg} (found stale helper(s):${stale})"
 	fail "$msg"
 fi
-ok "credential helper configured (cache + ${HELPER_PATH})"
+[ "$has_cache" -eq 0 ] || fail "a \`cache\` credential helper in ~/.gitconfig can replay expired tokens — redeploy (or \`git config --global --unset-all credential.https://github.com.helper\` and re-add ${HELPER_PATH}), then \`git credential-cache exit\`"
+ok "credential helper configured (${HELPER_PATH})"
 
 # 5. the configured helper must actually hand back a password when asked —
 # distinct from check 4, since "configured" and "working" fail for different

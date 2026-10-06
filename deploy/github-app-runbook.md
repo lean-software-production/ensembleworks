@@ -72,7 +72,17 @@ Under **Repository permissions** set:
 | Contents       | Read and write | push commits and branches                   |
 | Pull requests  | Read and write | open PRs                                     |
 | Workflows      | Read and write | edit `.github/workflows/` (CI) from the mob |
+| Actions        | Read-only      | see workflow runs and their logs            |
+| Checks         | Read-only      | read check runs (`gh pr checks`)            |
+| Commit statuses | Read-only     | read commit statuses (`statusCheckRollup`)  |
 | Metadata       | Read-only      | mandatory, auto-selected                    |
+
+The three read-only rows were added on 2026-10-06. Without them, agents get
+`403 Resource not accessible by integration` on every Actions/check/status
+call against a **private** repo, so they can't tell whether CI passed or a
+publish ran. Public repos hide the gap, because anyone can read their CI. After
+changing permissions, an org owner must accept the update on the installation
+before new tokens carry it.
 
 Leave the rest at "No access" — Administration, Secrets, Members, Deployments,
 Environments. Account permissions: none. Subscribe to events: none.
@@ -188,6 +198,13 @@ Repo → **Settings → Branches → Add branch ruleset / protection rule** for 
 
 Net effect: `ensembleworks[bot]` can create branches and open PRs but **cannot
 push to `main`** — a human must review and merge.
+
+> **Status (2026-10-06): not in force anywhere.** No org repo currently has a
+> ruleset or classic protection on `main` (`gh api repos/<owner>/<repo>/branches/main --jq .protected`
+> → `false`). Private repos such as `workshops` can't have either on the org's
+> current plan ("Upgrade to GitHub Pro or make this repository public"). Agents
+> have pushed to `main` and merged their own PRs. Until protection is enabled,
+> the PR-only rule rests on `deploy/agent-home/AGENTS.md` alone.
 
 ## 8. Remote over HTTPS (so a token can push)
 

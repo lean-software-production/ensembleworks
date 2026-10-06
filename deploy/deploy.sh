@@ -383,13 +383,17 @@ if id -u "\${AGENT_USER}" >/dev/null 2>&1; then
   # every invocation regardless of PATH or shell type, and nothing outside this
   # user changes (deliberately NOT the box-wide system config: a human who has
   # run \`gh auth login\` must keep their own identity). unset-all first makes the seed
-  # idempotent AND clears the prototype's ~/.local/bin helper path. Order
-  # matters: \`cache\` serves a warm token without a mint, and the minting helper
-  # answers the miss. 2700s against a ~60min token life leaves 15min of headroom,
-  # so a cached token can never be served past expiry. -H so git writes the
-  # target user's own ~/.gitconfig.
+  # idempotent AND clears the prototype's ~/.local/bin helper path AND the
+  # \`cache --timeout=2700\` helper earlier deploys put in front. That cache served
+  # expired tokens: git re-stores the credential after every successful operation,
+  # which restarts the 2700s timer, so a busy token stayed cached past its ~60min
+  # life ("Invalid username or token" on the next push). Its socket also can't be
+  # created inside agent sandboxes. So every git operation mints (~½s, the same
+  # cost the gh shim already accepts), and \`credential-cache exit\` drops any
+  # stale token a running daemon still holds. -H so git writes the target user's
+  # own ~/.gitconfig.
   sudo -H -u "\${AGENT_USER}" git config --global --unset-all credential.https://github.com.helper || true
-  sudo -H -u "\${AGENT_USER}" git config --global --add credential.https://github.com.helper 'cache --timeout=2700'
+  sudo -H -u "\${AGENT_USER}" git credential-cache exit 2>/dev/null || true
   sudo -H -u "\${AGENT_USER}" git config --global --add credential.https://github.com.helper /usr/local/bin/git-credential-ensembleworks
   # Prove it in the shape that actually matters: the sandbox user under a
   # SCRUBBED NON-INTERACTIVE shell (an interactive one would pass even with the

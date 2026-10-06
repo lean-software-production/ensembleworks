@@ -8,6 +8,10 @@
 # Every case runs the real script against a throwaway HOME and a stub PATH, so
 # nothing here mints a real token or touches the box's git config.
 set -u
+# Hermetic against the caller's own auth: inside a BB thread the github-app-auth
+# plugin exports a live GH_TOKEN and GIT_CONFIG_* (which reset git's credential
+# helpers), and both would leak into every throwaway HOME below.
+unset GH_TOKEN GITHUB_TOKEN GIT_CONFIG_COUNT
 HERE="$(cd "$(dirname "$0")" && pwd)"
 DEPLOY="$(cd "${HERE}/.." && pwd)"
 FAKE_TOKEN="ghs_FAKE0000000000000000000000000000"
@@ -42,6 +46,9 @@ stubs() {
 	MINTLOG="${SANDBOX}/mints"
 	: >"$MINTLOG"
 	mkdir -p "${SANDBOX}/bin" "${SANDBOX}/home"
+	# The doctor's sandbox check reads NoNewPrivs; default to "not sandboxed" so
+	# running this suite inside an agent sandbox doesn't change any verdict.
+	printf 'Name:\tbash\nNoNewPrivs:\t0\n' >"${SANDBOX}/proc-status"
 	cat >"${SANDBOX}/bin/id" <<STUB
 #!/bin/sh
 if [ "\$1" = "-un" ]; then echo "$1"; exit 0; fi
@@ -187,7 +194,14 @@ lacks "$out" "ghs_" "token wrapper prints no token when refusing"
 DOCTOR="${DEPLOY}/ensembleworks-gh-doctor"
 
 run_doctor() {
-	PATH="${SANDBOX}/bin:${PATH}" HOME="${SANDBOX}/home" bash "${DOCTOR}" "$@" 2>&1
+	PATH="${SANDBOX}/bin:${PATH}" HOME="${SANDBOX}/home" \
+		EW_GH_DOCTOR_PROC_STATUS="${EW_GH_DOCTOR_PROC_STATUS:-${SANDBOX}/proc-status}" \
+		bash "${DOCTOR}" "$@" 2>&1
+}
+
+# sandboxed — make the doctor's NoNewPrivs read report an agent sandbox
+sandboxed() {
+	printf 'Name:\tbash\nNoNewPrivs:\t1\n' >"${SANDBOX}/proc-status"
 }
 
 # green_stubs — checks 1-5 all pass: real credential helper wired in, minting
@@ -210,6 +224,13 @@ STUB
 	chmod +x "${SANDBOX}/bin/git"
 	cat >"${SANDBOX}/bin/gh" <<STUB
 #!/bin/sh
+if [ "\$1" = "api" ] && [ "\$2" = "/rate_limit" ]; then
+	case "\${EW_TEST_RATE_LIMIT_MODE:-ok}" in
+	ok) echo "5000"; exit 0 ;;
+	401) echo "HTTP 401: Bad credentials (https://api.github.com/rate_limit)" >&2; exit 1 ;;
+	blocked) echo 'Get "https://api.github.com/rate_limit": Forbidden' >&2; exit 1 ;;
+	esac
+fi
 if [ "\$1" = "api" ]; then
 	case "\${EW_TEST_GH_API_MODE:-ok}" in
 	ok) echo "lean-software-production/ensembleworks"; exit 0 ;;
@@ -220,8 +241,6 @@ echo "gh stub: unexpected args \$*" >&2
 exit 1
 STUB
 	chmod +x "${SANDBOX}/bin/gh"
-	git config --file "${SANDBOX}/home/.gitconfig" \
-		--add credential.https://github.com.helper "cache --timeout=2700"
 	git config --file "${SANDBOX}/home/.gitconfig" \
 		--add credential.https://github.com.helper "${DEPLOY}/git-credential-ensembleworks"
 }
@@ -239,6 +258,73 @@ rc=$?
 eq "$rc" "1" "wrong user: exits non-zero"
 contains "$out" "auth is provisioned for" "wrong user: names the provisioned user"
 contains "$out" "you are \`someone-else\`" "wrong user: names the actual user"
+
+# --- check 1b: an injected GH_TOKEN is checked first -------------------------
+#
+# BB's github-app-auth plugin injects GH_TOKEN/GITHUB_TOKEN per turn; gh (and,
+# in a BB thread, git) use it instead of minting. A long turn outlives it.
+
+green_stubs
+out="$(GH_TOKEN="$FAKE_TOKEN" EW_TEST_RATE_LIMIT_MODE=401 run_green_doctor)"
+rc=$?
+eq "$rc" "1" "expired GH_TOKEN: exits non-zero"
+contains "$out" "GH_TOKEN in this environment is expired or invalid" "expired GH_TOKEN: names the cause"
+contains "$out" "bb github-app-auth env" "expired GH_TOKEN: says how to refresh it in a BB thread"
+lacks "$out" "$FAKE_TOKEN" "expired GH_TOKEN: never prints the token value"
+eq "$(wc -l <"$MINTLOG")" "0" "expired GH_TOKEN: fails before attempting a mint"
+
+green_stubs
+out="$(GITHUB_TOKEN="$FAKE_TOKEN" EW_TEST_RATE_LIMIT_MODE=401 run_green_doctor)"
+rc=$?
+eq "$rc" "1" "expired GITHUB_TOKEN alone: also checked"
+
+green_stubs
+out="$(GH_TOKEN="$FAKE_TOKEN" run_green_doctor)"
+rc=$?
+eq "$rc" "0" "valid GH_TOKEN: carries on through the mint-path checks"
+contains "$out" "GH_TOKEN in the environment is valid" "valid GH_TOKEN: says so"
+contains "$out" "all checks passed" "valid GH_TOKEN: reaches the end"
+
+green_stubs
+out="$(run_green_doctor)"
+lacks "$out" "GH_TOKEN in the environment" "no GH_TOKEN: the injected-token check is skipped"
+
+# --- check 1c: inside an agent sandbox ---------------------------------------
+#
+# no_new_privs stops sudo outright, which check 2 used to misreport as a
+# missing sudoers rule — sending a human off to fix host provisioning.
+
+green_stubs
+sandboxed
+out="$(run_green_doctor)"
+rc=$?
+eq "$rc" "1" "sandboxed, no GH_TOKEN: exits non-zero"
+contains "$out" "running inside an agent sandbox" "sandboxed, no GH_TOKEN: names the cause"
+contains "$out" "outside the sandbox" "sandboxed, no GH_TOKEN: says to re-run outside it"
+lacks "$out" "sudoers rule missing" "sandboxed, no GH_TOKEN: not misreported as provisioning"
+eq "$(wc -l <"$MINTLOG")" "0" "sandboxed, no GH_TOKEN: attempts no mint"
+
+green_stubs
+sandboxed
+out="$(GH_TOKEN="$FAKE_TOKEN" run_green_doctor)"
+rc=$?
+eq "$rc" "0" "sandboxed, valid GH_TOKEN: exits zero"
+contains "$out" "mint path not checked" "sandboxed, valid GH_TOKEN: says what it skipped"
+
+# The sandbox's network filter refuses the API call outright — that's the
+# sandbox, not a bad token.
+green_stubs
+sandboxed
+out="$(GH_TOKEN="$FAKE_TOKEN" EW_TEST_RATE_LIMIT_MODE=blocked run_green_doctor)"
+rc=$?
+eq "$rc" "1" "sandboxed, network blocked: exits non-zero"
+contains "$out" "sandbox that blocks GitHub" "sandboxed, network blocked: blames the sandbox"
+lacks "$out" "expired or invalid" "sandboxed, network blocked: not misreported as a bad token"
+
+green_stubs
+sandboxed
+out="$(GH_TOKEN="$FAKE_TOKEN" run_green_doctor --quiet)"
+eq "$out" "" "sandboxed, valid GH_TOKEN, --quiet: prints nothing"
 
 # --- check 2: sudoers rule ---------------------------------------------------
 
@@ -291,6 +377,18 @@ rc=$?
 eq "$rc" "1" "stale helper only: exits non-zero"
 contains "$out" "some-old-helper" "stale helper only: names the stale helper it found"
 
+# The cache helper replayed expired tokens (git re-stores after every success,
+# restarting its timer), so a gitconfig still carrying it is a failure even
+# with our helper present.
+green_stubs
+git config --file "${SANDBOX}/home/.gitconfig" \
+	--add credential.https://github.com.helper "cache --timeout=2700"
+out="$(run_green_doctor)"
+rc=$?
+eq "$rc" "1" "cache helper present: exits non-zero"
+contains "$out" "can replay expired tokens" "cache helper present: names the cause"
+contains "$out" "git credential-cache exit" "cache helper present: says how to drop the cached token"
+
 # --- check 5: git credential fill returns a password -------------------------
 #
 # A helper that's configured but returns nothing (e.g. a stale binary that
@@ -303,8 +401,6 @@ cat >"${SANDBOX}/bin/broken-helper" <<'STUB'
 exit 0
 STUB
 chmod +x "${SANDBOX}/bin/broken-helper"
-git config --file "${SANDBOX}/home/.gitconfig" \
-	--add credential.https://github.com.helper "cache --timeout=2700"
 git config --file "${SANDBOX}/home/.gitconfig" \
 	--add credential.https://github.com.helper "${SANDBOX}/bin/broken-helper"
 out="$(EW_GH_DOCTOR_HELPER_PATH="${SANDBOX}/bin/broken-helper" run_doctor)"
@@ -413,7 +509,8 @@ contains "$deploy_src" "refusing to overwrite the real gh" "deploy.sh refuses to
 contains "$deploy_src" "grep -q 'gh-shim' /usr/local/bin/gh" "deploy.sh recognises its own shim by marker"
 contains "$deploy_src" "/usr/local/bin/git-credential-ensembleworks" "deploy.sh installs the credential helper"
 contains "$deploy_src" "/usr/local/bin/ensembleworks-gh-doctor" "deploy.sh installs the doctor"
-contains "$deploy_src" "credential.https://github.com.helper 'cache --timeout=2700'" "deploy.sh seeds the cache helper first"
+lacks "$deploy_src" "--add credential.https://github.com.helper 'cache" "deploy.sh no longer seeds the cache helper"
+contains "$deploy_src" "git credential-cache exit" "deploy.sh drops any token a running cache daemon still holds"
 contains "$deploy_src" "--unset-all credential.https://github.com.helper" "deploy.sh makes the gitconfig seed idempotent"
 contains "$deploy_src" "__ew_gh_helper" "deploy.sh still knows the legacy .bashrc marker (to strip it)"
 contains "$deploy_src" "end EnsembleWorks gh helper" "deploy.sh strips through the closing marker"
@@ -434,7 +531,12 @@ lacks "$agents_src" "pre-wrapped" "AGENTS.md drops the interactive-only 'pre-wra
 contains "$agents_src" "ensembleworks-gh-doctor" "AGENTS.md names the doctor as what to run when auth fails"
 contains "$agents_src" "HTTPS remote" "AGENTS.md says clones must use HTTPS remotes"
 contains "$agents_src" "Co-authored-by:" "AGENTS.md keeps the co-author guidance"
-contains "$agents_src" "branch-protected" "AGENTS.md keeps the PR-only rule"
+contains "$agents_src" "let a human merge" "AGENTS.md keeps the PR-only rule"
+lacks "$agents_src" "branch-protected" "AGENTS.md doesn't claim protection GitHub isn't enforcing"
+lacks "$agents_src" "ensembleworks[bot]" "AGENTS.md doesn't name a bot that doesn't exist"
+contains "$agents_src" "outside the sandbox" "AGENTS.md says sandboxed auth failures mean re-run outside it"
+contains "$agents_src" "bb github-app-auth env" "AGENTS.md says how to refresh an expired BB token"
+contains "$agents_src" "Resource not accessible by integration" "AGENTS.md explains the missing-permission 403"
 
 runbook_src="$(cat "${DEPLOY}/github-app-runbook.md")"
 lacks "$runbook_src" "ensembleworks-gh-token myrepo" "the runbook drops the scoped usage line"
