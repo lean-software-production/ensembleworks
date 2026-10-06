@@ -493,27 +493,24 @@ function BannerBody({ title, detail, note, suffix }: OwnershipBanner & { suffix?
 }
 
 /**
- * The new-thread composer banner: "Starting as David", plus the machines that are
- * yours. It deliberately makes NO claim about the machine you picked — a `new-thread`
- * composer customization cannot see it (spike S3-lite) — and what it says about what
- * happens AFTER you send follows the `enforcement` setting, so it can never promise an
- * enforcement the server is not performing.
+ * Show the new-thread identity card only when attribution or machine lookup needs
+ * attention. Routine ownership details remain available in the thread header.
  */
 function StartingAsBanner() {
   const list = useMachineList();
   if (list === null) return null;
+  if (list.me !== null && list.unavailable === null) return null;
   const banner = composerBanner({ me: list.me, provenance: list.meProvenance,
     machines: list.machines, enforcement: list.enforcement });
   return <BannerBody {...banner} suffix={list.unavailable === null ? undefined : ` ${list.unavailable}.`} />;
 }
 
 /**
- * The composer banner on a thread somebody else started: "Read-only: Matt's thread".
+ * The composer banner on a thread somebody else started when enforcement is on.
  *
  * The own-thread rule is what makes it true, so it ships with that rule and reads the
- * same setting: with enforcement off it says the thread is Matt's and that nothing
- * enforces that, and in audit that a message here is logged as a would-refuse and goes
- * through anyway. Send now skips the check in every mode, and the banner says so.
+ * same setting. Audit and off modes do not block the message, so their routine
+ * ownership details stay in the header instead of taking space above the composer.
  */
 function ReadOnlyThreadBanner() {
   const rpc = useRpc<typeof rpcContract>();
@@ -529,7 +526,7 @@ function ReadOnlyThreadBanner() {
     }).catch(() => undefined);
     return () => { live = false; };
   }, [rpc, threadId]);
-  if (list === null || ownership === null) return null;
+  if (list === null || ownership === null || list.enforcement !== "enforce") return null;
   const banner = readOnlyBanner({
     me: list.me,
     meViaFallback: list.meViaFallback,
