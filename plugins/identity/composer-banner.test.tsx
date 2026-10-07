@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
-import { cleanup, fireEvent, screen, within } from "@testing-library/react";
+import { act, cleanup, fireEvent, screen, within } from "@testing-library/react";
 import { loadPluginApp, renderSlot } from "@get-bb/plugin-sdk/testing/app";
 import type { MachineList, ThreadOwnership } from "./server.js";
 import { stubPopoverDom } from "./popover-test-dom.js";
@@ -21,18 +21,15 @@ const app = await loadPluginApp(() => import("./app.js"));
 beforeEach(stubPopoverDom);
 afterEach(() => { cleanup(); vi.unstubAllGlobals(); });
 
-it("says who you start as, and explains on click when the machine is checked", async () => {
+it("keeps routine identity details out of a recognised person's new-thread composer", async () => {
   const banner = app.composerCustomizations.find((entry) => entry.id === "ownership-banner")!.banners![0]!;
-  renderSlot(banner, {}, {
-    rpc: { identity_machines: () => list },
-    composer: { scope: { kind: "new-thread", projectId: "project-1" } },
+  await act(async () => {
+    renderSlot(banner, {}, {
+      rpc: { identity_machines: () => list },
+      composer: { scope: { kind: "new-thread", projectId: "project-1" } },
+    });
   });
-  expect(await screen.findByText("Starting as Alex Rivera")).toBeTruthy();
-  expect(screen.getByText(/Yours: ew-lab-002-alex · Team: ew-main/)).toBeTruthy();
-  fireEvent.click(screen.getByRole("button", { name: /refused at Send/ }));
-  const dialog = await screen.findByRole("dialog", { name: "When the machine is checked" });
-  expect(dialog.textContent).toContain("More: Identity settings › People & machines › Rules");
-  expect(within(dialog).queryByRole("button")).toBeNull();
+  expect(screen.queryByText("Starting as Alex Rivera")).toBeNull();
 });
 
 it("keeps the unavailable notice after the explained note", async () => {
@@ -44,6 +41,19 @@ it("keeps the unavailable notice after the explained note", async () => {
   const note = await screen.findByRole("button", { name: /refused at Send/ });
   expect(note.parentElement!.textContent).toBe("Yours: ew-lab-002-alex · Team: ew-main "
     + "Starting on someone else's machine is refused at Send. Machines are unavailable.");
+  fireEvent.click(note);
+  const dialog = await screen.findByRole("dialog", { name: "When the machine is checked" });
+  expect(dialog.textContent).toContain("More: Identity settings › People & machines › Rules");
+  expect(within(dialog).queryByRole("button")).toBeNull();
+});
+
+it("shows an unrecognised identity that needs attention", async () => {
+  const banner = app.composerCustomizations.find((entry) => entry.id === "ownership-banner")!.banners![0]!;
+  renderSlot(banner, {}, {
+    rpc: { identity_machines: () => ({ ...list, me: null, meProvenance: "unknown" }) },
+    composer: { scope: { kind: "new-thread", projectId: "project-1" } },
+  });
+  expect(await screen.findByText("Starting anonymously")).toBeTruthy();
 });
 
 it("on someone else's thread, explains the own-thread rule on click", async () => {
@@ -58,4 +68,16 @@ it("on someone else's thread, explains the own-thread rule on click", async () =
   const dialog = await screen.findByRole("dialog", { name: "Own-thread rule" });
   expect(dialog.textContent).toContain("In the log: follow-up-by-non-starter.");
   expect(dialog.textContent).toContain("More: Identity settings › People & machines › Rules");
+});
+
+it.each(["off", "audit"] as const)("omits routine ownership cards when enforcement is %s", async (enforcement) => {
+  const ownership: ThreadOwnership = { threadId: "t1", starter: matt, via: "browser", inheritedFrom: null, host: null };
+  const banner = app.composerCustomizations.find((entry) => entry.id === "read-only-banner")!.banners![0]!;
+  await act(async () => {
+    renderSlot(banner, {}, {
+      rpc: { identity_machines: () => ({ ...list, enforcement }), identity_thread_ownership: () => ({ threads: [ownership] }) },
+      composer: { scope: { kind: "thread", threadId: "t1" } },
+    });
+  });
+  expect(screen.queryByText(/Matt's thread/)).toBeNull();
 });

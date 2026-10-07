@@ -180,12 +180,16 @@ delay or alter a dispatch. What refuses is the guardrail, below.
 - **The thread header** reads "Started by David · runs as ensembleworks-agent on
   `<machine>` (team machine)". The machine appears only when it is not the starter's own.
   An unrecorded starter reads "Starter not recorded", muted — never alarming, never blank.
-- **The new-thread composer** carries "Starting as David", plus the machines that are
-  yours. It deliberately makes **no** claim about the machine you picked: a `new-thread`
-  composer customization cannot see the selected machine (SDK 0.4.84 `ComposerView`). What
-  it says about what happens *after* you press send follows the `enforcement` setting, and
-  `ownership-labels.test.ts` fails if that copy ever promises an enforcement that is not
-  switched on — in either tense, so audit's "would be refused" may never read as "was".
+- **The new-thread composer** shows an identity card when the starter is unknown or
+  the machine list is unavailable. Recognised starters do not see routine ownership
+  details above the composer; those details are available in the thread header. The card
+  makes **no** claim about the machine you picked: a `new-thread` composer customization
+  cannot see the selected machine (SDK 0.4.84 `ComposerView`). Its wording follows the
+  `enforcement` setting, and `ownership-labels.test.ts` checks that it does not promise
+  enforcement that is not switched on.
+- **Another person's thread** shows a composer card only in `enforce` mode, when the
+  own-thread rule can refuse a message. In `audit` and `off`, the header carries the
+  ownership detail without filling the composer with a non-blocking notice.
 - **In `audit` mode the header chip also says what Enforce would do to your next message
   here, or to a new thread you start on this machine**
   ("Started by Matt · your next message would be refused — Matt's thread (audit mode lets it through)"),
