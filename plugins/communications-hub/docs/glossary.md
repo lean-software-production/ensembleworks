@@ -5,7 +5,7 @@
 | Communications hub | The application-level service owning conversations, transcript storage, search, and capture status for one BB instance. |
 | Source adapter | Code translating an external input into the hub's transcript format. Platform-specific behaviour belongs here. |
 | Source connection | A configured input using a source adapter. Supported inputs include file import, Zoom, the EnsembleWorks V1 transcript endpoint, and the local BB Canvas transcript feed. |
-| Space | An ongoing place where communication happens, such as a channel or recurring meeting series. Future adapters can group conversations under a space. |
+| Space | An ongoing place where communication happens, such as a channel or recurring meeting series. The Slack read index records joined channels as source-specific spaces; generic attachments and conversation windows are future work. |
 | Conversation | A bounded context that a BB thread attaches to: a meeting occurrence, an imported transcript, or a future channel time window. It has a hub-owned ID independent of its source. |
 | Meeting | A synchronous conversation occurrence. It is a kind of conversation, not the hub’s generic term. |
 | Conversation entry | A generic unit of communication, such as a chat message or transcript segment. The MVP implements transcript segments; future chat adapters must preserve message IDs, edits, replies, and provenance. |
@@ -36,7 +36,7 @@ Use “conversation” in the UI. “Current conversation” resolves the curren
 
 ## Spaces and time windows
 
-The MVP implements conversation attachments and transcript segments. Space subscriptions, Slack/Discord connections, and automatic daily windows are future work. A calendar day is a view/window of a space in its explicitly selected IANA timezone, not a reason to discard reply relationships or split stored messages irreversibly. Do not add channel APIs until an adapter needs them. Keep window membership based on event time and reading cursors based on ingestion sequence.
+The MVP implements conversation attachments and transcript segments. The read-only Slack adapter adds a source-specific channel/message index; generic space subscriptions, Discord connections, and automatic daily windows are future work. A calendar day is a view/window of a space in its explicitly selected IANA timezone, not a reason to discard reply relationships or split stored messages irreversibly. Keep window membership based on event time and reading cursors based on ingestion sequence.
 
 **Known interruptions** count pauses, local stops, transport failures, and restarts observed during capture. They indicate possible gaps; zero is not proof of complete capture. Zoom speech timing is relative to first capture, which can start after the meeting.
 

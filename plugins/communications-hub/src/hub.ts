@@ -53,6 +53,24 @@ export const migrations = [
     threadId TEXT PRIMARY KEY, conversationId TEXT NOT NULL REFERENCES conversations(id),
     generation TEXT NOT NULL, processedCursor INTEGER NOT NULL DEFAULT 0, lastAttemptAt INTEGER,
     UNIQUE(threadId, generation))`,
+  `CREATE TABLE IF NOT EXISTS slack_spaces (
+    teamId TEXT NOT NULL, channelId TEXT NOT NULL, name TEXT NOT NULL,
+    isPrivate INTEGER NOT NULL, active INTEGER NOT NULL DEFAULT 1,
+    lastSyncAt INTEGER, PRIMARY KEY(teamId, channelId))`,
+  `CREATE TABLE IF NOT EXISTS slack_entries (
+    teamId TEXT NOT NULL, channelId TEXT NOT NULL, ts TEXT NOT NULL,
+    threadTs TEXT, authorId TEXT, text TEXT NOT NULL,
+    editedAt TEXT, receivedAt INTEGER NOT NULL,
+    PRIMARY KEY(teamId, channelId, ts),
+    FOREIGN KEY(teamId, channelId) REFERENCES slack_spaces(teamId, channelId))`,
+  `CREATE VIRTUAL TABLE IF NOT EXISTS slack_entry_search USING fts5(text, content='slack_entries', content_rowid='rowid')`,
+  `CREATE TRIGGER IF NOT EXISTS slack_entries_insert AFTER INSERT ON slack_entries BEGIN
+    INSERT INTO slack_entry_search(rowid,text) VALUES (new.rowid,new.text); END`,
+  `CREATE TRIGGER IF NOT EXISTS slack_entries_delete AFTER DELETE ON slack_entries BEGIN
+    INSERT INTO slack_entry_search(slack_entry_search,rowid,text) VALUES ('delete',old.rowid,old.text); END`,
+  `CREATE TRIGGER IF NOT EXISTS slack_entries_update AFTER UPDATE ON slack_entries BEGIN
+    INSERT INTO slack_entry_search(slack_entry_search,rowid,text) VALUES ('delete',old.rowid,old.text);
+    INSERT INTO slack_entry_search(rowid,text) VALUES (new.rowid,new.text); END`,
 ];
 
 /** SQLite owns runtime state. No platform or BB-thread API dependencies. */
