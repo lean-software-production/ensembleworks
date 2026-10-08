@@ -264,9 +264,11 @@ describe("pageTabMenuFocusReturn — where focus goes when the menu shuts", () =
   });
 
   it("sends focus back to the tab when an item was run", () => {
-    // Rename and delete both go through a `window.prompt`/`window.confirm`,
-    // which returns focus to the document rather than to anything of ours.
-    // INFERRED FROM THE MODAL-DIALOG SEMANTICS, NOT OBSERVED.
+    // Delete goes through a `window.confirm`, which returns focus to the
+    // document rather than to anything of ours. INFERRED FROM THE MODAL-DIALOG
+    // SEMANTICS, NOT OBSERVED. Rename no longer opens a dialog at all, and
+    // still wants this: its tab is unmounted on the next render and the rename
+    // box that replaces it takes focus itself (canvas/pages/tab-rename.ts).
     expect(pageTabMenuFocusReturn("page:a", null, acted)).toBe("page:a");
   });
 
@@ -402,6 +404,7 @@ const SWITCHER = stripComments([
   "switcher/tab-menu-view.tsx",
   "switcher/tab-menu.ts",
   "switcher/page-tabs.tsx",
+  "switcher/rename-box.tsx",
   "switcher/page-menu-view.tsx",
   "switcher/page-menu.tsx",
   "switcher/dom.ts",
@@ -672,7 +675,12 @@ describe("the menu's own items are the module's, and its delete is the popover's
 
   it("routes rename through the SAME handler too", () => {
     expect(countInCode(SWITCHER, "renamePageIntents(")).toBe(1);
-    expect(countInCode(SWITCHER, "window.prompt(")).toBe(1);
+    // ...and that handler no longer asks the HOST for the text. `window.prompt`
+    // is not implemented in Electron, so the old call returned nothing and
+    // every rename entry point — this menu, the tab's double-click and the
+    // popover's ✎ — was a silent no-op inside bb. Pinned at zero so it cannot
+    // come back; canvas/pages/tab-rename.ts is the editor that replaced it.
+    expect(countInCode(SWITCHER, "window.prompt(")).toBe(0);
   });
 
   it("interprets the item id rather than branching on the row", () => {

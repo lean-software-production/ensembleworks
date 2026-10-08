@@ -142,12 +142,19 @@ export function pageMenuEnterTarget(rows: readonly PageMenuRow[]): PageMenuRow |
  * WHY THIS LIVES HERE AND NOT IN page-intents.ts. That module deliberately has
  * no RenamePage helper, and its header says why: the intent's math is a bare
  * `{ id, name }` pass-through with no editor read, so a helper would be pure
- * indirection. What needed a home is not the math, it is the VALIDATION of an
- * answer typed into a `window.prompt` — three refusals, each of which is a
+ * indirection. What needed a home is not the math, it is the VALIDATION of the
+ * answer — three refusals, each of which is a
  * decision, and all three unreachable by any test if written inline in the
  * switcher's click handler.
  *
- * `null` (Cancel) and `""` (an emptied box) are deliberately NOT told apart:
+ * WHERE THE ANSWER COMES FROM CHANGED, WHAT IT MEANS DID NOT (2026-09-22).
+ * It used to be a `window.prompt` seeded with the current name; bb's Electron
+ * host does not implement that call, so the rename was a silent no-op on every
+ * surface and the text now comes from an inline `<input>` instead — see
+ * canvas/pages/tab-rename.ts. `typed` is still a `string | null` meaning
+ * exactly what it meant, which is why nothing below moved.
+ *
+ * `null` (no answer) and `""` (an emptied box) are deliberately NOT told apart:
  * neither is a request to rename, and a page with an empty name is
  * unclickable in every surface that draws it. An unchanged name is refused
  * too — a same-value RenamePage is a doc write, a sync frame to every peer,

@@ -26,6 +26,7 @@ import { countInCode, stripComments } from "./lib/source.js";
 const SWITCHER = stripComments([
   "switcher/page-menu-view.tsx",
   "switcher/page-tabs.tsx",
+  "switcher/rename-box.tsx",
   "switcher/actions.ts",
   "switcher/tab-menu.ts",
   "switcher/use-page-switcher.tsx",
@@ -156,7 +157,13 @@ describe("the popover keeps the full management surface", () => {
     expect(countInCode(SWITCHER, "remove(row)")).toBe(2);
     expect(countInCode(popoverRegion(), "remove(row)")).toBe(1);
     expect(countInCode(SWITCHER, "window.confirm(")).toBe(1);
-    expect(countInCode(SWITCHER, "window.prompt(")).toBe(1);
+    // AND NO `window.prompt` ANYWHERE, which is a host fact rather than a
+    // taste: bb is an Electron app and Electron does not implement it (the
+    // shipped framework carries "prompt() is not supported."). The rename
+    // that used to call it did nothing at all, silently, on every surface —
+    // see canvas/pages/tab-rename.ts. `window.confirm` IS supported, which is
+    // why delete above keeps its one call and this is zero, not one.
+    expect(countInCode(SWITCHER, "window.prompt(")).toBe(0);
   });
 });
 

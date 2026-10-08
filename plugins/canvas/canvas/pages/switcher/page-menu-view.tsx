@@ -1,5 +1,6 @@
 import { createPortal } from "react-dom";
 import { pageMenuEnterTarget, type PageMenuRow } from "../page-menu.js";
+import { RenameBox } from "./rename-box.js";
 import {
   buttonStyle,
   emptyStyle,
@@ -7,6 +8,7 @@ import {
   microButtonStyle,
   nameButtonStyle,
   popoverStyle,
+  rowRenameInputStyle,
   rowStyle,
 } from "./styles.js";
 import type { PageActions } from "./types.js";
@@ -30,7 +32,7 @@ export function PageMenuView({
   readonly actions: PageActions;
   readonly setQuery: (query: string) => void;
 }) {
-  const { switchTo, addPage, rename, remove, move } = actions;
+  const { switchTo, addPage, rename, remove, move, renameEdit } = actions;
   if (!open) return null;
   return createPortal(
     <div ref={popoverRef} data-canvas-page-menu
@@ -46,9 +48,15 @@ export function PageMenuView({
         }} />
       {visibleRows.length === 0 ? <div style={emptyStyle}>No page matches “{query.trim()}”.</div> :
         visibleRows.map((row) => <div key={row.id} style={rowStyle}>
-          <button type="button" data-canvas-page={row.id} aria-pressed={row.current}
-            title="Click to switch pages, double-click to rename" onClick={() => switchTo(row)}
-            onDoubleClick={() => rename(row)} style={nameButtonStyle(row.current)}>{row.name}</button>
+          {/* The SAME editor the tab strip draws, in the row's own geometry —
+              the popover has to be able to rename on its own, because the
+              strip is hidden entirely on a narrow panel (page-tabs-fit.ts). */}
+          {renameEdit.draftFor(row.id) !== null
+            ? <RenameBox row={row} draft={renameEdit.draftFor(row.id) ?? ""} edit={renameEdit}
+                style={rowRenameInputStyle()} label={`Rename ${row.name}`} />
+            : <button type="button" data-canvas-page={row.id} aria-pressed={row.current}
+                title="Click to switch pages, double-click to rename" onClick={() => switchTo(row)}
+                onDoubleClick={() => rename(row)} style={nameButtonStyle(row.current)}>{row.name}</button>}
           <button type="button" aria-label={`Rename ${row.name}`} onClick={() => rename(row)} style={microButtonStyle(true)}>✎</button>
           <button type="button" aria-label={`Move ${row.name} left`} disabled={!row.canMoveLeft} onClick={() => move(row, "left")} style={microButtonStyle(row.canMoveLeft)}>◂</button>
           <button type="button" aria-label={`Move ${row.name} right`} disabled={!row.canMoveRight} onClick={() => move(row, "right")} style={microButtonStyle(row.canMoveRight)}>▸</button>

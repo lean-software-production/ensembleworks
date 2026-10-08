@@ -147,9 +147,9 @@ describe("renamePageIntents", () => {
     ]);
   });
 
-  it("emits nothing when the prompt was cancelled", () => {
-    // window.prompt answers null for Cancel and "" for an emptied box, and the
-    // two must NOT be told apart here: neither is a request to rename, and a
+  it("emits nothing when the edit was cancelled", () => {
+    // The rename box answers null for a cancelled edit and "" for an emptied
+    // box, and the two must NOT be told apart here: neither is a request to rename, and a
     // page with an empty name is unclickable in every surface that draws it.
     expect(renamePageIntents(row, null)).toEqual([]);
     expect(renamePageIntents(row, "")).toEqual([]);
