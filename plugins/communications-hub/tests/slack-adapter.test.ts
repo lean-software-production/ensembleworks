@@ -39,6 +39,7 @@ it('indexes bot-member public/private channels and replies, excludes DMs, then r
         {type:'message',ts:'103.000001',thread_ts:'101.000001',text:'reply evidence',user:'U3'},
       ],response_metadata:{next_cursor:''}};
       if(method==='chat.getPermalink')return {ok:true,permalink:'https://example.slack.com/archives/G1/p103000001'};
+      if(method==='users.info')return {ok:false,error:'missing_scope'};
       throw new Error(`Unexpected Slack method ${method}`);
     })();
     return new Response(JSON.stringify(response),{status:200,headers:{'Content-Type':'application/json'}});
@@ -51,6 +52,9 @@ it('indexes bot-member public/private channels and replies, excludes DMs, then r
   expect(store.spaces('T1').map(s=>s.channelId)).toEqual(['G1','C1']);
   expect(store.search('reply',{teamId:await slack.authorizedTeam()})[0]).toMatchObject({channelId:'G1',threadTs:'101.000001'});
   expect((await slack.links(store.search('reply',{teamId:'T1'})))[0]?.permalink).toContain('example.slack.com');
+  expect(await slack.authors([{authorId:'U2'},{authorId:'U3'}])).toMatchObject([{authorName:null},{authorName:null}]);
+  expect(calls.filter(call=>call.startsWith('users.info:'))).toHaveLength(1);
+  expect(slack.status().authorNames).toBe('missing_scope');
   revision=2;await slack.sync();
   expect(store.search('draft',{teamId:'T1'})).toEqual([]);
   expect(store.search('deleted',{teamId:'T1'})).toEqual([]);

@@ -505,12 +505,13 @@ describe("Communications Hub app", () => {
     const channel={teamId:'T1',channelId:'G1',name:'strategy',isPrivate:true,lastSyncAt:Date.now()};
     const slot=renderSlot(app.threadPanelActions[0]!,{threadId:'thread-a',params:null},{rpc:handlers({
       'channels.list':()=>({channels:[channel]}),
-      'channels.read':()=>({results:[{...channel,channelName:'strategy',ts:'100.000001',threadTs:null,authorId:'U1',text:'The release is Friday',editedAt:null,permalink:'https://example.slack.com/archives/G1/p100000001',truncated:false}],hasMore:false,nextCursor:'100.000001'}),
+      'channels.read':()=>({results:[{...channel,channelName:'strategy',ts:'100.000001',threadTs:null,authorId:'U1',authorName:'Ada',text:'The release is Friday',editedAt:null,permalink:'https://example.slack.com/archives/G1/p100000001',truncated:false}],hasMore:false,nextCursor:'100.000001'}),
     })});
     await slot.findByRole('option',{name:'#strategy (private)'});
     fireEvent.change(slot.getByLabelText('Choose a room, conversation, or channel'),{target:{value:'channel:G1'}});
     fireEvent.click(slot.getByRole('button',{name:'Follow channel'}));
     await slot.findByText('The release is Friday');
+    expect(slot.getByText(/Ada ·/)).toBeTruthy();
     expect(slot.inspection.rpcCalls).toContainEqual({method:'attachments.setChannel',input:{threadId:'thread-a',channelId:'G1'}});
     expect(slot.getByRole('link',{name:'Open in Slack'}).getAttribute('href')).toBe('https://example.slack.com/archives/G1/p100000001');
   });

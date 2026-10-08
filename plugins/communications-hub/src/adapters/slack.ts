@@ -32,6 +32,8 @@ export function registerSlack(bb: BbPluginApi, store: SlackStore, changed: () =>
   let lastError: string | null = null;
   let lastSyncAt: number | null = null;
   let disposed = false;
+  const authorNames = new Map<string,{name:string|null;expiresAt:number}>();
+  let profileScopeMissingUntil = 0;
 
   async function api<T>(token: string, method: string, params: Record<string,string>, schema: z.ZodType<T>, signal?: AbortSignal): Promise<T> {
     const url = new URL(`https://slack.com/api/${method}`);
@@ -127,7 +129,9 @@ export function registerSlack(bb: BbPluginApi, store: SlackStore, changed: () =>
     try {
       const auth = await api(config.slackBotToken,'auth.test',{},authResponse,signal);
       teamId = auth.team_id;
-      tokenDigest = createHash('sha256').update(config.slackBotToken).digest('hex');
+      const nextDigest = createHash('sha256').update(config.slackBotToken).digest('hex');
+      if(tokenDigest!==nextDigest) {authorNames.clear();profileScopeMissingUntil=0;}
+      tokenDigest = nextDigest;
       const origin = new URL(auth.url);
       if (origin.protocol!=='https:' || !origin.hostname.endsWith('.slack.com')) throw new Error('Slack returned an invalid workspace URL');
       baseUrl = origin.origin;
@@ -174,8 +178,43 @@ export function registerSlack(bb: BbPluginApi, store: SlackStore, changed: () =>
     }));
   }
 
+  async function authorName(token:string,authorId:string):Promise<string|null> {
+    const cached=authorNames.get(authorId);
+    if(cached && cached.expiresAt>Date.now()) return cached.name;
+    if(profileScopeMissingUntil>Date.now()) return null;
+    try {
+      let candidate:string|null|undefined;
+      if(authorId.startsWith('B')) {
+        const value=await api(token,'bots.info',{bot:authorId},z.object({ok:z.literal(true),bot:z.object({name:z.string().nullish()}).passthrough()}));
+        candidate=value.bot.name;
+      } else {
+        const value=await api(token,'users.info',{user:authorId},z.object({ok:z.literal(true),user:z.object({name:z.string().nullish(),real_name:z.string().nullish(),profile:z.object({display_name:z.string().nullish(),real_name:z.string().nullish()}).nullish()}).passthrough()}));
+        candidate=value.user.profile?.display_name||value.user.real_name||value.user.profile?.real_name||value.user.name;
+      }
+      const name=candidate?.trim().slice(0,200)||null;
+      authorNames.set(authorId,{name,expiresAt:Date.now()+(name?24*60*60*1000:60*60*1000)});
+      return name;
+    } catch(error) {
+      const missingScope=error instanceof SlackApiError && error.code==='missing_scope';
+      if(missingScope) profileScopeMissingUntil=Date.now()+5*60*1000;
+      authorNames.set(authorId,{name:null,expiresAt:Date.now()+(missingScope?5:60)*60*1000});
+      return null;
+    }
+  }
+
+  async function authors<T extends {authorId:string|null}>(entries:T[]):Promise<Array<T & {authorName:string|null}>> {
+    const config=await settings.get();
+    if(!config.slackReadEnabled || !config.slackBotToken) return entries.map(entry=>({...entry,authorName:null}));
+    // Serial lookups bound requests and stop promptly if the installed bot lacks users:read.
+    const names=new Map<string,string|null>();
+    for(const entry of entries) if(entry.authorId && !names.has(entry.authorId))
+      names.set(entry.authorId,await authorName(config.slackBotToken,entry.authorId));
+    return entries.map(entry=>({...entry,authorName:entry.authorId?names.get(entry.authorId)??null:null}));
+  }
+
   const status=()=>({configured:teamId!==null,teamId,channelCount:teamId?store.spaces(teamId).length:0,
-    syncing,lastSyncAt,lastError});
+    syncing,lastSyncAt,lastError,authorNames:profileScopeMissingUntil>Date.now()?'missing_scope':
+      [...authorNames.values()].some(value=>value.name!==null)?'available':'unknown'});
   async function authorizedTeam() {
     const config=await settings.get();
     const digest=config.slackBotToken?createHash('sha256').update(config.slackBotToken).digest('hex'):null;
@@ -192,5 +231,5 @@ export function registerSlack(bb: BbPluginApi, store: SlackStore, changed: () =>
     }
   }});
   bb.onDispose(()=>{disposed=true;});
-  return {sync,status,links,teamId:()=>teamId,authorizedTeam};
+  return {sync,status,links,authors,teamId:()=>teamId,authorizedTeam};
 }

@@ -6,7 +6,7 @@ import { presenceViewSchema } from './presence/view';
 
 export const id=z.string().trim().min(1).max(256);
 const page=z.object({conversation:conversationSchema,segments:z.array(segmentSchema),hasMore:z.boolean(),nextCursor:z.number()});
-const channelResult=z.object({teamId:id,channelId:id,channelName:z.string(),isPrivate:z.boolean(),ts:id,threadTs:id.nullable(),authorId:id.nullable(),text:z.string(),editedAt:id.nullable(),permalink:z.string().nullable(),truncated:z.boolean()});
+const channelResult=z.object({teamId:id,channelId:id,channelName:z.string(),isPrivate:z.boolean(),ts:id,threadTs:id.nullable(),authorId:id.nullable(),authorName:z.string().nullable(),text:z.string(),editedAt:id.nullable(),permalink:z.string().nullable(),truncated:z.boolean()});
 const channelPage=z.object({results:z.array(channelResult),hasMore:z.boolean(),nextCursor:id.nullable()});
 export const readInput=z.object({conversationId:id,after:z.number().int().nonnegative().optional(),limit:z.number().int().min(1).max(30).optional(),fromMs:z.number().int().nonnegative().optional(),toMs:z.number().int().nonnegative().optional()}).strict();
 export const importInput=z.object({title:z.string().trim().min(1).max(200),format:importFormatSchema,text:z.string().min(1).max(1_000_000)}).strict();

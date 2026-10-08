@@ -784,7 +784,7 @@ function ChannelView({channel}:{channel:SlackSpace}) {
     <ErrorMessage error={error}/>
     {results.length===0&&!loading?<StatusBox>{activeQuery?'No matching messages.':'No indexed messages yet.'}</StatusBox>:null}
     {results.map(message=><article key={message.ts} className="rounded-md border px-3 py-2 text-sm">
-      <div className="mb-1 text-xs text-muted-foreground">{message.authorId??'Unknown author'} · {new Date(Number(message.ts)*1000).toLocaleString()}{message.threadTs&&message.threadTs!==message.ts?' · reply':''}{message.editedAt?' · edited':''}</div>
+      <div className="mb-1 text-xs text-muted-foreground">{message.authorName??message.authorId??'Unknown author'} · {new Date(Number(message.ts)*1000).toLocaleString()}{message.threadTs&&message.threadTs!==message.ts?' · reply':''}{message.editedAt?' · edited':''}</div>
       <p className="whitespace-pre-wrap break-words">{message.text}{message.truncated?'…':''}</p>
       {message.permalink?<a className="text-xs underline" href={message.permalink} target="_blank" rel="noopener noreferrer">Open in Slack</a>:null}
     </article>)}
