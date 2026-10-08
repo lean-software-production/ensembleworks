@@ -36,10 +36,18 @@ export function usePageMenu({
     }
     function onPointerDown(event: PointerEvent): void {
       const target = event.target;
-      dispatchMenu({ type: "pointerdown", insideWidget: target instanceof Node && insideWidget(target) });
+      const inside = target instanceof Node && insideWidget(target);
+      // Dismissal unmounts the input before the browser can send blur.
+      // Save its draft first so clicking away has the same result as Tab.
+      if (!inside) {
+        const editing = visibleRows.find((row) => actions.renameEdit.draftFor(row.id) !== null);
+        if (editing) actions.renameEdit.commit(editing);
+      }
+      dispatchMenu({ type: "pointerdown", insideWidget: inside });
     }
     function onKeyDown(event: KeyboardEvent): void {
       if (event.key !== "Escape") return;
+      actions.renameEdit.cancel();
       dispatchMenu({ type: "escape" });
       tabRefs.current.get(currentPageId)?.focus();
     }
@@ -49,7 +57,7 @@ export function usePageMenu({
       document.removeEventListener("pointerdown", onPointerDown);
       document.removeEventListener("keydown", onKeyDown);
     };
-  }, [open, dispatchMenu, currentPageId, tabRefs]);
+  }, [open, dispatchMenu, currentPageId, tabRefs, actions, visibleRows]);
 
   const [box, setBox] = useState<PopoverRect>({
     left: POPOVER_EDGE_MARGIN_PX, top: POPOVER_EDGE_MARGIN_PX,

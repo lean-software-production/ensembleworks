@@ -47,8 +47,11 @@ export function usePageSwitcher(input: PageSwitcherInput): PageSwitcherNodes {
     setTabsVisible((visible) => nextPageTabsVisible(visible, containerWidth));
   }, [containerWidth]);
 
+  // The popover owns the input while open. Two autofocus inputs for the
+  // same draft would blur each other and immediately end the rename.
   const tabs = !tabsVisible ? null : <PageTabs rows={rows}
-    handlers={{ addPage: actions.addPage, rename: actions.rename, openTabMenu: tabMenuState.openTabMenu }}
+    handlers={{ addPage: actions.addPage, rename: actions.rename, openTabMenu: tabMenuState.openTabMenu,
+      renameEdit: open ? { ...actions.renameEdit, draftFor: () => null } : actions.renameEdit }}
     drag={drag} holdTabRef={holdTabRef} />;
   const popover = pageMenu;
   const tabMenu = <TabMenuView row={tabMenuState.tabMenuRow} items={tabMenuState.tabMenuItems}

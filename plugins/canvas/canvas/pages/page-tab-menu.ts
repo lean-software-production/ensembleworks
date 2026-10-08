@@ -206,10 +206,18 @@ export function pageTabMenuTarget(
  *
  *   * `escape` — the deliberate "put this away"; focus belongs back on the tab
  *     the menu hung off, which is where the gesture started.
- *   * `acted` — rename and delete both go through a `window.prompt` /
- *     `window.confirm`, which hands focus back to the document rather than to
- *     anything of ours, so without this the keyboard user is dumped at the top
- *     of the page. INFERRED FROM THE MODAL-DIALOG SEMANTICS, NOT OBSERVED.
+ *   * `acted` — delete goes through a `window.confirm`, which hands focus back
+ *     to the document rather than to anything of ours, so without this the
+ *     keyboard user is dumped at the top of the page. INFERRED FROM THE
+ *     MODAL-DIALOG SEMANTICS, NOT OBSERVED.
+ *
+ *     RENAME NO LONGER OPENS A DIALOG AT ALL (2026-09-22, canvas/pages/
+ *     tab-rename.ts — Electron never showed the `window.prompt` this used to
+ *     mean). Restoring focus to the tab is still right for it: the tab is
+ *     unmounted on the very next render and replaced by the rename box, whose
+ *     own `autoFocus` then takes focus. The order is what makes this safe —
+ *     this hand-back runs inside the click handler, the box's focus in the
+ *     effect after the DOM update.
  *
  * AN OUTSIDE CLICK DELIBERATELY DOES NOT RESTORE. It has already put focus
  * somewhere the user chose, and yanking it back to a tab they were leaving is

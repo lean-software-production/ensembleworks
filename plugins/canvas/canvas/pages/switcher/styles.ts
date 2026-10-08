@@ -172,3 +172,47 @@ export function tabMenuItemStyle(enabled: boolean): CSSProperties {
     whiteSpace: "nowrap",
   };
 };
+
+/**
+ * The inline rename box drawn IN PLACE OF a tab (see canvas/pages/
+ * tab-rename.ts for why rename is an editor here and not a dialog).
+ *
+ * BUILT ON `pageTabStyle` rather than beside it, so the strip does not jump
+ * when a tab becomes a box: same padding, same border geometry, same radii.
+ * Only the things an `<input>` must override are overridden — its own field
+ * background so the caret has contrast against the tab, a focus ring in the
+ * accent (the box is modal-ish in effect and must look it), and a width that
+ * does not collapse to the browser default size on a short name.
+ */
+export function tabRenameInputStyle(current: boolean): CSSProperties {
+  return {
+    ...pageTabStyle(current),
+    width: 140,
+    maxWidth: 180,
+    boxSizing: "border-box",
+    background: CHROME_FIELD,
+    borderWidth: 1,
+    borderRadius: 6,
+    borderColor: CHROME_ACCENT,
+    outline: "none",
+    cursor: "text",
+    textOverflow: "clip",
+  };
+}
+
+/** The same box in the Pages popover, where it replaces the row's name
+ * button — so it inherits that button's flex behaviour, not the tab's. */
+export function rowRenameInputStyle(): CSSProperties {
+  return {
+    flex: 1,
+    minWidth: 0,
+    boxSizing: "border-box",
+    padding: "4px 8px",
+    borderRadius: 4,
+    border: `1px solid ${CHROME_ACCENT}`,
+    background: CHROME_FIELD,
+    color: CHROME_INK,
+    font: CHROME_FONT,
+    outline: "none",
+  };
+}
