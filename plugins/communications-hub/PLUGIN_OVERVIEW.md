@@ -4,4 +4,4 @@ Keep conversation context beside the work it informs. Import transcripts or conn
 
 The single-instance MVP includes a conversation library, transcript viewer and search, independent thread attachments, explicit reading cursors, and a Zoom RTMS receiver. Zoom setup requires a General app and a reachable HTTPS webhook. Import works without Zoom configuration.
 
-An optional read-only Slack adapter indexes channels the bot has joined and exposes cross-channel agent search. DMs and posting are excluded. Generic space attachments and other chat adapters are future work. See README.md for setup, operational limits and verification.
+An optional read-only Slack adapter indexes channels the bot has joined. BB threads can attach to a channel and use the same agent read/search tools and thread panel as transcript conversations; cross-channel search remains available. Slack messages retain their own editable source store. DMs and posting are excluded. Other chat adapters and automatic conversation windows are future work. See README.md for setup, operational limits and verification.

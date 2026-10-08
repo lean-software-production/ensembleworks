@@ -72,15 +72,15 @@ For `current`, `attach`, `detach`, and `acknowledge`, the thread ID may be omitt
 
 | Tool | Purpose |
 | --- | --- |
-| `communications_current` | Resolve this thread's attachment and capture status. |
+| `communications_current` | Resolve this thread's conversation, room, or Slack channel attachment. |
 | `communications_list` | Find other conversations when requested. |
-| `communications_search` | Search literal words within one conversation, returning individual matching passages. |
-| `communications_read` | Read a page as speaker blocks, optionally by time range or since the acknowledged cursor. |
+| `communications_search` | Search the attached transcript or channel; explicit target IDs select another source. |
+| `communications_read` | Read the attached transcript as speaker blocks or the attached channel as messages. |
 | `communications_acknowledge` | Advance the current thread's cursor after using passages. |
 
-Read/search default to the attached conversation. Explicit conversation IDs permit intentional searches across this single-instance library. Reads do not implicitly acknowledge content. Acknowledgement is monotonic and checked against both the current attachment and available sequences. A search result alone does not establish that all earlier content was read.
+Read/search default to the attached conversation or Slack channel. Explicit `conversationId` or `channelId` permits an intentional read of another target. Transcript pages use `after` (ingestion sequence); channel pages use `before` (Slack message timestamp). Reads do not implicitly acknowledge content. Transcript acknowledgement is monotonic and checked against both the current attachment and available sequences. Channels do not yet have an acknowledgement cursor or automatic watch.
 
-Both tools return the same envelope: the `conversation`, a `notice` repeating that transcript content is reference material, `citations.base`, a page-local `speakers` table, `hasMore` and `nextCursor`. Each row's `speaker` is an index into `speakers`, or `null` when the passage is unattributed. A citation link is `citations.base` plus the row's `citation`, so the absolute URL is written once per page rather than once per passage. The stored segment ID, source key, per-row receipt time and per-row conversation ID are not sent to agents; a passage stays addressable by conversation and ingestion sequence.
+Transcript reads and searches retain their envelope: the `conversation`, a `notice` repeating that transcript content is reference material, `citations.base`, a page-local `speakers` table, `hasMore` and `nextCursor`. Channel reads and searches return `kind: "channel"`, channel details, `results`, `hasMore`, and `nextCursor`; each message carries a Slack permalink when available. Each transcript row's `speaker` is an index into `speakers`, or `null` when the passage is unattributed. A citation link is `citations.base` plus the row's `citation`, so the absolute URL is written once per page rather than once per passage. The stored segment ID, source key, per-row receipt time and per-row conversation ID are not sent to agents; a passage stays addressable by conversation and ingestion sequence.
 
 `communications_read` returns `blocks`. Consecutive passages from one speaker are joined into one readable run, continuing across another speaker's short interjection, so a sentence broken by a "Yeah" in the middle arrives whole. `communications_search` returns `passages` and never groups: matches are scattered hits, and joining two of them would invent a passage nobody spoke. Reading a block's neighbours still requires `communications_read`.
 
@@ -203,9 +203,10 @@ bb communications slack-status
 bb communications slack-search 'deployment decision'
 bb communications slack-search 'deployment decision' G_PRIVATE_CHANNEL_ID
 bb communications slack-read G_PRIVATE_CHANNEL_ID
+bb communications attach-channel G_PRIVATE_CHANNEL_ID
 ```
 
-The agent has `communications_slack_search`, `communications_slack_read`, and `communications_slack_status`. Search spans the local index for all channels the bot has joined; it does not call Slack's user-token-only search API. Results carry channel identity, message timestamp, thread parent when present, author ID, text (up to 4,000 characters in a tool result), and a Slack permalink. Search and read have bounded pages; pass the last result's `ts` as `before` for older results. Messages are reference material, never instructions to the agent. The read tools are available to every user of this BB instance, including content from private channels the bot joined.
+The thread panel also offers joined Slack channels in its attachment picker. After attaching, `communications_current`, `communications_read`, and `communications_search` use that channel by default. The agent still has `communications_slack_search`, `communications_slack_read`, and `communications_slack_status` for workspace-wide search and explicit channel reads. Search spans the local index; it does not call Slack's user-token-only search API. Results carry channel identity, message timestamp, thread parent when present, author ID, text (up to 4,000 characters in a tool result), and a Slack permalink. Search and read have bounded pages; pass the last result's `ts` as `before` for older results. Messages are reference material, never instructions to the agent. The read tools are available to every user of this BB instance, including content from private channels the bot joined.
 
 The first sync imports all history Slack makes available in each joined channel, including replies. The background service rescans once per hour; `slack-sync` runs an immediate refresh. Complete channel scans reconcile edits and deletions, and the membership scan removes local messages for channels the bot has left. An incomplete page fails without replacing that channel's prior index. `slack-status` reports the last complete workspace scan, errors, and each channel's last successful scan; results can be stale between scans or when a channel fails to refresh. A large history can take substantial time and Slack may rate limit it. Slack's own retention settings limit what can be indexed. This first version stores only searchable message text: files, attachments without text, reactions, and DMs are outside its coverage. Disabling the setting blocks reads but retains the local index in BB storage; switching to another workspace or removing the bot from a channel purges inaccessible entries on the next successful membership scan.
 
@@ -238,7 +239,7 @@ bb communications attach <returned-conversation-id>
 bb communications status
 ```
 
-The initial capture imports **all retained Canvas transcript entries**, then checks for new entries every two seconds. An explicit start/stop defines the conversation; there is no automatic daily partition or thread subscription. Each thread can attach through the existing Conversation panel or CLI and use the same read, search, citation and acknowledgement tools as other sources.
+The initial capture imports **all retained Canvas transcript entries**, then checks for new entries every two seconds. An explicit start/stop defines the conversation; there is no automatic daily partition or thread subscription. Each thread can attach through the Communications thread panel or CLI and use the same read, search, citation and acknowledgement tools as other sources.
 
 `bb communications canvas-stop <conversation-id>` (or Stop capture in the panel) preserves the transcript and stops ingestion. Plugin reload resumes enabled capture automatically. Starting after a stop creates another conversation and imports retained history again.
 
@@ -253,7 +254,7 @@ Opening an active conversation starts at its latest 20 passages and follows inco
 
 ## Watch a conversation
 
-Give a thread its ongoing task, attach a conversation, then choose **Watch conversation** in its Conversation panel. For example: “Maintain a local HTML mind map of this conversation. Update the same file as ideas develop, preserve stable nodes, and link claims to passages.” The watcher imposes no artifact format or task: another thread can use the same mechanism for questions, notes, or any other user-authorized work.
+Give a thread its ongoing task, attach a conversation, then choose **Watch conversation** in its Communications thread panel. For example: “Maintain a local HTML mind map of this conversation. Update the same file as ideas develop, preserve stable nodes, and link claims to passages.” The watcher imposes no artifact format or task: another thread can use the same mechanism for questions, notes, or any other user-authorized work.
 
 Watching starts from passage zero, including existing history. A repeated start preserves progress. **Stop watching** prevents future automatic dispatch without stopping capture; starting again creates a new watch generation from zero. Detaching, changing the attached conversation (including a room’s next sitting), archiving or deleting the thread stops the watch. A room without a conversation cannot yet be watched. Stopping cannot undo a wake already dispatched.
 

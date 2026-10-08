@@ -11,6 +11,7 @@ import type { Conversation, Registrant, Room, ThreadAttachment, TranscriptSegmen
 import { groupSegments, type SpeakerBlock } from "./src/grouping";
 import { mountPresenceStrip } from "./src/presence/ui/mount";
 import type { ImportFormat } from "./src/adapters/import";
+import type { SlackSpace } from "./src/slack-store";
 import { Button } from "./components/ui/button";
 import { Icon } from "./components/ui/icon";
 import { Input } from "./components/ui/input";
@@ -749,6 +750,49 @@ function quoteBlock(block: SpeakerBlock, conversationTitle: string): string {
   return `${heading}\n> ${block.text.replace(/\n/g, "\n> ")}`;
 }
 
+function ChannelView({channel}:{channel:SlackSpace}) {
+  const rpc=useRpc<typeof rpcContract>();
+  const [query,setQuery]=useState('');
+  const [activeQuery,setActiveQuery]=useState('');
+  const [results,setResults]=useState<Awaited<ReturnType<typeof rpc.call<'channels.read'>>>['results']>([]);
+  const [before,setBefore]=useState<string|undefined>();
+  const [loading,setLoading]=useState(false);
+  const [error,setError]=useState<string|null>(null);
+  const generation=useRef(0);
+  const load=useCallback(async(search:string,cursor?:string)=>{
+    const request=++generation.current;
+    setLoading(true);
+    try {
+      const page=search
+        ? await rpc.call('channels.search',{channelId:channel.channelId,query:search,...(cursor?{before:cursor}:{}),limit:20})
+        : await rpc.call('channels.read',{channelId:channel.channelId,...(cursor?{before:cursor}:{}),limit:20});
+      if(request!==generation.current) return;
+      setResults(old=>cursor?[...old,...page.results]:page.results);
+      setBefore(page.hasMore?page.nextCursor??undefined:undefined);
+      setError(null);
+    } catch(cause) {if(request===generation.current)setError(errorText(cause));}
+    finally {if(request===generation.current)setLoading(false);}
+  },[rpc,channel.channelId]);
+  useEffect(()=>{setActiveQuery('');setQuery('');setResults([]);setBefore(undefined);void load('');},[load]);
+  useChangedSignal(()=>{void load(activeQuery);});
+  return <section aria-label={`Slack channel ${channel.name}`} className="space-y-3">
+    <div className="rounded-md bg-muted px-3 py-2 text-xs text-muted-foreground">Following #{channel.name}{channel.isPrivate?' · private':''}. Indexed through {channel.lastSyncAt?new Date(channel.lastSyncAt).toLocaleString():'a pending sync'}. Messages may be edited or deleted in Slack.</div>
+    <form className="flex gap-2" onSubmit={event=>{event.preventDefault();setActiveQuery(query.trim());setBefore(undefined);void load(query.trim());}}>
+      <Input aria-label="Search attached channel" value={query} onChange={event=>setQuery(event.target.value)} placeholder="Search channel" />
+      <Button type="submit" size="sm" disabled={loading}>Search</Button>
+    </form>
+    <ErrorMessage error={error}/>
+    {results.length===0&&!loading?<StatusBox>{activeQuery?'No matching messages.':'No indexed messages yet.'}</StatusBox>:null}
+    {results.map(message=><article key={message.ts} className="rounded-md border px-3 py-2 text-sm">
+      <div className="mb-1 text-xs text-muted-foreground">{message.authorId??'Unknown author'} · {new Date(Number(message.ts)*1000).toLocaleString()}{message.threadTs&&message.threadTs!==message.ts?' · reply':''}{message.editedAt?' · edited':''}</div>
+      <p className="whitespace-pre-wrap break-words">{message.text}{message.truncated?'…':''}</p>
+      {message.permalink?<a className="text-xs underline" href={message.permalink} target="_blank" rel="noopener noreferrer">Open in Slack</a>:null}
+    </article>)}
+    {before?<Button type="button" size="sm" variant="outline" disabled={loading} onClick={()=>void load(activeQuery,before)}>Older messages</Button>:null}
+    {loading?<p role="status" className="text-sm text-muted-foreground">Loading…</p>:null}
+  </section>;
+}
+
 function ThreadConversationPanel({ threadId }: PluginThreadPanelProps) {
   const rpc = useRpc<typeof rpcContract>();
   const composer = useComposer();
@@ -756,6 +800,8 @@ function ThreadConversationPanel({ threadId }: PluginThreadPanelProps) {
   const [conversation, setConversation] = useState<Conversation | null>(null);
   const [conversations, setConversations] = useState<Conversation[]>([]);
   const [rooms, setRooms] = useState<Room[]>([]);
+  const [channels, setChannels] = useState<SlackSpace[]>([]);
+  const [channel, setChannel] = useState<SlackSpace | null>(null);
   const [room, setRoom] = useState<Room | null>(null);
   // One picker for two kinds of target, so the value carries which kind it is.
   const [selected, setSelected] = useState("");
@@ -766,17 +812,20 @@ function ThreadConversationPanel({ threadId }: PluginThreadPanelProps) {
   const watchRequest = useRef(0);
   const refetch = useCallback(async () => {
     try {
-      const [attached, listed, listedRooms] = await Promise.all([
+      const [attached, listed, listedRooms, listedChannels] = await Promise.all([
         rpc.call("attachments.get", { threadId }),
         rpc.call("conversations.list", { offset: 0, limit: 100 }),
         rpc.call("rooms.list", {}),
+        rpc.call("channels.list", null),
       ]);
       setAttachment(attached.attachment); setConversation(attached.conversation);
-      setRoom(attached.room); setConversations(listed.conversations); setRooms(listedRooms.rooms);
+      setRoom(attached.room); setChannel(attached.channel??null); setConversations(listed.conversations); setRooms(listedRooms.rooms); setChannels(listedChannels.channels);
       setSelected((value) => value
         || (attached.room ? `room:${attached.room.id}` : "")
         || (attached.conversation ? `conversation:${attached.conversation.id}` : "")
+        || (attached.channel ? `channel:${attached.channel.channelId}` : "")
         || (listedRooms.rooms[0] ? `room:${listedRooms.rooms[0].id}` : "")
+        || (listedChannels.channels[0] ? `channel:${listedChannels.channels[0].channelId}` : "")
         || (listed.conversations[0] ? `conversation:${listed.conversations[0].id}` : ""));
       setError(null);
     } catch (cause) { setError(errorText(cause)); }
@@ -811,9 +860,12 @@ function ThreadConversationPanel({ threadId }: PluginThreadPanelProps) {
     try {
       const next = kind === "room"
         ? await rpc.call("attachments.setRoom", { threadId, roomId: id })
-        : await rpc.call("attachments.set", { threadId, conversationId: id });
+        : kind === "channel"
+          ? await rpc.call("attachments.setChannel", { threadId, channelId: id })
+          : await rpc.call("attachments.set", { threadId, conversationId: id });
       setAttachment(next);
       setRoom(kind === "room" ? rooms.find((item) => item.id === id) ?? null : null);
+      setChannel(kind === "channel" ? channels.find((item) => item.channelId === id) ?? null : null);
       setConversation(next.conversationId === null
         ? null
         : conversations.find((item) => item.id === next.conversationId)
@@ -825,30 +877,33 @@ function ThreadConversationPanel({ threadId }: PluginThreadPanelProps) {
   };
 
   return <div className="h-full min-h-0 overflow-y-auto p-4"><div className="space-y-4">
-    <label className="block space-y-1 text-sm"><span>Choose a room or conversation</span>
-      <select aria-label="Choose a room or conversation" className="block h-9 w-full rounded-md border border-input bg-background px-3 text-sm" value={selected} onChange={(event) => setSelected(event.target.value)}>
-        {!conversations.length && !rooms.length ? <option value="">Nothing available</option> : null}
+    <label className="block space-y-1 text-sm"><span>Choose a room, conversation, or channel</span>
+      <select aria-label="Choose a room, conversation, or channel" className="block h-9 w-full rounded-md border border-input bg-background px-3 text-sm" value={selected} onChange={(event) => setSelected(event.target.value)}>
+        {!conversations.length && !rooms.length && !channels.length ? <option value="">Nothing available</option> : null}
         {rooms.length ? <optgroup label="Rooms — follow each new sitting">
           {rooms.map((item) => <option key={item.id} value={`room:${item.id}`}>{item.name}</option>)}
         </optgroup> : null}
         {conversations.length ? <optgroup label="Conversations — one sitting only">
           {conversations.map((item) => <option key={item.id} value={`conversation:${item.id}`}>{item.title}</option>)}
         </optgroup> : null}
+        {channels.length ? <optgroup label="Slack channels — follow ongoing discussion">
+          {channels.map((item) => <option key={item.channelId} value={`channel:${item.channelId}`}>#{item.name}{item.isPrivate?' (private)':''}</option>)}
+        </optgroup> : null}
       </select>
     </label>
     <div className="flex flex-wrap gap-2">
-      <Button type="button" size="sm" disabled={pending || watchPending || !selected} onClick={() => void attach()}>{pending ? "Attaching…" : selected.startsWith("room:") ? "Follow room" : "Attach conversation"}</Button>
+      <Button type="button" size="sm" disabled={pending || watchPending || !selected} onClick={() => void attach()}>{pending ? "Attaching…" : selected.startsWith("room:") ? "Follow room" : selected.startsWith("channel:")?'Follow channel' : "Attach conversation"}</Button>
       {attachment ? <Button type="button" size="sm" variant="outline" disabled={pending || watchPending} onClick={async () => {
         setPending(true);
-        try { await rpc.call("attachments.detach", { threadId }); setAttachment(null); setConversation(null); setRoom(null); setWatch(null); setError(null); }
+        try { await rpc.call("attachments.detach", { threadId }); setAttachment(null); setConversation(null); setRoom(null); setChannel(null); setWatch(null); setError(null); }
         catch (cause) { setError(errorText(cause)); }
         finally { setPending(false); }
       }}>Detach</Button> : null}
     </div>
     <ErrorMessage error={error} />
-    {attachment && room && !conversation ? (
+    {attachment?.channelId ? (channel?<ChannelView channel={channel}/>:<StatusBox>Attached Slack channel is unavailable. Check that Slack reads are enabled and the bot is still a member.</StatusBox>) : attachment && room && !conversation ? (
       <StatusBox>Following {room.name}. Nobody has met in it yet — the next sitting will appear here.</StatusBox>
-    ) : !attachment || !conversation ? <StatusBox>Attach this thread to a room or conversation to read its transcript.</StatusBox> : <>
+    ) : !attachment || !conversation ? <StatusBox>Attach this thread to a room, conversation, or channel to read it.</StatusBox> : <>
       {room ? <div className="rounded-md bg-muted px-3 py-2 text-xs text-muted-foreground">Following {room.name}. Showing its current sitting; a new one replaces it here.</div> : null}
       <div className="rounded-md bg-muted px-3 py-2 text-xs text-muted-foreground">Reading cursor: passage {attachment.cursor}. Reading and search do not acknowledge passages automatically.</div>
       <section aria-label="Conversation watch" className="space-y-2 rounded-md border px-3 py-3">
@@ -897,23 +952,24 @@ function ThreadConversationHeader({ threadId, isCompactViewport }: PluginThreadH
   const rpc = useRpc<typeof rpcContract>();
   const navigate = useBbNavigate();
   const [conversation, setConversation] = useState<Conversation | null>(null);
+  const [channel, setChannel] = useState<SlackSpace | null>(null);
   const [loaded, setLoaded] = useState(false);
   const refetch = useCallback(() => {
     rpc.call("attachments.get", { threadId }).then(
-      (value) => { setConversation(value.conversation); setLoaded(true); },
+      (value) => { setConversation(value.conversation); setChannel(value.channel??null); setLoaded(true); },
       () => setLoaded(true),
     );
   }, [rpc, threadId]);
   useEffect(refetch, [refetch]);
   useChangedSignal(refetch);
-  const accessible = conversation ? `Open attached conversation ${conversation.title}` : "Open conversation panel";
+  const accessible = conversation ? `Open attached conversation ${conversation.title}` : channel ? `Open attached Slack channel ${channel.name}` : "Open communications panel";
   return <Button
     type="button" variant="ghost" size={isCompactViewport ? "icon" : "sm"}
     className="h-7 max-w-56" aria-label={accessible} disabled={!loaded}
     onClick={() => navigate.openThreadPanel({ actionId: "conversation" })}
   >
     <Icon name="MessageSquare" />
-    {isCompactViewport ? null : <span className="truncate">{conversation ? `${conversation.title} · ${captureLabel(conversation.captureState)}` : "No conversation attached"}</span>}
+    {isCompactViewport ? null : <span className="truncate">{conversation ? `${conversation.title} · ${captureLabel(conversation.captureState)}` : channel ? `#${channel.name} · Slack` : "No conversation or channel attached"}</span>}
   </Button>;
 }
 
@@ -946,10 +1002,10 @@ export default definePluginApp((app) => {
     path: "communications", component: CommunicationsPage,
   });
   app.slots.threadPanelAction({
-    id: "conversation", title: "Conversation", icon: "communications-hub/main",
+    id: "conversation", title: "Communications", icon: "communications-hub/main",
     component: ThreadConversationPanel, layout: "flush",
   });
   app.slots.experimental_threadHeaderAction({
-    id: "conversation", title: "Conversation", component: ThreadConversationHeader,
+    id: "conversation", title: "Communications", component: ThreadConversationHeader,
   });
 });

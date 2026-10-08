@@ -54,6 +54,9 @@ export class SlackStore {
       WHERE teamId=? AND active=1 ORDER BY name`).all(key.parse(teamId)) as StoredSpace[])
       .map(s => ({...s,isPrivate:Boolean(s.isPrivate)}));
   }
+  space(teamId:string,channelId:string):SlackSpace|null {
+    return this.spaces(teamId).find(space=>space.channelId===channelId)??null;
+  }
 
   /** A complete snapshot of a time window also removes edits/deletions missed while offline. */
   reconcile(teamId: string, channelId: string, oldest: string, entries: SlackEntryInput[]) {
