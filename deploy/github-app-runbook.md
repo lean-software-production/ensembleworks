@@ -204,7 +204,10 @@ push to `main`** — a human must review and merge.
 > → `false`). Private repos such as `workshops` can't have either on the org's
 > current plan ("Upgrade to GitHub Pro or make this repository public"). Agents
 > have pushed to `main` and merged their own PRs. Until protection is enabled,
-> the PR-only rule rests on `deploy/agent-home/AGENTS.md` alone.
+> the PR-only rule rests on `deploy/agent-home/AGENTS.md` and Claude Code's
+> auto-mode classifier, which blocks an agent merging its own PR unless a human
+> in the conversation asked for that merge (the `Trainer-Requested Merge` rule in
+> `deploy/agent-home/.claude/ensembleworks-settings.json`).
 
 ## 8. Remote over HTTPS (so a token can push)
 
