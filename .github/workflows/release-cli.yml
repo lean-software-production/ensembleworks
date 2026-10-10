@@ -133,3 +133,32 @@ jobs:
           tag_name: ${{ github.ref_name }}
           generate_release_notes: true
           files: rel/*
+
+  notify-infrastructure:
+    # A release created with GITHUB_TOKEN will not trigger a separate
+    # release:published workflow. Dispatch only after publish succeeds.
+    needs: publish
+    if: ${{ vars.EW_INFRA_DEPLOY_ENABLED == 'true' && !contains(github.ref_name, '-') }}
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - name: Mint infrastructure workflow token
+        id: app-token
+        uses: actions/create-github-app-token@v3
+        with:
+          app-id: ${{ vars.EW_INFRA_DISPATCH_APP_ID }}
+          private-key: ${{ secrets.EW_INFRA_DISPATCH_APP_PRIVATE_KEY }}
+          owner: lean-software-production
+          repositories: infrastructure
+          permission-actions: write
+      - name: Ask infrastructure to deploy the published release
+        env:
+          GH_TOKEN: ${{ steps.app-token.outputs.token }}
+          RELEASE_TAG: ${{ github.ref_name }}
+        run: |
+          set -euo pipefail
+          gh workflow run deploy-ensembleworks.yml \
+            --repo lean-software-production/infrastructure \
+            --ref main -f release_tag="$RELEASE_TAG"
+          echo "Requested infrastructure deployment of $RELEASE_TAG" >> "$GITHUB_STEP_SUMMARY"

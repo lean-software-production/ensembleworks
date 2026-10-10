@@ -537,11 +537,11 @@ sudo systemctl restart ensembleworks-sync    # or -term / -client / -scribe
 
 ## Releasing & deploying (production)
 
-Production client boxes (e.g. ew-donkeyred-001) run non-watch systemd units; the
-sync server serves the static client (Caddy proxies to it). The host (Bun, Caddy,
-cloudflared, LiveKit, the resource envelope, secret placeholders) is provisioned by
-the **laingville** repo (`servers/<host>/bootstrap.sh`); this repo owns the app + its
-rollout.
+Production client boxes (currently `ew-lsp-001`) run non-watch systemd units;
+the sync server serves the static client (Caddy proxies to it). The
+[infrastructure repo](https://github.com/lean-software-production/infrastructure)
+owns the hosts and rollout order. This repo owns the app, release artifacts,
+and the deploy script invoked by infrastructure.
 
 > **Prerequisite — tldraw license.** On a real production domain tldraw enforces a
 > per-domain license; without one the editor blanks. `VITE_TLDRAW_LICENSE_KEY` is a
@@ -559,9 +559,14 @@ rollout.
    `ensembleworks-transcriber`) and the client bundle, and attaches them + a
    checksums file to the GitHub release.
 
-2. **Deploy a version** to a server (SSH over its tailnet name):
+2. **Deploy a version.** When automatic deployment is enabled, the successful
+   release workflow dispatches the published stable tag to the
+   [infrastructure deployment workflow](https://github.com/lean-software-production/infrastructure/blob/main/docs/ensembleworks-release-deploy.md),
+   which deploys to staging and then production. The dispatcher holds no box
+   credentials. Until the one-time credentials and `EW_INFRA_DEPLOY_ENABLED`
+   variable are configured, deploy manually over SSH:
 
-       deploy/deploy.sh mrdavidlaing@ew-donkeyred-001-tailnet 0.2.0
+       deploy/deploy.sh ew-admin@ew-lsp-001-tailnet 0.30.2
 
    deploy.sh is **fetch-verify-swap**: it preflights the host against
    `deploy/runtime-requirements`, downloads the tag's CI-compiled binaries +
@@ -574,7 +579,7 @@ rollout.
 3. **Roll back**: deploy an older version — its fetched dir is still present, so it
    swaps the symlink instantly (within the same posture era; see `EW_ALLOW_ERA_CROSS`):
 
-       deploy/deploy.sh mrdavidlaing@ew-donkeyred-001-tailnet 0.1.0
+       deploy/deploy.sh ew-admin@ew-lsp-001-tailnet 0.30.1
 
 4. **(Optional) shared browser** — a neko container (real Firefox streamed to the
    canvas, the whole mob driving one browser). It's an opt-in extra service, off
@@ -585,7 +590,7 @@ rollout.
    deploy.sh then installs/enables `ensembleworks-shared-browser` (its own unit +
    resource slice) and adds the `/shared-browser` Caddy route. Being a container,
    not release code, it's never restarted on a routine deploy (so the live shared
-   session survives). Prerequisites are **host**-owned by the laingville bootstrap
+   session survives). Prerequisites are **host**-owned by the infrastructure repo
    (like LiveKit): `docker` installed, the media UDP port opened in ufw + the cloud
    firewall, and `~<app-user>/.config/ensembleworks/shared-browser.env` filled in
    from [deploy/shared-browser.env.example](deploy/shared-browser.env.example).
