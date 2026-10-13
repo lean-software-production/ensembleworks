@@ -5,6 +5,7 @@ Linux VM: live **tmux-backed terminals**, **embedded dev servers**, sticky
 notes and drawings — with teammates as **video bubbles whose voices get louder
 as you work closer to them**.
 
+[Vision and principles](docs/VISION.md) ·
 Session MVP plan: [docs/session-mvp-plan.md](docs/session-mvp-plan.md) ·
 Debugging the canvas headlessly: [docs/headless-browser.md](docs/headless-browser.md)
 
