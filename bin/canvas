@@ -46,6 +46,7 @@ usage() {
     '      a "room" key. Examples:' \
     '        canvas shape '"'"'{"type":"geo","text":"retry bug","x":100,"y":80}'"'"'' \
     '        canvas shape '"'"'{"type":"arrow","fromId":"shape:a","toId":"shape:b"}'"'"'' \
+    '        canvas shape '"'"'{"type":"iframe","url":"https://example.com/docs","title":"Docs"}'"'"'' \
     '        canvas shape '"'"'{"op":"update","id":"shape:a","text":"new label"}'"'"'' \
     '  roadmap list' \
     '      List the room'"'"'s roadmaps (JSON: id, name, rev, updated).' \

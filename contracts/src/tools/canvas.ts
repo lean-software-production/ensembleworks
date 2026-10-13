@@ -25,9 +25,10 @@ export const canvasShape: ToolDef = {
 	id: 'shape',
 	http: { method: 'POST', path: '/api/canvas/shape' },
 	help:
-		'Create/update/delete a diagram shape. create type ∈ geo|text|note|arrow|frame|line|draw|highlight. ' +
+		'Create/update/delete a diagram shape. create type ∈ geo|text|note|arrow|frame|line|draw|highlight|iframe. ' +
 		'line/draw/highlight take --points (parent-relative: page coords on the page, or frame-local when --frame is set — same convention as geo/text/note; [[x,y],…] or [x,y,pressure], JSON or @file); ' +
 		'draw takes --closed/--fill, line takes --spline line|cubic. ' +
+		'iframe takes --url (http/https, stored verbatim) and optional --title. ' +
 		'update <id> --frame <name> reparents INTO a frame, --to-page reparents OUT to its page ' +
 		'(both preserve page-position; correct for UNROTATED parents only), --rotate <rad>/--lock are riders. ' +
 		'delete <frame-id> keeps children on the frame\'s page; --with-children cascades descendants + bindings.',
@@ -35,8 +36,10 @@ export const canvasShape: ToolDef = {
 		room,
 		op: z.enum(['create', 'update', 'delete']).default('create'),
 		// create
-		type: z.enum(['geo', 'text', 'note', 'arrow', 'frame', 'line', 'draw', 'highlight']).optional(),
+		type: z.enum(['geo', 'text', 'note', 'arrow', 'frame', 'line', 'draw', 'highlight', 'iframe']).optional(),
 		frame: z.string().optional(),
+		url: z.string().optional().describe('iframe embed URL (http/https, stored verbatim — no proxying)'),
+		title: z.string().optional().describe('iframe caption; defaults to the URL host'),
 		geo: z.enum(GEO_TYPES as [string, ...string[]]).optional(),
 		fromId: z.string().optional().describe('arrow start shape id'),
 		toId: z.string().optional().describe('arrow end shape id'),
