@@ -68,4 +68,8 @@ it('posts only to configured bot-member channels after an explicit tool call',as
   expect(posts).toHaveLength(0);
   expect(JSON.parse(await call('G1','Hello','122.000001') as string)).toEqual({channelId:'G1',ts:'123.000001',permalink:'https://example.slack.com/archives/G1/p123000001'});
   expect(posts).toEqual([{method:'POST',body:{channel:'G1',text:'Hello',thread_ts:'122.000001',unfurl_links:false,unfurl_media:false}}]);
+  expect((await host.harness.behavior.runCli(['slack-post','C1','blocked'])).exitCode).toBe(1);
+  expect((await host.harness.behavior.runCli(['slack-post','G1','CLI message'])).exitCode).toBe(0);
+  expect(posts).toHaveLength(2);
+  expect(posts[1]?.body).toMatchObject({channel:'G1',text:'CLI message'});
 });

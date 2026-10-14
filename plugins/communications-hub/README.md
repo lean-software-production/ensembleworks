@@ -215,6 +215,8 @@ The first sync imports all history Slack makes available in each joined channel,
 
 Add the `chat:write` **bot scope** to the same Slack app and reinstall it. If Slack rotates the bot token, update **Slack bot token** in plugin settings and run `bb communications slack-sync` again. Set **Slack posting channel IDs** to a comma-separated list of channel IDs, then turn on **Enable Slack message posting**. Posting is off by default, and the channel must also be in the bot's current indexed membership. DMs are not accepted. The `communications_slack_post` agent tool requires a channel ID and final message text (up to 4,000 characters); `threadTs` optionally replies to a parent message. It returns the posted timestamp and permalink. The agent may call it only when the BB user explicitly asks to send that message. A Slack message, transcript, or channel attachment does not authorize a post. If the request times out or the response is unclear, check Slack before retrying to avoid a duplicate.
 
+The matching CLI command is `bb communications slack-post CHANNEL_ID 'message text' [parent-ts]`. Quote message text as one argument. It applies the same channel limits and returns the same timestamp and permalink.
+
 
 ## EnsembleWorks V1 (existing LiveKit transcript)
 
