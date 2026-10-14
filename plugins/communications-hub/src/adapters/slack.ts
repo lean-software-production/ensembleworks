@@ -23,7 +23,9 @@ export function registerSlack(bb: BbPluginApi, store: SlackStore, changed: () =>
   request: typeof fetch = fetch) {
   const settings = bb.settings.define({
     slackReadEnabled:{type:'boolean',label:'Enable Slack channel reading',default:false},
-    slackBotToken:{type:'string',label:'Slack bot token (read scopes only)',secret:true},
+    slackBotToken:{type:'string',label:'Slack bot token',secret:true},
+    slackWriteEnabled:{type:'boolean',label:'Enable Slack message posting',default:false},
+    slackWriteChannels:{type:'string',label:'Slack posting channel IDs (comma separated)'},
   });
   let teamId: string | null = null;
   let tokenDigest: string | null = null;
@@ -223,6 +225,30 @@ export function registerSlack(bb: BbPluginApi, store: SlackStore, changed: () =>
     }
     return teamId;
   }
+  async function post(channelId:string,text:string,threadTs?:string) {
+    const config=await settings.get();
+    if (!config.slackWriteEnabled) throw new Error('Slack message posting is disabled');
+    if (!config.slackBotToken) throw new Error('Set the Slack bot token in plugin settings');
+    const allowed=(config.slackWriteChannels??'').split(',').map(value=>value.trim()).filter(Boolean);
+    if (!allowed.includes(channelId)) throw new Error('Slack channel is not allowed for posting');
+    const auth=await api(config.slackBotToken,'auth.test',{},authResponse);
+    if (!store.space(auth.team_id,channelId)) throw new Error('Slack channel is not in the bot membership snapshot; run slack-sync');
+    // A post is not retried: an uncertain HTTP result could otherwise create two messages.
+    const response=await request('https://slack.com/api/chat.postMessage',{
+      method:'POST',headers:{Authorization:`Bearer ${config.slackBotToken}`,'Content-Type':'application/json'},
+      body:JSON.stringify({channel:channelId,text,...(threadTs?{thread_ts:threadTs}:{}),
+        unfurl_links:false,unfurl_media:false}),signal:AbortSignal.timeout(30_000),redirect:'error',
+    });
+    if (!response.ok) throw new Error(`Slack chat.postMessage returned HTTP ${response.status}; delivery is uncertain`);
+    const raw=await response.text();
+    if (raw.length>100_000) throw new Error('Slack chat.postMessage response too large; delivery is uncertain');
+    const result=z.object({ok:z.boolean(),error:z.string().optional(),channel:z.string().optional(),ts:z.string().optional()}).safeParse(JSON.parse(raw));
+    if (!result.success) throw new Error('Slack chat.postMessage returned an unsupported response; delivery is uncertain');
+    if (!result.data.ok) throw new SlackApiError('chat.postMessage',result.data.error??'failed');
+    if (result.data.channel!==channelId || !result.data.ts) throw new Error('Slack chat.postMessage returned an unexpected destination; delivery is uncertain');
+    const [linked]=await links([{channelId,ts:result.data.ts}]);
+    return {channelId,ts:result.data.ts,permalink:linked?.permalink??null};
+  }
   bb.background.service('slack-read-sync',{async start(signal) {
     while(!signal.aborted && !disposed) {
       try {const config=await settings.get();if(config.slackReadEnabled && config.slackBotToken) await sync(signal);}
@@ -231,5 +257,5 @@ export function registerSlack(bb: BbPluginApi, store: SlackStore, changed: () =>
     }
   }});
   bb.onDispose(()=>{disposed=true;});
-  return {sync,status,links,authors,teamId:()=>teamId,authorizedTeam};
+  return {sync,status,links,authors,teamId:()=>teamId,authorizedTeam,post};
 }

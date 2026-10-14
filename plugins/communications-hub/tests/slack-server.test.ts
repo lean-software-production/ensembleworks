@@ -42,3 +42,30 @@ it('exposes bot-member channel search through CLI and agent tools only after rea
   expect(await host.harness.behavior.callAgentTool('communications_slack_read',{channelId:'G1'},{threadId:'A'}))
     .toMatchObject({isError:true});
 });
+
+it('posts only to configured bot-member channels after an explicit tool call',async()=>{
+  const posts: Array<{method:string;body:unknown}>=[];
+  vi.stubGlobal('fetch',async(input:RequestInfo|URL,init?:RequestInit)=>{
+    const method=new URL(String(input)).pathname.split('/').at(-1)!;
+    if(method==='chat.postMessage') posts.push({method:init?.method??'',body:JSON.parse(String(init?.body))});
+    const body=method==='auth.test'?{ok:true,team_id:'T1',url:'https://example.slack.com/'}:
+      method==='users.conversations'?{ok:true,channels:[{id:'C1',name:'team',is_member:true},{id:'G1',name:'strategy',is_private:true,is_member:true}],response_metadata:{next_cursor:''}}:
+      method==='conversations.history'?{ok:true,messages:[],response_metadata:{next_cursor:''}}:
+      method==='chat.postMessage'?{ok:true,channel:'G1',ts:'123.000001'}:
+      method==='chat.getPermalink'?{ok:true,permalink:'https://example.slack.com/archives/G1/p123000001'}:
+      {ok:false,error:'unexpected_method'};
+    return new Response(JSON.stringify(body),{status:200});
+  });
+  const host=createFakePluginHost();hosts.push(host);await plugin(host.bb);
+  await host.harness.behavior.setSettings({slackReadEnabled:true,slackBotToken:'xoxb-test'});
+  expect((await host.harness.behavior.runCli(['slack-sync'])).exitCode).toBe(0);
+  const call=(channelId:string,text:string,threadTs?:string)=>host.harness.behavior.callAgentTool('communications_slack_post',{channelId,text,...(threadTs?{threadTs}:{})},{threadId:'A'});
+  expect(await call('G1','Hello')).toMatchObject({isError:true});
+  await host.harness.behavior.setSettings({slackWriteEnabled:true,slackWriteChannels:'C1'});
+  expect(await call('G1','Hello')).toMatchObject({isError:true});
+  await host.harness.behavior.setSettings({slackWriteChannels:'G1'});
+  await expect(call('D1','Hello')).rejects.toThrow(/arguments are invalid/);
+  expect(posts).toHaveLength(0);
+  expect(JSON.parse(await call('G1','Hello','122.000001') as string)).toEqual({channelId:'G1',ts:'123.000001',permalink:'https://example.slack.com/archives/G1/p123000001'});
+  expect(posts).toEqual([{method:'POST',body:{channel:'G1',text:'Hello',thread_ts:'122.000001',unfurl_links:false,unfurl_media:false}}]);
+});
