@@ -6,6 +6,8 @@ import { presenceViewSchema } from './presence/view';
 
 export const id=z.string().trim().min(1).max(256);
 const page=z.object({conversation:conversationSchema,segments:z.array(segmentSchema),hasMore:z.boolean(),nextCursor:z.number()});
+const channelResult=z.object({teamId:id,channelId:id,channelName:z.string(),isPrivate:z.boolean(),ts:id,threadTs:id.nullable(),authorId:id.nullable(),authorName:z.string().nullable(),text:z.string(),editedAt:id.nullable(),permalink:z.string().nullable(),truncated:z.boolean()});
+const channelPage=z.object({results:z.array(channelResult),hasMore:z.boolean(),nextCursor:id.nullable()});
 export const readInput=z.object({conversationId:id,after:z.number().int().nonnegative().optional(),limit:z.number().int().min(1).max(30).optional(),fromMs:z.number().int().nonnegative().optional(),toMs:z.number().int().nonnegative().optional()}).strict();
 export const importInput=z.object({title:z.string().trim().min(1).max(200),format:importFormatSchema,text:z.string().min(1).max(1_000_000)}).strict();
 export const rpcContract=defineRpcContract({
@@ -15,9 +17,13 @@ export const rpcContract=defineRpcContract({
   'transcripts.import':{input:importInput,output:conversationSchema},
   'transcripts.read':{input:readInput,output:page},
   'transcripts.search':{input:readInput.extend({query:z.string().trim().min(1).max(200)}),output:page},
-  'attachments.get':{input:z.object({threadId:id}).strict(),output:z.object({attachment:attachmentSchema.nullable(),conversation:conversationSchema.nullable(),room:roomSchema.nullable()})},
+  'attachments.get':{input:z.object({threadId:id}).strict(),output:z.object({attachment:attachmentSchema.nullable(),conversation:conversationSchema.nullable(),room:roomSchema.nullable(),channel:z.object({teamId:id,channelId:id,name:z.string(),isPrivate:z.boolean(),lastSyncAt:z.number().nullable()}).nullable().optional()})},
   'attachments.set':{input:z.object({threadId:id,conversationId:id}).strict(),output:attachmentSchema},
   'attachments.setRoom':{input:z.object({threadId:id,roomId:id}).strict(),output:attachmentSchema},
+  'attachments.setChannel':{input:z.object({threadId:id,channelId:id}).strict(),output:attachmentSchema},
+  'channels.list':{input:z.null(),output:z.object({channels:z.array(z.object({teamId:id,channelId:id,name:z.string(),isPrivate:z.boolean(),lastSyncAt:z.number().nullable()}))})},
+  'channels.read':{input:z.object({channelId:id,before:id.optional(),limit:z.number().int().min(1).max(30).optional()}).strict(),output:channelPage},
+  'channels.search':{input:z.object({channelId:id,query:z.string().trim().min(1).max(200),before:id.optional(),limit:z.number().int().min(1).max(30).optional()}).strict(),output:channelPage},
   'attachments.detach':{input:z.object({threadId:id}).strict(),output:z.object({ok:z.boolean()})},
   'attachments.acknowledge':{input:z.object({threadId:id,conversationId:id,cursor:z.number().int().nonnegative()}).strict(),output:attachmentSchema},
   'watch.get':{input:z.object({threadId:id}).strict(),output:z.object({watch:watchSchema.nullable()})},

@@ -142,6 +142,10 @@ function handlers(
       nextCursor: 8,
     }),
     "attachments.get": () => ({ attachment: null, conversation: null, room: null }),
+    "channels.list": () => ({channels:[]}),
+    "channels.read": () => ({results:[],hasMore:false,nextCursor:null}),
+    "channels.search": () => ({results:[],hasMore:false,nextCursor:null}),
+    "attachments.setChannel": ({threadId,channelId}) => ({threadId,roomId:null,conversationId:null,cursor:0,channelTeamId:'T1',channelId}),
     "attachments.set": ({ threadId, conversationId }) => ({
       threadId,
       roomId: null,
@@ -198,10 +202,10 @@ describe("Communications Hub app", () => {
       { id: "communications", path: "communications", title: "Communications", icon: "communications-hub/main" },
     ]);
     expect(app.threadPanelActions.map(({ id, title, icon }) => ({ id, title, icon }))).toEqual([
-      { id: "conversation", title: "Conversation", icon: "communications-hub/main" },
+      { id: "conversation", title: "Communications", icon: "communications-hub/main" },
     ]);
     expect(app.threadHeaderActions.map(({ id, title }) => ({ id, title }))).toEqual([
-      { id: "conversation", title: "Conversation" },
+      { id: "conversation", title: "Communications" },
     ]);
   });
 
@@ -366,7 +370,7 @@ describe("Communications Hub app", () => {
       slot.inspection.rpcCalls.some(({ method }) => method === "attachments.acknowledge"),
     ).toBe(false);
 
-    fireEvent.change(slot.getByLabelText("Choose a room or conversation"), {
+    fireEvent.change(slot.getByLabelText("Choose a room, conversation, or channel"), {
       target: { value: "conversation:conversation-1" },
     });
     fireEvent.click(slot.getByRole("button", { name: "Attach conversation" }));
@@ -479,7 +483,7 @@ describe("Communications Hub app", () => {
     );
 
     await slot.findByRole("option", { name: "Team standup" });
-    fireEvent.change(slot.getByLabelText("Choose a room or conversation"), {
+    fireEvent.change(slot.getByLabelText("Choose a room, conversation, or channel"), {
       target: { value: "room:room-1" },
     });
     // The button names the consequence: a room target follows, a conversation target does not.
@@ -494,6 +498,22 @@ describe("Communications Hub app", () => {
     // A room nobody has met in resolves to no conversation, which is a normal state and not
     // an error: the thread is waiting for the first sitting.
     await slot.findByText(/Nobody has met in it yet/);
+  });
+
+  it("attaches to a Slack channel and reads it in the thread panel", async () => {
+    const app = await loadPluginApp(() => import("../app"));
+    const channel={teamId:'T1',channelId:'G1',name:'strategy',isPrivate:true,lastSyncAt:Date.now()};
+    const slot=renderSlot(app.threadPanelActions[0]!,{threadId:'thread-a',params:null},{rpc:handlers({
+      'channels.list':()=>({channels:[channel]}),
+      'channels.read':()=>({results:[{...channel,channelName:'strategy',ts:'100.000001',threadTs:null,authorId:'U1',authorName:'Ada',text:'The release is Friday',editedAt:null,permalink:'https://example.slack.com/archives/G1/p100000001',truncated:false}],hasMore:false,nextCursor:'100.000001'}),
+    })});
+    await slot.findByRole('option',{name:'#strategy (private)'});
+    fireEvent.change(slot.getByLabelText('Choose a room, conversation, or channel'),{target:{value:'channel:G1'}});
+    fireEvent.click(slot.getByRole('button',{name:'Follow channel'}));
+    await slot.findByText('The release is Friday');
+    expect(slot.getByText(/Ada ·/)).toBeTruthy();
+    expect(slot.inspection.rpcCalls).toContainEqual({method:'attachments.setChannel',input:{threadId:'thread-a',channelId:'G1'}});
+    expect(slot.getByRole('link',{name:'Open in Slack'}).getAttribute('href')).toBe('https://example.slack.com/archives/G1/p100000001');
   });
 
   it("shows per-thread attachment state in the header and opens the panel", async () => {

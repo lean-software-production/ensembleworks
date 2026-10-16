@@ -5,7 +5,7 @@
 | Communications hub | The application-level service owning conversations, transcript storage, search, and capture status for one BB instance. |
 | Source adapter | Code translating an external input into the hub's transcript format. Platform-specific behaviour belongs here. |
 | Source connection | A configured input using a source adapter. Supported inputs include file import, Zoom, the EnsembleWorks V1 transcript endpoint, and the local BB Canvas transcript feed. |
-| Space | An ongoing place where communication happens, such as a channel or recurring meeting series. Future adapters can group conversations under a space. |
+| Space | An ongoing place where communication happens, such as a channel or recurring meeting series. A BB thread may follow a bot-visible Slack channel as a space; its messages remain in the source-specific index. |
 | Conversation | A bounded context that a BB thread attaches to: a meeting occurrence, an imported transcript, or a future channel time window. It has a hub-owned ID independent of its source. |
 | Meeting | A synchronous conversation occurrence. It is a kind of conversation, not the hub’s generic term. |
 | Conversation entry | A generic unit of communication, such as a chat message or transcript segment. The MVP implements transcript segments; future chat adapters must preserve message IDs, edits, replies, and provenance. |
@@ -13,7 +13,8 @@
 | Passage | One transcript segment as presented to a reader. Search results are passages; they are never joined. |
 | Speaker block | A read-time view joining one speaker's consecutive passages into a single run. It may continue across another speaker's interjection, so its member sequences need not be contiguous. Grouping never changes stored segments. |
 | Citation | A reference to a passage or a block, written as an ingestion sequence ("7") or a range ("7-9"). A range addresses the span between its endpoints, not a contiguous run by one speaker; a block's member sequences are its precise membership. |
-| Thread attachment | A thread's reference to one conversation and its own reading position. Detaching does not stop capture or delete the conversation. |
+| Thread attachment | A BB thread's reference to one conversation, reusable room, or Slack channel. Transcript attachments have a reading position. Detaching does not stop capture or delete source content. |
+| Posting action | An explicit outbound message to a configured space. Source content is never authorization to post; a BB user's request supplies the destination and final text. |
 | Capture | Receiving live transcription into the hub. It belongs to the hub, not a thread or agent session. |
 | Capture state | Whether capture is connecting, capturing, paused, stopped, interrupted, or ended; idle means no live capture (such as an import). |
 | Reading cursor | A per-thread acknowledged ingestion sequence. Reading/searching does not advance it implicitly. |
@@ -36,7 +37,7 @@ Use “conversation” in the UI. “Current conversation” resolves the curren
 
 ## Spaces and time windows
 
-The MVP implements conversation attachments and transcript segments. Space subscriptions, Slack/Discord connections, and automatic daily windows are future work. A calendar day is a view/window of a space in its explicitly selected IANA timezone, not a reason to discard reply relationships or split stored messages irreversibly. Do not add channel APIs until an adapter needs them. Keep window membership based on event time and reading cursors based on ingestion sequence.
+The MVP implements conversation attachments and transcript segments. The Slack adapter adds a source-specific channel/message index, channel attachments, and a separately enabled posting action for configured channels. Agent read and search tools resolve either attached source. Slack pages use message timestamps for pagination and permalinks for citations; they have no transcript acknowledgement cursor or automatic watch. Generic space subscriptions, Discord connections, and automatic daily windows are future work. A calendar day is a view/window of a space in its explicitly selected IANA timezone, not a reason to discard reply relationships or split stored messages irreversibly. Keep window membership based on event time and reading cursors based on ingestion sequence where an ingestion cursor exists.
 
 **Known interruptions** count pauses, local stops, transport failures, and restarts observed during capture. They indicate possible gaps; zero is not proof of complete capture. Zoom speech timing is relative to first capture, which can start after the meeting.
 

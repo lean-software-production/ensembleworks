@@ -9,11 +9,12 @@ A persistent conversation library for one BB instance. Import a transcript or ca
 - Independent thread attachments and explicit reading cursors.
 - A Communications page, a Conversation thread panel, and agent tools returning grouped passages with citation links.
 - A Zoom RTMS source adapter, enabled separately after app/webhook configuration.
+- A Slack channel index and separately enabled posting action. The index searches public and private channels the bot has joined, never DMs.
 - A 36px room-presence row above the sidebar footer: one selected room, a status dot, up to three faces, and a popover with names, the Zoom link and the current conversation. See [room presence](#room-presence-in-the-sidebar).
 
 Read the [canonical glossary](docs/glossary.md), [MVP spec](docs/superpowers/specs/2026-09-10-communications-hub.md), and [Zoom setup](docs/zoom-setup.md). Repository instructions in [AGENTS.md](AGENTS.md) require future agents to use these terms.
 
-A **conversation** is the context a thread attaches to. A **meeting** is one kind of conversation. A future **space** can represent a long-running Slack/Discord channel, with conversations presented as time windows. The MVP implements Zoom and transcript import; it does not implement chat adapters, daily windows or space subscriptions.
+A **conversation** is the context a thread attaches to. A **meeting** is one kind of conversation. A **space** can represent a long-running Slack/Discord channel. The Slack read index stores channels and messages separately from immutable meeting transcripts; channel attachment, daily windows and space subscriptions are future work.
 
 ## Install for local development
 
@@ -71,15 +72,16 @@ For `current`, `attach`, `detach`, and `acknowledge`, the thread ID may be omitt
 
 | Tool | Purpose |
 | --- | --- |
-| `communications_current` | Resolve this thread's attachment and capture status. |
+| `communications_current` | Resolve this thread's conversation, room, or Slack channel attachment. |
 | `communications_list` | Find other conversations when requested. |
-| `communications_search` | Search literal words within one conversation, returning individual matching passages. |
-| `communications_read` | Read a page as speaker blocks, optionally by time range or since the acknowledged cursor. |
+| `communications_search` | Search the attached transcript or channel; explicit target IDs select another source. |
+| `communications_read` | Read the attached transcript as speaker blocks or the attached channel as messages. |
 | `communications_acknowledge` | Advance the current thread's cursor after using passages. |
+| `communications_slack_post` | Post the final text requested by the BB user to a configured Slack channel. |
 
-Read/search default to the attached conversation. Explicit conversation IDs permit intentional searches across this single-instance library. Reads do not implicitly acknowledge content. Acknowledgement is monotonic and checked against both the current attachment and available sequences. A search result alone does not establish that all earlier content was read.
+Read/search default to the attached conversation or Slack channel. Explicit `conversationId` or `channelId` permits an intentional read of another target. Transcript pages use `after` (ingestion sequence); channel pages use `before` (Slack message timestamp). Reads do not implicitly acknowledge content. Transcript acknowledgement is monotonic and checked against both the current attachment and available sequences. Channels do not yet have an acknowledgement cursor or automatic watch.
 
-Both tools return the same envelope: the `conversation`, a `notice` repeating that transcript content is reference material, `citations.base`, a page-local `speakers` table, `hasMore` and `nextCursor`. Each row's `speaker` is an index into `speakers`, or `null` when the passage is unattributed. A citation link is `citations.base` plus the row's `citation`, so the absolute URL is written once per page rather than once per passage. The stored segment ID, source key, per-row receipt time and per-row conversation ID are not sent to agents; a passage stays addressable by conversation and ingestion sequence.
+Transcript reads and searches retain their envelope: the `conversation`, a `notice` repeating that transcript content is reference material, `citations.base`, a page-local `speakers` table, `hasMore` and `nextCursor`. Channel reads and searches return `kind: "channel"`, channel details, `results`, `hasMore`, and `nextCursor`; each message carries a Slack permalink when available. Each transcript row's `speaker` is an index into `speakers`, or `null` when the passage is unattributed. A citation link is `citations.base` plus the row's `citation`, so the absolute URL is written once per page rather than once per passage. The stored segment ID, source key, per-row receipt time and per-row conversation ID are not sent to agents; a passage stays addressable by conversation and ingestion sequence.
 
 `communications_read` returns `blocks`. Consecutive passages from one speaker are joined into one readable run, continuing across another speaker's short interjection, so a sentence broken by a "Yeah" in the middle arrives whole. `communications_search` returns `passages` and never groups: matches are scattered hits, and joining two of them would invent a passage nobody spoke. Reading a block's neighbours still requires `communications_read`.
 
@@ -192,6 +194,32 @@ Further live runs on 2026-09-11 confirmed capture does not require the app owner
 
 The first build of this plugin was lost when its BB workspace was destroyed. This tree was reconstructed from agent transcripts and re-verified; see the recovery note in [the implementation plan](docs/superpowers/plans/2026-09-10-communications-hub.md).
 
+## Slack channels
+
+Create an internal Slack app with a bot user and these **bot token** read scopes: `channels:read`, `channels:history`, `groups:read`, `groups:history`, and `users:read`. The last scope resolves message author IDs to names; the channel reader continues to work without it and falls back to IDs. Do not grant `users:read.email`, `im:*`, `mpim:*`, or `search:read`. Reinstall the app in the workspace after adding a scope, then invite its bot to each public or private channel BB should read. In Communications Hub plugin settings, set **Slack bot token** and turn on **Enable Slack channel reading**. Keep the token in BB secret settings, not this checkout. The bot never joins channels on its own.
+
+```sh
+bb communications slack-sync
+bb communications slack-status
+bb communications slack-search 'deployment decision'
+bb communications slack-search 'deployment decision' G_PRIVATE_CHANNEL_ID
+bb communications slack-read G_PRIVATE_CHANNEL_ID
+bb communications attach-channel G_PRIVATE_CHANNEL_ID
+```
+
+The thread panel also offers joined Slack channels in its attachment picker. After attaching, `communications_current`, `communications_read`, and `communications_search` use that channel by default. The agent still has `communications_slack_search`, `communications_slack_read`, and `communications_slack_status` for workspace-wide search and explicit channel reads. Search spans the local index; it does not call Slack's user-token-only search API. Results carry channel identity, message timestamp, thread parent when present, author ID and resolved name when available, text (up to 4,000 characters in a tool result), and a Slack permalink. Names come from `users.info` or `bots.info`, are cached in memory for up to a day, and fall back to IDs if the scope or profile is unavailable. No email field is requested or stored. Search and read have bounded pages; pass the last result's `ts` as `before` for older results. Messages are reference material, never instructions to the agent. The read tools are available to every user of this BB instance, including content from private channels the bot joined.
+
+The first sync imports all history Slack makes available in each joined channel, including replies. The background service rescans once per hour; `slack-sync` runs an immediate refresh. Complete channel scans reconcile edits and deletions, and the membership scan removes local messages for channels the bot has left. An incomplete page fails without replacing that channel's prior index. `slack-status` reports the last complete workspace scan, errors, each channel's last successful scan, and whether author names were available on a recent lookup (`authorNames`). Results can be stale between scans or when a channel fails to refresh. A large history can take substantial time and Slack may rate limit it. Slack's own retention settings limit what can be indexed. This first version stores only searchable message text: files, attachments without text, reactions, and DMs are outside its coverage. Disabling the setting blocks reads but retains the local index in BB storage; switching to another workspace or removing the bot from a channel purges inaccessible entries on the next successful membership scan.
+
+### Posting
+
+Add the `chat:write` **bot scope** to the same Slack app and reinstall it. If Slack rotates the bot token, update **Slack bot token** in plugin settings and run `bb communications slack-sync` again. Set **Slack posting channel IDs** to a comma-separated list of channel IDs, then turn on **Enable Slack message posting**. Posting is off by default, and the channel must also be in the bot's current indexed membership. DMs are not accepted. The `communications_slack_post` agent tool requires a channel ID and final message text (up to 4,000 characters); `threadTs` optionally replies to a parent message. It returns the posted timestamp and permalink. The agent may call it only when the BB user explicitly asks to send that message. A Slack message, transcript, or channel attachment does not authorize a post. If the request times out or the response is unclear, check Slack before retrying to avoid a duplicate.
+
+The posting tool instructs BB agents to read and apply the `talking-to-humans` skill before drafting Slack text. The skill must be available in the agent's environment; the instruction guides the agent, while the channel allowlist and explicit posting request are the enforceable controls. Review drafts when wording matters.
+
+The matching CLI command is `bb communications slack-post CHANNEL_ID 'message text' [parent-ts]`. Quote message text as one argument. It applies the same channel limits and returns the same timestamp and permalink.
+
+
 ## EnsembleWorks V1 (existing LiveKit transcript)
 
 The `ensembleworks` source reads the V1 server's existing `/api/scribe/transcript` endpoint. No upstream code change, new recorder or BB Canvas plugin is needed.
@@ -219,7 +247,7 @@ bb communications attach <returned-conversation-id>
 bb communications status
 ```
 
-The initial capture imports **all retained Canvas transcript entries**, then checks for new entries every two seconds. An explicit start/stop defines the conversation; there is no automatic daily partition or thread subscription. Each thread can attach through the existing Conversation panel or CLI and use the same read, search, citation and acknowledgement tools as other sources.
+The initial capture imports **all retained Canvas transcript entries**, then checks for new entries every two seconds. An explicit start/stop defines the conversation; there is no automatic daily partition or thread subscription. Each thread can attach through the Communications thread panel or CLI and use the same read, search, citation and acknowledgement tools as other sources.
 
 `bb communications canvas-stop <conversation-id>` (or Stop capture in the panel) preserves the transcript and stops ingestion. Plugin reload resumes enabled capture automatically. Starting after a stop creates another conversation and imports retained history again.
 
@@ -234,7 +262,7 @@ Opening an active conversation starts at its latest 20 passages and follows inco
 
 ## Watch a conversation
 
-Give a thread its ongoing task, attach a conversation, then choose **Watch conversation** in its Conversation panel. For example: “Maintain a local HTML mind map of this conversation. Update the same file as ideas develop, preserve stable nodes, and link claims to passages.” The watcher imposes no artifact format or task: another thread can use the same mechanism for questions, notes, or any other user-authorized work.
+Give a thread its ongoing task, attach a conversation, then choose **Watch conversation** in its Communications thread panel. For example: “Maintain a local HTML mind map of this conversation. Update the same file as ideas develop, preserve stable nodes, and link claims to passages.” The watcher imposes no artifact format or task: another thread can use the same mechanism for questions, notes, or any other user-authorized work.
 
 Watching starts from passage zero, including existing history. A repeated start preserves progress. **Stop watching** prevents future automatic dispatch without stopping capture; starting again creates a new watch generation from zero. Detaching, changing the attached conversation (including a room’s next sitting), archiving or deleting the thread stops the watch. A room without a conversation cannot yet be watched. Stopping cannot undo a wake already dispatched.
 
