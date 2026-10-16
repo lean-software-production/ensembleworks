@@ -24,7 +24,7 @@
  */
 
 import type { PresenceView } from "../view.js";
-import { chooseSidebar, decideAnchor, type AnchorAttachment } from "./anchor.js";
+import { chooseSidebar, decideAnchor, footerRegion, type AnchorAttachment, type RegionLayout } from "./anchor.js";
 import { decideTier, placePopover, type StripTier } from "./layout.js";
 import { freshen } from "./freshness.js";
 import { popoverModel, rowModel } from "./model.js";
@@ -189,6 +189,29 @@ export function mountPresenceStrip(options: PresenceMountOptions): MountedPresen
     void fetchPortraits();
   };
 
+  const regionLayout: RegionLayout<Element> = {
+    parent: (node) => node.parentElement,
+    horizontal: (node) => {
+      const style = doc.defaultView?.getComputedStyle(node);
+      return style !== undefined && style.display.includes("flex") && !style.flexDirection.startsWith("column");
+    },
+    onlyChild: (node, child) => Array.from(node.children).every((each) => each === child || each === strip.root),
+  };
+  /**
+   * The last footer region resolved, so the per-frame sync on every unrelated
+   * mutation does not re-read computed styles up the ancestor chain. Re-resolved
+   * when bb hands us a different footer, when the remembered region no longer
+   * holds it, and on resize (a breakpoint can change layout without a mutation).
+   */
+  let resolved: { footer: Element; region: Element } | null = null;
+  const regionFor = (footer: Element, root: Element): Element => {
+    if (resolved?.footer === footer && resolved.region.contains(footer) && root.contains(resolved.region)) {
+      return resolved.region;
+    }
+    resolved = { footer, region: footerRegion(footer, root, regionLayout) };
+    return resolved.region;
+  };
+
   const syncAnchor = (): void => {
     if (disposed || view?.room == null) return;
     const candidates = Array.from(doc.querySelectorAll('[data-sidebar="sidebar"]')).map((root) => ({
@@ -198,8 +221,9 @@ export function mountPresenceStrip(options: PresenceMountOptions): MountedPresen
       visible: isSidebarShown(root),
     }));
     const host = chooseSidebar(candidates);
+    const region = host?.footer ? regionFor(host.footer, host.root) : null;
     const decision = decideAnchor({
-      footer: host?.footer ?? null,
+      footer: region,
       sidebar: host?.root ?? null,
       attached,
       connected: strip.root.isConnected,
@@ -337,6 +361,7 @@ export function mountPresenceStrip(options: PresenceMountOptions): MountedPresen
   };
   const onScroll = (): void => placeOpenPopover();
   const onResize = (): void => {
+    resolved = null;
     syncAnchor();
     placeOpenPopover();
   };
@@ -379,6 +404,7 @@ export function mountPresenceStrip(options: PresenceMountOptions): MountedPresen
     requested.clear();
     strip.destroy();
     attached = null;
+    resolved = null;
   };
 
   options.signal.addEventListener("abort", dispose, { once: true });

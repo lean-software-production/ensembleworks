@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { chooseSidebar, decideAnchor, type AnchorInput } from "../src/presence/ui/anchor.js";
+import { chooseSidebar, decideAnchor, footerRegion, type AnchorInput, type RegionLayout } from "../src/presence/ui/anchor.js";
 
 /** Opaque element handles: the decision never touches a real DOM. */
 const footer = { name: "footer" };
@@ -110,5 +110,46 @@ describe("choosing between bb's two sidebars", () => {
   it("has nowhere to be when every sidebar is hidden", () => {
     expect(chooseSidebar([{ ...desktop, visible: false }, { ...drawer, visible: false }])).toBeNull();
     expect(chooseSidebar([])).toBeNull();
+  });
+});
+
+describe("the footer region the row sits above", () => {
+  /** A plain tree: each node names its parent, its layout and its children. */
+  interface Node { name: string; parent: Node | null; horizontal: boolean; children: Node[] }
+  const node = (name: string, parent: Node | null, horizontal = false): Node => {
+    const made = { name, parent, horizontal, children: [] as Node[] };
+    parent?.children.push(made);
+    return made;
+  };
+  const layout: RegionLayout<Node> = {
+    parent: (n) => n.parent,
+    horizontal: (n) => n.horizontal,
+    onlyChild: (n, child) => n.children.every((each) => each === child),
+  };
+
+  it("is the footer itself when it already sits in a vertical stack (bb 0.45 / 0.46.0)", () => {
+    const root = node("sidebar", null);
+    const body = node("app-sidebar-body", root);
+    node("content", body);
+    const footer = node("footer", body);
+    expect(footerRegion(footer, root, layout).name).toBe("footer");
+  });
+
+  it("is the whole horizontal footer row in bb 0.46.1", () => {
+    const root = node("sidebar", null);
+    node("rail-and-body", root);
+    const row = node("sidebar-footer-row", root, true);
+    node("rail-cell", row);
+    const body = node("collapsible-body", row);
+    const inner = node("collapsible-inner", body, true);
+    const footer = node("footer", inner);
+    expect(footerRegion(footer, root, layout).name).toBe("sidebar-footer-row");
+  });
+
+  it("never climbs past the sidebar root", () => {
+    const shell = node("app-shell", null);
+    const root = node("sidebar", shell, true);
+    const footer = node("footer", root);
+    expect(footerRegion(footer, root, layout).name).toBe("footer");
   });
 });
