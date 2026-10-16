@@ -199,17 +199,33 @@ export function mountPresenceStrip(options: PresenceMountOptions): MountedPresen
   };
   /**
    * The last footer region resolved, so the per-frame sync on every unrelated
-   * mutation does not re-read computed styles up the ancestor chain. Re-resolved
-   * when bb hands us a different footer, when the remembered region no longer
-   * holds it, and on resize (a breakpoint can change layout without a mutation).
+   * mutation does not re-read computed styles up the ancestor chain.
+   *
+   * `path` is the chain that produced the answer: the footer, every wrapper the
+   * climb went past, and the parent it stopped at. The answer is reused only
+   * while each link still has the same parent and the stop is still inside the
+   * root — identity checks, no style reads. Re-parenting the SAME footer, or any
+   * wrapper or the region itself, breaks a link and forces a fresh walk; so do a
+   * different footer and a resize (a breakpoint can change layout without a
+   * mutation).
    */
-  let resolved: { footer: Element; region: Element } | null = null;
+  let resolved: { region: Element; path: Element[] } | null = null;
+  const stillResolved = (footer: Element, root: Element): boolean => {
+    const path = resolved?.path;
+    if (!path || path[0] !== footer || !root.contains(path[path.length - 1]!)) return false;
+    return path.every((node, index) => index === 0 || path[index - 1]!.parentElement === node);
+  };
   const regionFor = (footer: Element, root: Element): Element => {
-    if (resolved?.footer === footer && resolved.region.contains(footer) && root.contains(resolved.region)) {
-      return resolved.region;
+    if (resolved && stillResolved(footer, root)) return resolved.region;
+    const region = footerRegion(footer, root, regionLayout);
+    const path: Element[] = [footer];
+    for (let node: Element | null = footer; node !== null && node !== region; ) {
+      node = node.parentElement;
+      if (node !== null) path.push(node);
     }
-    resolved = { footer, region: footerRegion(footer, root, regionLayout) };
-    return resolved.region;
+    if (region.parentElement !== null) path.push(region.parentElement);
+    resolved = { region, path };
+    return region;
   };
 
   const syncAnchor = (): void => {

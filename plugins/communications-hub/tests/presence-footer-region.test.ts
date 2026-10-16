@@ -365,6 +365,69 @@ describe("bb 0.46.1: the footer lives in a horizontal, clipped row", () => {
   });
 });
 
+describe("the remembered footer region follows host re-parenting", () => {
+  /** Let the strip's own MutationObserver run: it coalesces to one sync on the next animation frame. */
+  const settle = async (): Promise<void> => {
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    await new Promise((resolve) => requestAnimationFrame(() => requestAnimationFrame(resolve)));
+  };
+
+  it("re-resolves when bb moves the SAME footer from the column body into the 0.46.1 footer row, without a resize", async () => {
+    const old = sidebar045();
+    const strip = mount();
+    await strip.refresh();
+    expectAboveRegion(old);
+
+    // The footer element survives; bb re-parents it into a 0.46.1 footer row.
+    const next = sidebar0461();
+    next.region.querySelector('[data-testid="collapsible-inner"]')!.replaceChildren(old.footer);
+    old.root.append(next.region);
+    next.wrapper.remove();
+    const moved = { ...old, region: next.region };
+
+    await settle();
+    expectAboveRegion(moved);
+    // And the poll path keeps it there.
+    for (let index = 0; index < 3; index += 1) await strip.refresh();
+    expectAboveRegion(moved);
+    expect(document.querySelector('[data-sidebar="footer"]')).toBe(old.footer);
+  });
+
+  it("re-resolves when the remembered footer row itself is moved into a new horizontal wrapper", async () => {
+    const host = sidebar0461();
+    const strip = mount();
+    await strip.refresh();
+    expectAboveRegion(host);
+
+    const outer = el("div", { "data-testid": "outer-row", style: ROW });
+    host.root.append(outer);
+    outer.append(host.region);
+
+    await settle();
+    expectAboveRegion({ ...host, region: outer });
+    await strip.refresh();
+    expectAboveRegion({ ...host, region: outer });
+  });
+
+  it("reuses the remembered region through unrelated churn without reading computed styles", async () => {
+    const host = sidebar0461();
+    const strip = mount();
+    await strip.refresh();
+    expectAboveRegion(host);
+
+    const reads = vi.spyOn(window, "getComputedStyle");
+    for (let index = 0; index < 10; index += 1) {
+      host.root.querySelector('[data-sidebar="content"]')!.append(el("span", {}, "streamed token"));
+      strip.syncAnchor();
+    }
+    await settle();
+    await strip.refresh();
+    expect(reads).not.toHaveBeenCalled();
+    reads.mockRestore();
+    expectAboveRegion(host);
+  });
+});
+
 describe("older hosts keep the original position", () => {
   it("bb 0.45.0: directly above the footer inside the vertical sidebar body", async () => {
     const host = sidebar045();
