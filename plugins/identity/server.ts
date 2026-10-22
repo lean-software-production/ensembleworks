@@ -7,6 +7,7 @@ import {
   attributeDispatch,
   starterSummarySchema,
   type StarterRecord,
+  type StarterSummary,
 } from "./attribution.js";
 import { hostRefSchema, type HostRef } from "./host-ref.js";
 import {
@@ -37,7 +38,7 @@ import {
 import { parseDirectory, resolveRequester, type Person, type ResolvedIdentity } from "./people.js";
 import { identityMutationAllowed, mintSelection, readNamedCookie, SELECTION_COOKIE, SelectionCommitStore, selectionCookie, selectionCookieName, verifySelection } from "./selection.js";
 import { MAX_QUEUED_REQUESTERS, QueuedRequesterLedger, digestQueuedContent } from "./queued-requester.js";
-import { SenderLedger, formatRecentSenders, senderInstructions } from "./senders.js";
+import { SenderLedger, formatRecentSenders, senderInstructions, textOfBlocks } from "./senders.js";
 import { PersonColorStore, SeenPeople } from "./person-store.js";
 import { buildRoster, SEEN_UNKNOWN_CAVEAT } from "./roster.js";
 import {
@@ -992,6 +993,10 @@ export default async function plugin(bb: BbPluginApi) {
    * below). Identified senders only; an unknown sender leaves no entry.
    */
   const senders = new SenderLedger(bb.storage.kv);
+  // The person's default email is their first directory email; the request's own email
+  // is the fallback for a directory entry that somehow has none.
+  const recordSender = (input: { threadId: string; text: string; person: StarterSummary | null; email: string | null; at: number }) =>
+    senders.record({ ...input, email: people.find((entry) => entry.person === input.person?.person)?.emails[0] ?? input.email });
   const submissionRequest = () => {
     const facts = requestContext.current();
     if (!facts || facts.method?.toUpperCase() !== "POST") return null;
@@ -1081,10 +1086,7 @@ export default async function plugin(bb: BbPluginApi) {
        * settings page never has to walk the ledger.
        */
       observeStarter: (person) => seen.observe(person, Date.now()),
-      // The person's default email is their first directory email; the request's own
-      // email is the fallback for a directory entry that somehow has none.
-      observeSender: (input) => senders.record({ ...input,
-        email: people.find((entry) => entry.person === input.person?.person)?.emails[0] ?? input.email }),
+      observeSender: (input) => recordSender(input),
       log: { info: (message) => bb.log.info(message), warn: (message) => bb.log.warn(message) },
       /**
        * Stream (b): every dispatch, with the full attribution facts PLUS the guardrail's
@@ -1153,6 +1155,20 @@ export default async function plugin(bb: BbPluginApi) {
         ...(event === "message.dispatched" ? { triggerPerson: summarize(trigger?.person ?? null),
           triggerProvenance: trigger?.provenance ?? "unknown", contentUnchanged } : {}),
       }));
+        /**
+         * Send-now is the ONE path that bypasses the dispatch hook (core's design: the
+         * user overriding policy), so the sender log would miss every mid-turn message a
+         * person sends that way. Record it here instead: the row's enqueuer when the
+         * capture is intact, else the person who pressed Send now — in a pairing session
+         * that is the author in all but contrived cases. Only on Send-now: an ordinary
+         * drain already went through the hook, and recording it twice would double it.
+         */
+        const text = triggerFacts && entry.threadId ? textOfBlocks(entry.content) : null;
+        if (text !== null && entry.threadId) {
+          const sender = contentUnchanged && stored?.person ? { person: stored.person, email: stored.email }
+            : { person: summarize(trigger?.person ?? null), email: trigger?.email ?? null };
+          await recordSender({ threadId: entry.threadId, text, person: sender.person, email: sender.email, at: Date.now() });
+        }
         if (event === "message.dispatched" && entry.id) await queuedRequesters.forget(entry.id);
       })().catch(() => undefined);
     });

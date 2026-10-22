@@ -8,6 +8,7 @@ import {
   digestMessageText,
   formatRecentSenders,
   senderInstructions,
+  textOfBlocks,
 } from "./senders.js";
 
 const matt: StarterSummary = { person: "mattwynne", displayName: "Matt", github: "mattwynne" };
@@ -216,5 +217,18 @@ describe("senderInstructions", () => {
 
   it("contributes nothing when nobody is known", () => {
     expect(senderInstructions([])).toBeNull();
+  });
+});
+
+describe("textOfBlocks", () => {
+  it("concatenates the text blocks of a queued row's content, as the dispatch hook's input.text does", () => {
+    expect(textOfBlocks([{ type: "text", text: "people directory?" }])).toBe("people directory?");
+    expect(textOfBlocks([{ type: "text", text: "a" }, { type: "image", data: "…" }, { type: "text", text: "b" }])).toBe("a\nb");
+  });
+
+  it("answers null for content with no text, or that is not a block list at all", () => {
+    expect(textOfBlocks([{ type: "image", data: "…" }])).toBeNull();
+    expect(textOfBlocks("nope")).toBeNull();
+    expect(textOfBlocks(null)).toBeNull();
   });
 });

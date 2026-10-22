@@ -46,6 +46,18 @@ export function digestMessageText(text: string): string {
   return createHash("sha256").update(text, "utf8").digest("hex");
 }
 
+/**
+ * The text of a queued row's content (bb's `PromptInput[]`), joined like the dispatch
+ * hook's `input.text`; null when there is no text to speak of.
+ */
+export function textOfBlocks(content: unknown): string | null {
+  if (!Array.isArray(content)) return null;
+  const texts = content.flatMap((block) =>
+    typeof block === "object" && block !== null && (block as { type?: unknown }).type === "text"
+      && typeof (block as { text?: unknown }).text === "string" ? [(block as { text: string }).text] : []);
+  return texts.length === 0 ? null : texts.join("\n");
+}
+
 /** First line only, bounded, with an ellipsis when anything was cut. */
 export function previewOf(text: string): string {
   const firstLine = text.split(/\r?\n/, 1)[0] ?? "";

@@ -180,6 +180,11 @@ Pi) with no per-harness hook.
   same person is one entry (the hook re-runs on retry and drain). The log keeps the newest
   50 entries per thread and is observe-only: it cannot affect a dispatch, and its failures
   are swallowed.
+- **Send-now is covered too.** A message sent mid-turn goes out through core's Send-now
+  on a queued row, which bypasses the dispatch hook by design. The post-hoc
+  `message.dispatched` event records those: the row's enqueuer when the capture is
+  intact, else the person who pressed Send now. Only Send-now is recorded there — an
+  ordinary drain already went through the hook.
 - **`identity_recent_senders`** (agent tool, optional `limit`) lists the thread's recent
   prompts newest first as `Aldric (@aldric, 2m ago): "and the UI?"`, then one ready-to-paste
   `Co-authored-by: Aldric <aldric@example.com>` trailer per distinct person (GitHub's
