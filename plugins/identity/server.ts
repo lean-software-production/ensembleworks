@@ -7,6 +7,7 @@ import {
   attributeDispatch,
   starterSummarySchema,
   type StarterRecord,
+  type StarterSummary,
 } from "./attribution.js";
 import { hostRefSchema, type HostRef } from "./host-ref.js";
 import {
@@ -37,6 +38,7 @@ import {
 import { parseDirectory, resolveRequester, type Person, type ResolvedIdentity } from "./people.js";
 import { identityMutationAllowed, mintSelection, readNamedCookie, SELECTION_COOKIE, SelectionCommitStore, selectionCookie, selectionCookieName, verifySelection } from "./selection.js";
 import { MAX_QUEUED_REQUESTERS, QueuedRequesterLedger, digestQueuedContent } from "./queued-requester.js";
+import { SenderLedger, formatRecentSenders, senderInstructions, textOfBlocks } from "./senders.js";
 import { PersonColorStore, SeenPeople } from "./person-store.js";
 import { buildRoster, SEEN_UNKNOWN_CAVEAT } from "./roster.js";
 import {
@@ -985,6 +987,16 @@ export default async function plugin(bb: BbPluginApi) {
   // ── Attribution (step 3): observe and record who started each thread. ─────────────
   const ledger = new AttributionLedger(bb.storage.kv);
   const queuedRequesters = new QueuedRequesterLedger(bb.storage.kv);
+  /**
+   * Who sent EACH prompt — the starter ledger above records only the first. This is what
+   * lets an agent tell two people pairing in one thread apart (`identity_recent_senders`
+   * below). Identified senders only; an unknown sender leaves no entry.
+   */
+  const senders = new SenderLedger(bb.storage.kv);
+  // The person's default email is their first directory email; the request's own email
+  // is the fallback for a directory entry that somehow has none.
+  const recordSender = (input: { threadId: string; text: string; person: StarterSummary | null; email: string | null; at: number }) =>
+    senders.record({ ...input, email: people.find((entry) => entry.person === input.person?.person)?.emails[0] ?? input.email });
   const submissionRequest = () => {
     const facts = requestContext.current();
     if (!facts || facts.method?.toUpperCase() !== "POST") return null;
@@ -1074,6 +1086,7 @@ export default async function plugin(bb: BbPluginApi) {
        * settings page never has to walk the ledger.
        */
       observeStarter: (person) => seen.observe(person, Date.now()),
+      observeSender: (input) => recordSender(input),
       log: { info: (message) => bb.log.info(message), warn: (message) => bb.log.warn(message) },
       /**
        * Stream (b): every dispatch, with the full attribution facts PLUS the guardrail's
@@ -1142,6 +1155,20 @@ export default async function plugin(bb: BbPluginApi) {
         ...(event === "message.dispatched" ? { triggerPerson: summarize(trigger?.person ?? null),
           triggerProvenance: trigger?.provenance ?? "unknown", contentUnchanged } : {}),
       }));
+        /**
+         * Send-now is the ONE path that bypasses the dispatch hook (core's design: the
+         * user overriding policy), so the sender log would miss every mid-turn message a
+         * person sends that way. Record it here instead: the row's enqueuer when the
+         * capture is intact, else the person who pressed Send now — in a pairing session
+         * that is the author in all but contrived cases. Only on Send-now: an ordinary
+         * drain already went through the hook, and recording it twice would double it.
+         */
+        const text = triggerFacts && entry.threadId ? textOfBlocks(entry.content) : null;
+        if (text !== null && entry.threadId) {
+          const sender = contentUnchanged && stored?.person ? { person: stored.person, email: stored.email }
+            : { person: summarize(trigger?.person ?? null), email: trigger?.email ?? null };
+          await recordSender({ threadId: entry.threadId, text, person: sender.person, email: sender.email, at: Date.now() });
+        }
         if (event === "message.dispatched" && entry.id) await queuedRequesters.forget(entry.id);
       })().catch(() => undefined);
     });
@@ -1236,6 +1263,36 @@ export default async function plugin(bb: BbPluginApi) {
     }
     return c.json(publicStarter(await ledger.get(wanted.data)));
   }, { auth: "local" });
+
+  bb.http.route("GET", "/thread-senders", async (c) => {
+    const wanted = threadId.safeParse(c.req.query("threadId"));
+    if (!wanted.success) return c.json({ error: "threadId is required (1-200 characters)" }, 400);
+    return c.json({ threadId: wanted.data, senders: await senders.recent(wanted.data) });
+  }, { auth: "local" });
+
+  /**
+   * The agent-facing half: a tool the agent calls to learn who sent which prompt, and a
+   * dynamic instructions line naming the people on the thread so it addresses them by
+   * name. The instructions provider must be synchronous (SDK contract), so it reads the
+   * ledger's in-memory copy; it takes effect when the provider session is next
+   * constructed, which is why the tool exists for the live case.
+   */
+  bb.agents.registerTool({
+    name: "identity_recent_senders",
+    description: "Who sent each recent prompt on this thread, newest first, with a short preview of each. "
+      + "Use it when more than one person may be prompting you, to address the right person by name and keep "
+      + "each person's questions distinct. Only identified senders are listed.",
+    parameters: z.object({
+      limit: z.number().int().min(1).max(50).optional().describe("How many recent prompts to list (default 10)."),
+    }).strict(),
+    presentation: { label: { pending: "Checking who sent recent prompts", completed: "Checked who sent recent prompts" }, suppress: true },
+    execute: async ({ limit }, ctx) => formatRecentSenders(await senders.recent(ctx.threadId, limit ?? 10), Date.now(),
+      (who) => {
+        const entry = people.find((candidate) => candidate.person === who.person);
+        return entry ? { fullName: entry.fullName ?? null, email: entry.emails[0] ?? null } : null;
+      }),
+  });
+  bb.agents.contributeInstructions(({ threadId: id }) => senderInstructions(senders.peopleOf(id)));
 
   /**
    * Boot self-test: prove the ALS patch is live in THIS process, by driving one request

@@ -10,6 +10,8 @@ const personSchema = z.object({
   person: z.string().regex(/^[a-z_][a-z0-9_-]*$/, "person must match ^[a-z_][a-z0-9_-]*$"),
   github: z.string().min(1),
   displayName: z.string().min(1),
+  /** The name to credit on commits ("Matt Wynne"); the UI keeps using displayName. */
+  fullName: z.string().trim().min(1).optional(),
   emails: z.array(z.email()).min(1),
 }).strict();
 

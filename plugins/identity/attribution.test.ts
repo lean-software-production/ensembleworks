@@ -623,6 +623,74 @@ describe("attributeDispatch and seen-state", () => {
   });
 });
 
+describe("attributeDispatch and the message's sender", () => {
+  const context = {
+    thread: { id: "thr_pair", parentThreadId: "thr_parent", sourceThreadId: null },
+    origin: "app" as const,
+    originPluginId: null,
+    startedOnBehalfOf: null,
+    parentThreadId: null,
+    queuedMessage: null,
+    host: null,
+    input: { text: "and what about the UI?" },
+  };
+  type Observed = { threadId: string; text: string; person: StarterSummary | null; email: string | null; at: number };
+  const deps = (extra: Partial<Parameters<typeof attributeDispatch>[1]> = {}) => ({
+    ledger: new AttributionLedger(new FakeKv()),
+    identity: () => ({ email: "david@example.com", person: david }),
+    now: () => 4_000,
+    log: { info: () => {}, warn: () => {} },
+    ...extra,
+  });
+
+  it("hands every dispatch's sender and text to the sender observer, follow-ups included", async () => {
+    const observed: Observed[] = [];
+    const ledger = new AttributionLedger(new FakeKv());
+    await ledger.record(record({ threadId: "thr_pair", starter: matt }));
+    await attributeDispatch(context, deps({ ledger, observeSender: async (input) => { observed.push(input); } }));
+    expect(observed).toEqual([{ threadId: "thr_pair", text: "and what about the UI?", person: david, email: "david@example.com", at: 4_000 }]);
+  });
+
+  it("passes a null person through for an unidentified dispatch — the observer decides to record nothing", async () => {
+    const observed: Observed[] = [];
+    await attributeDispatch(context, deps({
+      identity: () => ({ email: null, person: null }),
+      observeSender: async (input) => { observed.push(input); },
+    }));
+    expect(observed).toEqual([{ threadId: "thr_pair", text: "and what about the UI?", person: null, email: null, at: 4_000 }]);
+  });
+
+  it("does not observe a dispatch with no message text", async () => {
+    const observed: Observed[] = [];
+    const { input: _input, ...withoutInput } = context;
+    await attributeDispatch(withoutInput, deps({ observeSender: async (input) => { observed.push(input); } }));
+    expect(observed).toEqual([]);
+  });
+
+  it("does not observe a dispatch the guardrail refused — it never happened", async () => {
+    const observed: Observed[] = [];
+    await attributeDispatch(context, deps({
+      guard: () => ({
+        mode: "enforce",
+        hostKind: null,
+        verdict: { action: "reject" as const, rule: "start-on-another-persons-machine", message: "no" },
+        action: { action: "reject" as const, message: "no" },
+      }),
+      observeSender: async (input) => { observed.push(input); },
+    }));
+    expect(observed).toEqual([]);
+  });
+
+  it("still proceeds, and warns, when the sender observer throws", async () => {
+    const logs: string[] = [];
+    expect(await attributeDispatch(context, deps({
+      log: { info: () => {}, warn: (m) => logs.push(m) },
+      observeSender: async () => { throw new Error("sender log is down"); },
+    }))).toEqual({ action: "proceed" });
+    expect(logs.join("\n")).toContain("sender log is down");
+  });
+});
+
 describe("AttributionLedger.starterSweep", () => {
   it("reads back the starter of every retained record, for the one-shot seen backfill", async () => {
     const kv = new FakeKv();

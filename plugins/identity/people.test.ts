@@ -27,6 +27,17 @@ describe("parseDirectory", () => {
     expect(parseDirectory(JSON.stringify([matt, david]))).toEqual({ ok: true, people: [matt, david] });
   });
 
+  it("accepts an optional fullName, for commit credit, and leaves displayName alone", () => {
+    const parsed = parseDirectory(JSON.stringify([{ person: "mattwynne", github: "mattwynne", displayName: "Matt",
+      fullName: "Matt Wynne", emails: ["matt@example.com"] }]));
+    expect(parsed).toMatchObject({ ok: true, people: [{ displayName: "Matt", fullName: "Matt Wynne" }] });
+  });
+
+  it("rejects a blank fullName rather than crediting nobody", () => {
+    expect(parseDirectory(JSON.stringify([{ person: "mattwynne", github: "mattwynne", displayName: "Matt",
+      fullName: "  ", emails: ["matt@example.com"] }])).ok).toBe(false);
+  });
+
   it("rejects malformed JSON", () => {
     const result = parseDirectory("[{");
     expect(result.ok).toBe(false);

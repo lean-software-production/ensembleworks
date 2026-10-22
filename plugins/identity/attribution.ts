@@ -177,6 +177,8 @@ export type DispatchContextLike = {
   queuedMessages?: readonly { id: string; senderThreadId: string | null }[];
   /** The machine the turn will run on; null when neither environment nor intent names one. */
   host: { id: string; name: string } | null;
+  /** The prompt this dispatch carries (bb's `PluginDispatchInput`); absent in older callers and tests. */
+  input?: { text: string } | null;
 };
 
 /** Turn one dispatch plus the requester's identity into the facts of an attribution. */
@@ -499,6 +501,14 @@ export type DispatchDeps = {
    * here — it is bookkeeping, never a gate.
    */
   observeStarter?: (person: string) => Promise<unknown>;
+  /**
+   * Called with EVERY proceeding dispatch's sender and text — follow-ups included, unlike
+   * the first-write-wins starter — so the per-message sender log can tell two people
+   * pairing in one thread apart. `person` is the dispatch's own identity, never an
+   * inherited one; the observer decides what an unidentified sender means. Bookkeeping,
+   * never a gate: its failure is swallowed.
+   */
+  observeSender?: (input: { threadId: string; text: string; person: StarterSummary | null; email: string | null; at: number }) => Promise<unknown>;
 };
 
 /**
@@ -561,6 +571,13 @@ async function decideDispatch(context: DispatchContextLike, deps: DispatchDeps):
     }
 
     const outcome = await deps.ledger.record(decided);
+    const text = context.input?.text;
+    if (typeof text === "string" && deps.observeSender !== undefined) {
+      await deps.observeSender({ threadId: facts.threadId, text, person: facts.person, email: facts.email, at: facts.now })
+        .catch((error: unknown) => {
+          deps.log.warn(`identity: could not record the sender: ${(error as Error).message}`);
+        });
+    }
     const starter = decided.starter?.person ?? null;
     if (starter !== null && deps.observeStarter !== undefined) {
       await deps.observeStarter(starter).catch((error: unknown) => {

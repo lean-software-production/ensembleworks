@@ -92,7 +92,9 @@ with a valid origin, signing key and cookie bridge), an invalid, stale,
 expired or tampered choice resolves as anonymous: it never falls through to
 `fallbackEmail` and never silently selects a different person. (With the picker off or
 not ready, the cookie is ignored altogether, as if the browser had presented none.) Directory
-display-name and colour changes take effect on the next resolution. The header is
+display-name and colour changes take effect on the next resolution. An entry may carry an
+optional `fullName` ("Matt Wynne"); only commit credit uses it, and the UI keeps showing
+`displayName`. The header is
 unverified by this plugin; the signed cookie only proves that this server issued a
 choice, not that the chooser is that person.
 
@@ -159,6 +161,51 @@ machine bb resolved for that dispatch (`null` on records written before it was r
 **Storage policy.** One small record per thread (~200 bytes) plus an insertion-ordered
 index, capped at 2000 threads; past the cap the oldest records are deleted and read
 back as `null`. Attribution is a guardrail aid, not an audit log.
+
+## Who sent each prompt (for the agent)
+
+Attribution above answers "who started this thread". When two people pair in one
+thread, the agent also needs "who sent *this* prompt", or it talks about a person who
+is right there in the third person and muddles two people's questions. Identity keeps
+a small per-thread **sender log** for that (`senders.ts`), and exposes it to the agent
+through BB's plugin SDK, so it works the same under every provider (Claude Code, Codex,
+Pi) with no per-harness hook.
+
+- **Recorded** from the same `message.dispatch` hook as attribution, for *every*
+  proceeding dispatch, not just the first: `(sha256 of the prompt text, sender, the
+  sender's default email, a one-line preview, time)`. The email is the person's first
+  directory email, else the request's own; it is stored so the agent can credit the
+  people it paired with. **Identified senders only** — an unknown sender (a CLI send, an
+  automation, a browser with no identity) leaves no entry, so the agent is told a name or
+  told nothing, never "someone unidentified". The sender is the dispatch's own identity,
+  never one inherited from a parent thread. A back-to-back repeat of the same text by the
+  same person is one entry (the hook re-runs on retry and drain). The log keeps the newest
+  50 entries per thread and is observe-only: it cannot affect a dispatch, and its failures
+  are swallowed.
+- **Send-now is covered too.** A message sent mid-turn goes out through core's Send-now
+  on a queued row, which bypasses the dispatch hook by design. The post-hoc
+  `message.dispatched` event records those: the row's enqueuer when the capture is
+  intact, else the person who pressed Send now. Only Send-now is recorded there — an
+  ordinary drain already went through the hook.
+- **`identity_recent_senders`** (agent tool, optional `limit`) lists the thread's recent
+  prompts newest first as `Aldric (@aldric, 2m ago): "and the UI?"`, then one ready-to-paste
+  `Co-authored-by: Aldric Giacomoni <aldric@example.com>` trailer per distinct person. The
+  trailer uses the directory entry's optional **`fullName`** and first email, resolved at
+  read time so a directory fix corrects old entries; without a `fullName` it falls back to
+  the display name, and without any email to GitHub's `<handle>@users.noreply.github.com`. The content digest is
+  stored so a caller can match a prompt by its text rather than trusting order.
+- **Dynamic instructions**: when the thread has known senders, Identity contributes one
+  line naming them ("People who have sent prompts on this thread: Matt (@mattwynne), Aldric (@aldric). …") and
+  pointing at the tool. The SDK resolves this when a provider session is constructed, not
+  mid-session, and the provider must be synchronous — so it reads the ledger's in-memory
+  copy, which is warmed by the dispatch hook and by any read. A thread first seen after a
+  restart contributes nothing until its first read or dispatch.
+- Read it back over HTTP with `GET /api/v1/plugins/identity/http/thread-senders?threadId=<id>`.
+
+The dispatch hook cannot amend a message (it is a decision, not an author), so the agent
+is nudged rather than stamped: it must call the tool to learn the sender of a specific
+prompt. In practice the names in the instructions are what stop "I'm not sure Aldric
+would approve" when Aldric is the one asking.
 
 ## Ownership UI
 
