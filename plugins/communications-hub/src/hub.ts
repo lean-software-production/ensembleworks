@@ -53,6 +53,34 @@ export const migrations = [
     threadId TEXT PRIMARY KEY, conversationId TEXT NOT NULL REFERENCES conversations(id),
     generation TEXT NOT NULL, processedCursor INTEGER NOT NULL DEFAULT 0, lastAttemptAt INTEGER,
     UNIQUE(threadId, generation))`,
+  `CREATE TABLE IF NOT EXISTS slack_spaces (
+    teamId TEXT NOT NULL, channelId TEXT NOT NULL, name TEXT NOT NULL,
+    isPrivate INTEGER NOT NULL, active INTEGER NOT NULL DEFAULT 1,
+    lastSyncAt INTEGER, PRIMARY KEY(teamId, channelId))`,
+  `CREATE TABLE IF NOT EXISTS slack_entries (
+    teamId TEXT NOT NULL, channelId TEXT NOT NULL, ts TEXT NOT NULL,
+    threadTs TEXT, authorId TEXT, text TEXT NOT NULL,
+    editedAt TEXT, receivedAt INTEGER NOT NULL,
+    PRIMARY KEY(teamId, channelId, ts),
+    FOREIGN KEY(teamId, channelId) REFERENCES slack_spaces(teamId, channelId))`,
+  `CREATE VIRTUAL TABLE IF NOT EXISTS slack_entry_search USING fts5(text, content='slack_entries', content_rowid='rowid')`,
+  `CREATE TRIGGER IF NOT EXISTS slack_entries_insert AFTER INSERT ON slack_entries BEGIN
+    INSERT INTO slack_entry_search(rowid,text) VALUES (new.rowid,new.text); END`,
+  `CREATE TRIGGER IF NOT EXISTS slack_entries_delete AFTER DELETE ON slack_entries BEGIN
+    INSERT INTO slack_entry_search(slack_entry_search,rowid,text) VALUES ('delete',old.rowid,old.text); END`,
+  `CREATE TRIGGER IF NOT EXISTS slack_entries_update AFTER UPDATE ON slack_entries BEGIN
+    INSERT INTO slack_entry_search(slack_entry_search,rowid,text) VALUES ('delete',old.rowid,old.text);
+    INSERT INTO slack_entry_search(rowid,text) VALUES (new.rowid,new.text); END`,
+  `CREATE TABLE IF NOT EXISTS thread_targets_v2 (
+    threadId TEXT PRIMARY KEY, roomId TEXT REFERENCES rooms(id),
+    conversationId TEXT REFERENCES conversations(id), cursor INTEGER NOT NULL DEFAULT 0,
+    channelTeamId TEXT, channelId TEXT,
+    CHECK (roomId IS NOT NULL OR conversationId IS NOT NULL OR (channelTeamId IS NOT NULL AND channelId IS NOT NULL)))`,
+  `CREATE TABLE IF NOT EXISTS hub_migration_markers (name TEXT PRIMARY KEY)`,
+  `INSERT OR IGNORE INTO thread_targets_v2(threadId,roomId,conversationId,cursor)
+    SELECT threadId,roomId,conversationId,cursor FROM thread_targets
+    WHERE NOT EXISTS (SELECT 1 FROM hub_migration_markers WHERE name='thread_targets_v2')`,
+  `INSERT OR IGNORE INTO hub_migration_markers(name) VALUES('thread_targets_v2')`,
 ];
 
 /** SQLite owns runtime state. No platform or BB-thread API dependencies. */
@@ -213,9 +241,9 @@ export class Hub {
       // Threads following this room move to the new sitting. The cursor resets because
       // sequences restart per conversation, so carrying it over would mark the opening of the
       // new sitting as already read.
-      const targets=this.db.prepare('SELECT threadId FROM thread_targets WHERE roomId=? AND conversationId IS NOT ?').all(roomId,conversationId) as {threadId:string}[];
+      const targets=this.db.prepare('SELECT threadId FROM thread_targets_v2 WHERE roomId=? AND conversationId IS NOT ?').all(roomId,conversationId) as {threadId:string}[];
       for (const target of targets) this.stopWatchInternal(target.threadId);
-      this.db.prepare('UPDATE thread_targets SET conversationId=?,cursor=0 WHERE roomId=? AND conversationId IS NOT ?')
+      this.db.prepare('UPDATE thread_targets_v2 SET conversationId=?,cursor=0 WHERE roomId=? AND conversationId IS NOT ?')
         .run(conversationId,roomId,conversationId);
     })();
     this.changed(); return this.getConversation(conversationId);
@@ -273,9 +301,9 @@ export class Hub {
     idSchema.parse(threadId); this.getConversation(conversationId);
     const current=this.getAttachment(threadId);
     if (current?.conversationId !== conversationId) this.stopWatchInternal(threadId);
-    this.db.prepare(`INSERT INTO thread_targets(threadId,roomId,conversationId,cursor) VALUES(?,NULL,?,0)
-      ON CONFLICT(threadId) DO UPDATE SET roomId=NULL,conversationId=excluded.conversationId,
-      cursor=CASE WHEN thread_targets.conversationId=excluded.conversationId THEN thread_targets.cursor ELSE 0 END`).run(threadId,conversationId);
+    this.db.prepare(`INSERT INTO thread_targets_v2(threadId,roomId,conversationId,cursor) VALUES(?,NULL,?,0)
+      ON CONFLICT(threadId) DO UPDATE SET roomId=NULL,conversationId=excluded.conversationId,channelTeamId=NULL,channelId=NULL,
+      cursor=CASE WHEN thread_targets_v2.conversationId=excluded.conversationId THEN thread_targets_v2.cursor ELSE 0 END`).run(threadId,conversationId);
     this.changed(); return this.getAttachment(threadId)!;
   }
   /**
@@ -293,10 +321,20 @@ export class Hub {
     const current=this.currentRoomConversation(roomId);
     const previous=this.getAttachment(threadId);
     if (previous?.conversationId !== current) this.stopWatchInternal(threadId);
-    this.db.prepare(`INSERT INTO thread_targets(threadId,roomId,conversationId,cursor) VALUES(?,?,?,0)
-      ON CONFLICT(threadId) DO UPDATE SET roomId=excluded.roomId,conversationId=excluded.conversationId,
-      cursor=CASE WHEN thread_targets.conversationId IS excluded.conversationId THEN thread_targets.cursor ELSE 0 END`)
+    this.db.prepare(`INSERT INTO thread_targets_v2(threadId,roomId,conversationId,cursor) VALUES(?,?,?,0)
+      ON CONFLICT(threadId) DO UPDATE SET roomId=excluded.roomId,conversationId=excluded.conversationId,channelTeamId=NULL,channelId=NULL,
+      cursor=CASE WHEN thread_targets_v2.conversationId IS excluded.conversationId THEN thread_targets_v2.cursor ELSE 0 END`)
       .run(threadId,roomId,current);
+    this.changed(); return this.getAttachment(threadId)!;
+  }
+  /** Follow a source space without copying its mutable messages into transcripts. */
+  attachChannel(threadId:string,teamId:string,channelId:string):ThreadAttachment {
+    idSchema.parse(threadId); idSchema.parse(teamId); idSchema.parse(channelId);
+    this.stopWatchInternal(threadId);
+    this.db.prepare(`INSERT INTO thread_targets_v2(threadId,roomId,conversationId,cursor,channelTeamId,channelId)
+      VALUES(?,NULL,NULL,0,?,?) ON CONFLICT(threadId) DO UPDATE SET
+      roomId=NULL,conversationId=NULL,cursor=0,channelTeamId=excluded.channelTeamId,channelId=excluded.channelId`)
+      .run(threadId,teamId,channelId);
     this.changed(); return this.getAttachment(threadId)!;
   }
   /**
@@ -322,14 +360,20 @@ export class Hub {
     const row=this.db.prepare('SELECT id FROM conversations WHERE roomId=? ORDER BY createdAt DESC,rowid DESC LIMIT 1').get(roomId) as {id:string}|undefined;
     return row?.id ?? null;
   }
-  detach(threadId:string) { idSchema.parse(threadId); this.stopWatchInternal(threadId); this.db.prepare('DELETE FROM thread_targets WHERE threadId=?').run(threadId); this.changed(); }
-  getAttachment(threadId:string):ThreadAttachment|null { idSchema.parse(threadId); return this.db.prepare('SELECT * FROM thread_targets WHERE threadId=?').get(threadId) as ThreadAttachment|undefined ?? null; }
+  detach(threadId:string) { idSchema.parse(threadId); this.stopWatchInternal(threadId); this.db.prepare('DELETE FROM thread_targets_v2 WHERE threadId=?').run(threadId); this.changed(); }
+  getAttachment(threadId:string):ThreadAttachment|null {
+    idSchema.parse(threadId);
+    const row=this.db.prepare('SELECT * FROM thread_targets_v2 WHERE threadId=?').get(threadId) as ThreadAttachment|undefined;
+    if(!row) return null;
+    if(!row.channelId) {delete row.channelId;delete row.channelTeamId;}
+    return row;
+  }
   acknowledge(threadId:string,conversationId:string,cursor:number) {
     z.number().int().nonnegative().parse(cursor); const a=this.getAttachment(threadId);
     if (!a || a.conversationId!==conversationId) throw new Error('Conversation is not attached to this thread');
     const max=(this.db.prepare('SELECT coalesce(max(sequence),0) AS n FROM segments WHERE conversationId=?').get(conversationId) as {n:number}).n;
     if (cursor>max) throw new Error('Cursor exceeds available transcript');
-    this.db.prepare('UPDATE thread_targets SET cursor=max(cursor,?) WHERE threadId=?').run(cursor,threadId); this.changed(); return this.getAttachment(threadId)!;
+    this.db.prepare('UPDATE thread_targets_v2 SET cursor=max(cursor,?) WHERE threadId=?').run(cursor,threadId); this.changed(); return this.getAttachment(threadId)!;
   }
   private stopWatchInternal(threadId:string): boolean {
     return this.db.prepare('DELETE FROM conversation_watches WHERE threadId=?').run(threadId).changes > 0;
@@ -339,7 +383,7 @@ export class Hub {
     return row ? watchSchema.parse(row) : null;
   }
   private watchIsAttached(watch: ConversationWatch): boolean {
-    const attachment=this.db.prepare('SELECT conversationId FROM thread_targets WHERE threadId=?').get(watch.threadId) as {conversationId:string|null}|undefined;
+    const attachment=this.db.prepare('SELECT conversationId FROM thread_targets_v2 WHERE threadId=?').get(watch.threadId) as {conversationId:string|null}|undefined;
     return attachment?.conversationId === watch.conversationId;
   }
   startWatch(threadId:string): ConversationWatch {

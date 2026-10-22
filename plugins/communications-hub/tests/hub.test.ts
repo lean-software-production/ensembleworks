@@ -16,6 +16,17 @@ describe('persistent conversation library', () => {
     expect(reopened.readTranscript(m.id,{}).segments).toEqual(before.segments);
     expect(reopened.ensureConversation('import','one','New title').id).toBe(m.id);
   });
+  it('keeps channel targets separate from transcripts and does not resurrect detached targets on reload', () => {
+    const {db,hub}=setup();
+    const conversation=hub.ensureConversation('import','one','Planning');
+    hub.attach('A',conversation.id);
+    expect(hub.attachChannel('A','T1','G1')).toMatchObject({channelTeamId:'T1',channelId:'G1',conversationId:null});
+    expect(() => hub.startWatch('A')).toThrow(/attached to a conversation/);
+    const reopened=new Hub(db);
+    expect(reopened.getAttachment('A')).toMatchObject({channelId:'G1'});
+    reopened.detach('A');
+    expect(new Hub(db).getAttachment('A')).toBeNull();
+  });
   it('deduplicates retransmission without replacing cited text and rejects invalid batches atomically', () => {
     const {hub}=setup(); const m=hub.ensureConversation('zoom','occurrence','Planning');
     hub.appendSegments(m.id,[segment('a')]); hub.appendSegments(m.id,[segment('a','Different text')]);

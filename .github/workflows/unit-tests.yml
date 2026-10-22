@@ -45,6 +45,14 @@ jobs:
           npm run typecheck
           npm test -- --reporter=dot
           npm run audit:quality:compare
+      - name: communications hub dependencies
+        working-directory: plugins/communications-hub
+        run: npm ci
+      - name: communications hub checks
+        working-directory: plugins/communications-hub
+        run: |
+          npm run typecheck
+          npm test -- --reporter=dot
       # The unit-test step doubles as the ux-contract presence gate (Task G2,
       # docs/plans/2026-07-16-ux-contracts-implementation.md): on PR events it
       # feeds the script the PR's real changed-file list and body via env.
