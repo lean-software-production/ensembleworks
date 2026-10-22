@@ -193,9 +193,13 @@ function paintCircle(document: Document, element: HTMLElement, circle: Circle): 
   element.style.color = circle.ink;
   if (circle.ring === null) {
     element.style.borderWidth = ""; element.style.borderStyle = ""; element.style.borderColor = "";
+    element.style.boxShadow = "0 0 0 1px var(--sidebar-background, var(--background))";
   } else {
-    element.style.borderWidth = "1.5px"; element.style.borderStyle = "solid"; element.style.borderColor = circle.ring;
+    // A 2px ring inside the circle plus a 1px glow outside it: the ring reads at sidebar
+    // size without the circle growing, since a box-shadow takes no layout space.
+    element.style.borderWidth = "2px"; element.style.borderStyle = "solid"; element.style.borderColor = circle.ring;
     element.style.boxSizing = "border-box";
+    element.style.boxShadow = `0 0 0 1px ${circle.ring}`;
   }
   const url = circle.avatarUrl;
   const failed = element.getAttribute(FAILED_AVATAR_ATTRIBUTE);
