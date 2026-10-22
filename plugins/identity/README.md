@@ -20,10 +20,11 @@ them against the current people directory at call time, so a tab's heartbeat and
 typing pulses carry a person when one is known, and stay anonymous otherwise.
 
 - Everywhere a person is drawn as a circle — the header's owner and viewer
-  bubbles, the popover's viewer list and the People roster — it is their GitHub
-  photo on their colour (`components/Avatar.tsx`), with initials only when the
-  photo cannot be shown. The sidebar row badge is injected text and stays
-  initials.
+  bubbles, the popover's viewer list, the People roster and the sidebar row
+  badge — it is their GitHub photo on their colour, with initials only when
+  the photo cannot be shown. React surfaces use `components/Avatar.tsx`; the
+  sidebar badge is injected DOM (`sidebar-fallback.ts`) and applies the same
+  rule by hand.
 - The thread header popover lists the named people on the thread with their
   avatar, their display name and "typing" while they type, then "+N others"
   for anonymous viewers.
