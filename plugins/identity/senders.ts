@@ -191,20 +191,34 @@ function ago(from: number, now: number): string {
   return `${Math.round(hours / 24)}d ago`;
 }
 
-/** The `Co-authored-by` trailer for a person: their default email, else GitHub's noreply form. */
-export function coAuthorTrailer(person: StarterSummary, email: string | null): string {
-  return `Co-authored-by: ${person.displayName} <${email ?? `${person.github}@users.noreply.github.com`}>`;
+/** What the directory knows about a person at read time, for crediting them. */
+export type Credit = { fullName: string | null; email: string | null };
+export type CreditLookup = (person: StarterSummary) => Credit | null;
+
+/**
+ * The `Co-authored-by` trailer for a person: the directory's full name and current
+ * email when known, else the display name and the email stored with the entry, else
+ * GitHub's noreply form.
+ */
+export function coAuthorTrailer(person: StarterSummary, email: string | null, credit: Credit | null = null): string {
+  const name = credit?.fullName ?? person.displayName;
+  const address = credit?.email ?? email ?? `${person.github}@users.noreply.github.com`;
+  return `Co-authored-by: ${name} <${address}>`;
 }
 
 /**
  * The `identity_recent_senders` tool's answer: newest first, one line per prompt, then a
  * ready-to-paste commit trailer per distinct person so pairing credit is one copy away.
+ * `lookup` resolves a person against the live directory, so a directory fix corrects the
+ * trailers of entries recorded before it.
  */
-export function formatRecentSenders(entries: readonly SenderEntry[], now: number): string {
+export function formatRecentSenders(entries: readonly SenderEntry[], now: number, lookup: CreditLookup = () => null): string {
   if (entries.length === 0) return "No identified senders are recorded for this thread yet.";
   const trailers = new Map<string, string>();
   for (const entry of entries) {
-    if (!trailers.has(entry.person.person)) trailers.set(entry.person.person, coAuthorTrailer(entry.person, entry.email ?? null));
+    if (!trailers.has(entry.person.person)) {
+      trailers.set(entry.person.person, coAuthorTrailer(entry.person, entry.email ?? null, lookup(entry.person)));
+    }
   }
   return [
     "Recent prompts on this thread, newest first:",

@@ -189,6 +189,16 @@ describe("formatRecentSenders", () => {
     ].join("\n"));
   });
 
+  it("credits the directory's full name and current email when a lookup is supplied", () => {
+    const text = formatRecentSenders([
+      { digest: "d1", person: matt, email: "old@example.com", at: 0, preview: "hi" },
+      { digest: "d0", person: aldric, email: null, at: 0, preview: "yo" },
+    ], 0, (person) => person.person === "mattwynne" ? { fullName: "Matt Wynne", email: "matt@mattwynne.net" } : null);
+    expect(text).toContain("1. Matt (@mattwynne, 0s ago): \"hi\"");
+    expect(text).toContain("Co-authored-by: Matt Wynne <matt@mattwynne.net>");
+    expect(text).toContain("Co-authored-by: Aldric <aldric@users.noreply.github.com>");
+  });
+
   it("falls back to the GitHub noreply address for a trailer when no email is known", () => {
     const text = formatRecentSenders([{ digest: "d1", person: matt, email: null, at: 0, preview: "hi" }], 0);
     expect(text).toContain("Co-authored-by: Matt <mattwynne@users.noreply.github.com>");

@@ -1286,7 +1286,11 @@ export default async function plugin(bb: BbPluginApi) {
       limit: z.number().int().min(1).max(50).optional().describe("How many recent prompts to list (default 10)."),
     }).strict(),
     presentation: { label: { pending: "Checking who sent recent prompts", completed: "Checked who sent recent prompts" }, suppress: true },
-    execute: async ({ limit }, ctx) => formatRecentSenders(await senders.recent(ctx.threadId, limit ?? 10), Date.now()),
+    execute: async ({ limit }, ctx) => formatRecentSenders(await senders.recent(ctx.threadId, limit ?? 10), Date.now(),
+      (who) => {
+        const entry = people.find((candidate) => candidate.person === who.person);
+        return entry ? { fullName: entry.fullName ?? null, email: entry.emails[0] ?? null } : null;
+      }),
   });
   bb.agents.contributeInstructions(({ threadId: id }) => senderInstructions(senders.peopleOf(id)));
 
