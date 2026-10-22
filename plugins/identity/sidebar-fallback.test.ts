@@ -211,6 +211,8 @@ describe("stacked viewer photos", () => {
     const circles = items(row);
     expect(circles.map((item) => item.querySelector("img")?.getAttribute("src"))).toEqual([alex.avatarUrl, sam.avatarUrl]);
     expect(circles[0]!.style.borderColor).toBe(alex.ring);
+    expect(circles[0]!.style.borderWidth).toBe("2px");
+    expect(circles[0]!.style.boxShadow).toBe(`0 0 0 1px ${alex.ring}`);
     expect(circles[1]!.style.borderColor).toBe(sam.ring);
     expect(circles[0]!.style.marginLeft).toBe("");
     expect(circles[1]!.style.marginLeft).toBe("-4px");
