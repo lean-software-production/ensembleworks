@@ -92,7 +92,9 @@ with a valid origin, signing key and cookie bridge), an invalid, stale,
 expired or tampered choice resolves as anonymous: it never falls through to
 `fallbackEmail` and never silently selects a different person. (With the picker off or
 not ready, the cookie is ignored altogether, as if the browser had presented none.) Directory
-display-name and colour changes take effect on the next resolution. The header is
+display-name and colour changes take effect on the next resolution. An entry may carry an
+optional `fullName` ("Matt Wynne"); only commit credit uses it, and the UI keeps showing
+`displayName`. The header is
 unverified by this plugin; the signed cookie only proves that this server issued a
 choice, not that the chooser is that person.
 
@@ -187,8 +189,10 @@ Pi) with no per-harness hook.
   ordinary drain already went through the hook.
 - **`identity_recent_senders`** (agent tool, optional `limit`) lists the thread's recent
   prompts newest first as `Aldric (@aldric, 2m ago): "and the UI?"`, then one ready-to-paste
-  `Co-authored-by: Aldric <aldric@example.com>` trailer per distinct person (GitHub's
-  `<handle>@users.noreply.github.com` form when no email is known). The content digest is
+  `Co-authored-by: Aldric Giacomoni <aldric@example.com>` trailer per distinct person. The
+  trailer uses the directory entry's optional **`fullName`** and first email, resolved at
+  read time so a directory fix corrects old entries; without a `fullName` it falls back to
+  the display name, and without any email to GitHub's `<handle>@users.noreply.github.com`. The content digest is
   stored so a caller can match a prompt by its text rather than trusting order.
 - **Dynamic instructions**: when the thread has known senders, Identity contributes one
   line naming them ("People who have sent prompts on this thread: Matt (@mattwynne), Aldric (@aldric). …") and
