@@ -21,6 +21,12 @@ export type ThreadStatus = NativeThreadStatus & {
    * white, so pale yellow initials on pale yellow were simply invisible.
    */
   badgeInk?: string;
+  /**
+   * The starter's photo, drawn in place of `badge` when present. The badge is injected
+   * DOM rather than React, so this is a URL and the photo-then-initials rule is applied
+   * by hand in `paintBadgeContent`; `badge` remains the text shown when the photo fails.
+   */
+  avatarUrl?: string | null;
 };
 
 export type ThreadStatusSetter = (threadId: string, status: NativeThreadStatus | null) => void;
@@ -105,7 +111,7 @@ function reconcileFallbackDots(): void {
     }
 
     const badge = existing instanceof HTMLElement ? existing : createBadge(document);
-    if (badge.textContent !== status.badge) badge.textContent = status.badge;
+    paintBadgeContent(document, badge, status);
     badge.setAttribute("aria-label", status.label);
     badge.setAttribute("title", status.label);
     badge.style.background = status.badgeColor;
@@ -154,6 +160,43 @@ function createBadge(document: Document): HTMLSpanElement {
     pointerEvents: "none",
   });
   return badge;
+}
+
+const FAILED_AVATAR_ATTRIBUTE = "data-avatar-failed";
+
+/**
+ * Photo first, initials only when there is no photo — the same rule as `Avatar.tsx`, by
+ * hand because this badge is plain DOM. A URL that failed once is remembered on the
+ * badge so a repaint does not re-request it; a different URL gets a fresh try.
+ */
+function paintBadgeContent(document: Document, badge: HTMLElement, status: ThreadStatus): void {
+  const url = status.avatarUrl ?? null;
+  const failed = badge.getAttribute(FAILED_AVATAR_ATTRIBUTE);
+  if (failed !== null && failed !== url) badge.removeAttribute(FAILED_AVATAR_ATTRIBUTE);
+  const showPhoto = url !== null && badge.getAttribute(FAILED_AVATAR_ATTRIBUTE) !== url;
+  const img = badge.querySelector("img");
+  if (showPhoto) {
+    // A photo is square: drop the text padding so the circle stays a circle.
+    badge.style.width = "14px";
+    badge.style.padding = "0";
+    badge.style.overflow = "hidden";
+    if (img !== null && img.getAttribute("src") === url) return;
+    const next = document.createElement("img");
+    next.setAttribute("src", url);
+    next.setAttribute("alt", "");
+    Object.assign(next.style, { width: "100%", height: "100%", objectFit: "cover", display: "block" });
+    next.addEventListener("error", () => {
+      badge.setAttribute(FAILED_AVATAR_ATTRIBUTE, url);
+      next.remove();
+      paintBadgeContent(document, badge, status);
+    });
+    badge.replaceChildren(next);
+    return;
+  }
+  badge.style.width = "";
+  badge.style.padding = "0 3px";
+  badge.style.overflow = "";
+  if (img !== null || badge.textContent !== status.badge) badge.textContent = status.badge;
 }
 
 function nativeStatus(status: ThreadStatus): NativeThreadStatus {

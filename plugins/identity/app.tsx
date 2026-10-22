@@ -37,7 +37,7 @@ import {
   type ThreadStatus,
 } from "./sidebar-fallback.js";
 import { IdentityPicker } from "./components/IdentityPicker.js";
-import { Avatar } from "./components/Avatar.js";
+import { Avatar, avatarUrl } from "./components/Avatar.js";
 import { Explain } from "./components/Explain.js";
 import { IdentitySettings } from "./components/settings/IdentitySettings.js";
 
@@ -216,6 +216,7 @@ function PresenceCoordinator() {
           badge: status.badge,
           badgeColor: resolved.color,
           badgeInk: readableInk(resolved.color),
+          avatarUrl: entry.starter === null ? null : avatarUrl(entry.starter.github, 14),
         }] as const;
       }));
       paint();
