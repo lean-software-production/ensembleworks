@@ -26,7 +26,9 @@ describe("Avatar", () => {
     fireEvent.error(wrapper.querySelector("img")!);
     expect(wrapper.querySelector("img")).toBeNull();
     expect(wrapper.textContent).toBe("ME");
-    expect(wrapper.style.color).toBe(readableInk("#ffff00"));
+    const expected = document.createElement("span");
+    expected.style.color = readableInk("#ffff00");
+    expect(wrapper.style.color).toBe(expected.style.color);
   });
 
   it("shows the fallback text straight away when there is no GitHub handle", () => {
