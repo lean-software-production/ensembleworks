@@ -19,7 +19,7 @@ import type {
   ThreadOwnership,
   WhoAmI,
 } from "./server.js";
-import { presenceLabel } from "./presence-labels.js";
+import { initials, presenceLabel } from "./presence-labels.js";
 import {
   composerBanner,
   headerChip,
@@ -145,6 +145,18 @@ function PresenceCoordinator() {
         tone: entry.typing > 0 ? "running" as const : "default" as const,
         badge: String(entry.viewers),
         badgeColor: entry.typing > 0 ? "var(--warning, #f59e0b)" : "var(--success, #22c55e)",
+        // Named viewers stack as ringed photos, like the header bubbles; the ring says
+        // viewing (green) or typing (amber). Anonymous viewers trail as "+N".
+        stack: entry.people.map((person) => {
+          const color = resolvePersonColor(person.person, rosterRef.current, colorsRef.current).color;
+          return {
+            avatarUrl: avatarUrl(person.github, 14),
+            badge: initials(person.displayName),
+            color, ink: readableInk(color),
+            ring: person.typing ? "var(--warning, #f59e0b)" : "var(--success, #22c55e)",
+          };
+        }),
+        overflow: Math.max(0, entry.viewers - entry.people.length),
       }]));
       paint();
     }).catch(() => undefined);

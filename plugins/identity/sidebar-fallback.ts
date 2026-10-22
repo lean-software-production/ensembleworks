@@ -27,6 +27,23 @@ export type ThreadStatus = NativeThreadStatus & {
    * by hand in `paintBadgeContent`; `badge` remains the text shown when the photo fails.
    */
   avatarUrl?: string | null;
+  /**
+   * Named viewers, each drawn as its own ringed circle (photo, or `badge` initials when
+   * the photo fails), overlapping like the header bubbles. When non-empty this REPLACES
+   * the single `badge`; `overflow` anonymous viewers trail it as one "+N" circle.
+   */
+  stack?: readonly StackedPerson[];
+  overflow?: number;
+};
+
+export type StackedPerson = {
+  avatarUrl: string | null;
+  /** Initials, shown when there is no photo. */
+  badge: string;
+  color: string;
+  ink: string;
+  /** The ring: green for viewing, amber for typing. */
+  ring: string;
 };
 
 export type ThreadStatusSetter = (threadId: string, status: NativeThreadStatus | null) => void;
@@ -111,13 +128,18 @@ function reconcileFallbackDots(): void {
     }
 
     const badge = existing instanceof HTMLElement ? existing : createBadge(document);
-    paintBadgeContent(document, badge, status);
     badge.setAttribute("aria-label", status.label);
     badge.setAttribute("title", status.label);
-    badge.style.background = status.badgeColor;
-    // Reassigned on every paint, not only at creation: a colour change must take its ink
-    // with it, or a repainted badge keeps the previous colour's ink.
-    badge.style.color = status.badgeInk ?? "white";
+    if (status.stack !== undefined && status.stack.length > 0) {
+      paintStack(document, badge, status.stack, status.overflow ?? 0);
+    } else {
+      // Reassigned on every paint, not only at creation: a colour change must take its
+      // ink with it, or a repainted badge keeps the previous colour's ink.
+      paintCircle(document, badge, {
+        avatarUrl: status.avatarUrl ?? null, text: status.badge,
+        color: status.badgeColor, ink: status.badgeInk ?? "white", ring: null,
+      });
+    }
     if (badge.parentElement !== badgeHost) badgeHost.prepend(badge);
     liveBadges.add(badge);
   }
@@ -139,64 +161,122 @@ function hasNativeStatus(row: HTMLElement, label: string): boolean {
 }
 
 function createBadge(document: Document): HTMLSpanElement {
-  const badge = document.createElement("span");
+  const badge = createCircle(document);
+  badge.style.position = "";
   badge.setAttribute(BADGE_ATTRIBUTE, "");
   badge.setAttribute("role", "status");
-  Object.assign(badge.style, {
-    display: "inline-flex",
-    alignItems: "center",
-    justifyContent: "center",
-    flexShrink: "0",
-    minWidth: "14px",
-    height: "14px",
-    padding: "0 3px",
-    borderRadius: "9999px",
-    boxShadow: "0 0 0 1px var(--sidebar-background, var(--background))",
-    color: "white",
-    fontSize: "9px",
-    fontWeight: "700",
-    lineHeight: "14px",
-    textAlign: "center",
-    pointerEvents: "none",
-  });
   return badge;
 }
 
 const FAILED_AVATAR_ATTRIBUTE = "data-avatar-failed";
+const STACK_ITEM_ATTRIBUTE = "data-bb-presence-stack-item";
+const CIRCLE_SIZE = "14px";
+
+type Circle = {
+  avatarUrl: string | null;
+  /** Shown when there is no photo: initials, a count, "+N". */
+  text: string;
+  color: string;
+  ink: string;
+  /** A ring colour, or null for the ringless single badge. */
+  ring: string | null;
+};
 
 /**
- * Photo first, initials only when there is no photo — the same rule as `Avatar.tsx`, by
- * hand because this badge is plain DOM. A URL that failed once is remembered on the
- * badge so a repaint does not re-request it; a different URL gets a fresh try.
+ * One circle: photo first, text only when there is no photo — the same rule as
+ * `Avatar.tsx`, by hand because this badge is plain DOM. A URL that failed once is
+ * remembered on the element so a repaint does not re-request it; a different URL gets a
+ * fresh try. The fill is always painted so it shows while the photo loads.
  */
-function paintBadgeContent(document: Document, badge: HTMLElement, status: ThreadStatus): void {
-  const url = status.avatarUrl ?? null;
-  const failed = badge.getAttribute(FAILED_AVATAR_ATTRIBUTE);
-  if (failed !== null && failed !== url) badge.removeAttribute(FAILED_AVATAR_ATTRIBUTE);
-  const showPhoto = url !== null && badge.getAttribute(FAILED_AVATAR_ATTRIBUTE) !== url;
-  const img = badge.querySelector("img");
+function paintCircle(document: Document, element: HTMLElement, circle: Circle): void {
+  element.style.background = circle.color;
+  element.style.color = circle.ink;
+  if (circle.ring === null) {
+    element.style.borderWidth = ""; element.style.borderStyle = ""; element.style.borderColor = "";
+  } else {
+    element.style.borderWidth = "1.5px"; element.style.borderStyle = "solid"; element.style.borderColor = circle.ring;
+    element.style.boxSizing = "border-box";
+  }
+  const url = circle.avatarUrl;
+  const failed = element.getAttribute(FAILED_AVATAR_ATTRIBUTE);
+  if (failed !== null && failed !== url) element.removeAttribute(FAILED_AVATAR_ATTRIBUTE);
+  const showPhoto = url !== null && element.getAttribute(FAILED_AVATAR_ATTRIBUTE) !== url;
+  const img = element.querySelector("img");
   if (showPhoto) {
     // A photo is square: drop the text padding so the circle stays a circle.
-    badge.style.width = "14px";
-    badge.style.padding = "0";
-    badge.style.overflow = "hidden";
+    element.style.width = CIRCLE_SIZE;
+    element.style.padding = "0";
+    element.style.overflow = "hidden";
     if (img !== null && img.getAttribute("src") === url) return;
     const next = document.createElement("img");
     next.setAttribute("src", url);
     next.setAttribute("alt", "");
     Object.assign(next.style, { width: "100%", height: "100%", objectFit: "cover", display: "block" });
     next.addEventListener("error", () => {
-      badge.setAttribute(FAILED_AVATAR_ATTRIBUTE, url);
+      element.setAttribute(FAILED_AVATAR_ATTRIBUTE, url);
       next.remove();
-      paintBadgeContent(document, badge, status);
+      paintCircle(document, element, circle);
     });
-    badge.replaceChildren(next);
+    element.replaceChildren(next);
     return;
   }
-  badge.style.width = "";
-  badge.style.padding = "0 3px";
-  badge.style.overflow = "";
-  if (img !== null || badge.textContent !== status.badge) badge.textContent = status.badge;
+  element.style.width = "";
+  element.style.padding = "0 3px";
+  element.style.overflow = "";
+  if (img !== null || element.textContent !== circle.text) element.textContent = circle.text;
+}
+
+/**
+ * The badge as a row of overlapping circles, one per named viewer plus one "+N" for the
+ * anonymous rest. Children are reused by position so a circle's photo-failure memory
+ * survives repaints; the badge's own fill is cleared so only the circles show.
+ */
+function paintStack(document: Document, badge: HTMLElement, stack: readonly StackedPerson[], overflow: number): void {
+  const circles: Circle[] = stack.map((person) => ({
+    avatarUrl: person.avatarUrl, text: person.badge, color: person.color, ink: person.ink, ring: person.ring,
+  }));
+  if (overflow > 0) {
+    circles.push({ avatarUrl: null, text: `+${overflow}`, color: "var(--muted, #e5e7eb)",
+      ink: "var(--muted-foreground, #6b7280)", ring: "var(--sidebar-background, var(--background))" });
+  }
+  Object.assign(badge.style, { background: "transparent", color: "", width: "", padding: "0", overflow: "", boxShadow: "none" });
+  const existing = [...badge.children].filter((child): child is HTMLElement => child instanceof HTMLElement && child.hasAttribute(STACK_ITEM_ATTRIBUTE));
+  if (existing.length !== badge.childNodes.length) badge.replaceChildren(...existing);
+  circles.forEach((circle, index) => {
+    let item = existing[index];
+    if (item === undefined) {
+      item = createCircle(document);
+      item.setAttribute(STACK_ITEM_ATTRIBUTE, "");
+      badge.append(item);
+    }
+    item.style.marginLeft = index === 0 ? "" : "-4px";
+    item.style.zIndex = String(circles.length - index);
+    paintCircle(document, item, circle);
+  });
+  for (const stale of existing.slice(circles.length)) stale.remove();
+}
+
+function createCircle(document: Document): HTMLSpanElement {
+  const circle = document.createElement("span");
+  Object.assign(circle.style, {
+    display: "inline-flex",
+    alignItems: "center",
+    justifyContent: "center",
+    flexShrink: "0",
+    position: "relative",
+    minWidth: CIRCLE_SIZE,
+    height: CIRCLE_SIZE,
+    padding: "0 3px",
+    borderRadius: "9999px",
+    boxShadow: "0 0 0 1px var(--sidebar-background, var(--background))",
+    color: "white",
+    fontSize: "9px",
+    fontWeight: "700",
+    lineHeight: CIRCLE_SIZE,
+    textAlign: "center",
+    pointerEvents: "none",
+  });
+  return circle;
 }
 
 function nativeStatus(status: ThreadStatus): NativeThreadStatus {
