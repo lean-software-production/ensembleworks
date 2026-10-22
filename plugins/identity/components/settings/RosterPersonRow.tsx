@@ -1,5 +1,5 @@
 import type { RosterAnswer } from "../../server.js";
-import { initials } from "../../presence-labels.js";
+import { Avatar } from "../Avatar.js";
 import { seenPhrase } from "../../roster.js";
 import { colorInputValue, shouldCommitColor } from "../../person-colors.js";
 import { Explain } from "../Explain.js";
@@ -43,26 +43,7 @@ export function RosterPersonRow({
         padding: "12px 0",
       }}
     >
-      <span
-        aria-hidden="true"
-        style={{
-          alignItems: "center",
-          background: row.color,
-          borderRadius: 999,
-          // The ink is chosen FROM the fill, so a pale choice is still readable. See
-          // person-colors.ts for why the ink adapts rather than the choice being clamped.
-          color: row.ink,
-          display: "inline-flex",
-          flex: "0 0 auto",
-          fontSize: 12,
-          fontWeight: 700,
-          height: 32,
-          justifyContent: "center",
-          width: 32,
-        }}
-      >
-        {initials(row.displayName)}
-      </span>
+      <Avatar github={row.github} displayName={row.displayName} color={row.color} size={32} fontSize={12} />
 
       <div style={{ display: "flex", flexDirection: "column", flex: 1, gap: 4, minWidth: 0 }}>
         <div style={{ alignItems: "baseline", display: "flex", flexWrap: "wrap", gap: 8 }}>

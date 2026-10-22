@@ -19,9 +19,15 @@ records the upstream email header and the raw named selection cookie (`request-c
 them against the current people directory at call time, so a tab's heartbeat and
 typing pulses carry a person when one is known, and stay anonymous otherwise.
 
+- Everywhere a person is drawn as a circle — the header's owner and viewer
+  bubbles, the popover's viewer list, the People roster and the sidebar row
+  badge — it is their GitHub photo on their colour, with initials only when
+  the photo cannot be shown. React surfaces use `components/Avatar.tsx`; the
+  sidebar badge is injected DOM (`sidebar-fallback.ts`) and applies the same
+  rule by hand.
 - The thread header popover lists the named people on the thread with their
-  GitHub avatar (initials if it fails to load), their display name and
-  "typing" while they type, then "+N others" for anonymous viewers.
+  avatar, their display name and "typing" while they type, then "+N others"
+  for anonymous viewers.
 - The header icon's title and the sidebar row label use names when available:
   "Matt and Trevoke here", "Matt, Trevoke and 1 other here", "Matt is typing".
   With nobody named they keep the anonymous wording ("2 other viewers").
