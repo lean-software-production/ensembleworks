@@ -508,7 +508,7 @@ export type DispatchDeps = {
    * inherited one; the observer decides what an unidentified sender means. Bookkeeping,
    * never a gate: its failure is swallowed.
    */
-  observeSender?: (input: { threadId: string; text: string; person: StarterSummary | null; at: number }) => Promise<unknown>;
+  observeSender?: (input: { threadId: string; text: string; person: StarterSummary | null; email: string | null; at: number }) => Promise<unknown>;
 };
 
 /**
@@ -573,7 +573,7 @@ async function decideDispatch(context: DispatchContextLike, deps: DispatchDeps):
     const outcome = await deps.ledger.record(decided);
     const text = context.input?.text;
     if (typeof text === "string" && deps.observeSender !== undefined) {
-      await deps.observeSender({ threadId: facts.threadId, text, person: facts.person, at: facts.now })
+      await deps.observeSender({ threadId: facts.threadId, text, person: facts.person, email: facts.email, at: facts.now })
         .catch((error: unknown) => {
           deps.log.warn(`identity: could not record the sender: ${(error as Error).message}`);
         });

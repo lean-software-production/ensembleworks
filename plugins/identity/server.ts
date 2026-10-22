@@ -1081,7 +1081,10 @@ export default async function plugin(bb: BbPluginApi) {
        * settings page never has to walk the ledger.
        */
       observeStarter: (person) => seen.observe(person, Date.now()),
-      observeSender: (input) => senders.record(input),
+      // The person's default email is their first directory email; the request's own
+      // email is the fallback for a directory entry that somehow has none.
+      observeSender: (input) => senders.record({ ...input,
+        email: people.find((entry) => entry.person === input.person?.person)?.emails[0] ?? input.email }),
       log: { info: (message) => bb.log.info(message), warn: (message) => bb.log.warn(message) },
       /**
        * Stream (b): every dispatch, with the full attribution facts PLUS the guardrail's

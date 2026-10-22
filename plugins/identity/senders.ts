@@ -27,6 +27,8 @@ export const senderEntrySchema = z.object({
   /** sha256 of the prompt text, so a caller can match a prompt without trusting order. */
   digest: z.string().length(64),
   person: starterSummarySchema,
+  /** The person's default email (directory first, else the request's); absent on the earliest rows. */
+  email: z.string().nullable().optional(),
   at: z.number(),
   preview: z.string(),
 }).strict();
@@ -73,10 +75,10 @@ export class SenderLedger {
    * failure. The in-memory copy is updated synchronously so `peopleOf` knows the person
    * before storage settles.
    */
-  async record(input: { threadId: string; text: string; person: StarterSummary | null; at: number }): Promise<boolean> {
+  async record(input: { threadId: string; text: string; person: StarterSummary | null; email: string | null; at: number }): Promise<boolean> {
     if (input.person === null) return false;
     const entry: SenderEntry = {
-      digest: digestMessageText(input.text), person: input.person, at: input.at, preview: previewOf(input.text),
+      digest: digestMessageText(input.text), person: input.person, email: input.email, at: input.at, preview: previewOf(input.text),
     };
     const cached = this.#cache.get(input.threadId);
     if (cached && isRepeat(cached.entries.at(-1), entry)) return false;
@@ -112,7 +114,7 @@ export class SenderLedger {
     const log = await this.#serialised(threadId, () => this.#load(threadId));
     if (log !== null) this.#remember(threadId, log);
     const entries = (log ?? this.#cache.get(threadId))?.entries ?? [];
-    return [...entries].reverse().slice(0, Math.max(0, limit));
+    return [...entries].reverse().slice(0, Math.max(0, limit)).map((entry) => ({ ...entry, email: entry.email ?? null }));
   }
 
   /**
@@ -177,20 +179,35 @@ function ago(from: number, now: number): string {
   return `${Math.round(hours / 24)}d ago`;
 }
 
-/** The `identity_recent_senders` tool's answer: newest first, one line per prompt. */
+/** The `Co-authored-by` trailer for a person: their default email, else GitHub's noreply form. */
+export function coAuthorTrailer(person: StarterSummary, email: string | null): string {
+  return `Co-authored-by: ${person.displayName} <${email ?? `${person.github}@users.noreply.github.com`}>`;
+}
+
+/**
+ * The `identity_recent_senders` tool's answer: newest first, one line per prompt, then a
+ * ready-to-paste commit trailer per distinct person so pairing credit is one copy away.
+ */
 export function formatRecentSenders(entries: readonly SenderEntry[], now: number): string {
   if (entries.length === 0) return "No identified senders are recorded for this thread yet.";
+  const trailers = new Map<string, string>();
+  for (const entry of entries) {
+    if (!trailers.has(entry.person.person)) trailers.set(entry.person.person, coAuthorTrailer(entry.person, entry.email ?? null));
+  }
   return [
     "Recent prompts on this thread, newest first:",
     ...entries.map((entry, index) =>
-      `${index + 1}. ${entry.person.displayName} (${ago(entry.at, now)}): ${JSON.stringify(entry.preview)}`),
+      `${index + 1}. ${entry.person.displayName} (@${entry.person.github}, ${ago(entry.at, now)}): ${JSON.stringify(entry.preview)}`),
+    "",
+    "Commit trailers for these people:",
+    ...trailers.values(),
   ].join("\n");
 }
 
 /** The dynamic instructions line for a thread, or null when nobody is known (say nothing). */
 export function senderInstructions(people: readonly StarterSummary[]): string | null {
   if (people.length === 0) return null;
-  const names = people.map((person) => person.displayName).join(", ");
+  const names = people.map((person) => `${person.displayName} (@${person.github})`).join(", ");
   if (people.length === 1) {
     return `The person prompting you on this thread so far: ${names}. `
       + "Call identity_recent_senders if you need to check who sent a prompt.";

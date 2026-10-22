@@ -634,7 +634,7 @@ describe("attributeDispatch and the message's sender", () => {
     host: null,
     input: { text: "and what about the UI?" },
   };
-  type Observed = { threadId: string; text: string; person: StarterSummary | null; at: number };
+  type Observed = { threadId: string; text: string; person: StarterSummary | null; email: string | null; at: number };
   const deps = (extra: Partial<Parameters<typeof attributeDispatch>[1]> = {}) => ({
     ledger: new AttributionLedger(new FakeKv()),
     identity: () => ({ email: "david@example.com", person: david }),
@@ -648,7 +648,7 @@ describe("attributeDispatch and the message's sender", () => {
     const ledger = new AttributionLedger(new FakeKv());
     await ledger.record(record({ threadId: "thr_pair", starter: matt }));
     await attributeDispatch(context, deps({ ledger, observeSender: async (input) => { observed.push(input); } }));
-    expect(observed).toEqual([{ threadId: "thr_pair", text: "and what about the UI?", person: david, at: 4_000 }]);
+    expect(observed).toEqual([{ threadId: "thr_pair", text: "and what about the UI?", person: david, email: "david@example.com", at: 4_000 }]);
   });
 
   it("passes a null person through for an unidentified dispatch — the observer decides to record nothing", async () => {
@@ -657,7 +657,7 @@ describe("attributeDispatch and the message's sender", () => {
       identity: () => ({ email: null, person: null }),
       observeSender: async (input) => { observed.push(input); },
     }));
-    expect(observed).toEqual([{ threadId: "thr_pair", text: "and what about the UI?", person: null, at: 4_000 }]);
+    expect(observed).toEqual([{ threadId: "thr_pair", text: "and what about the UI?", person: null, email: null, at: 4_000 }]);
   });
 
   it("does not observe a dispatch with no message text", async () => {

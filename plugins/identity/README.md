@@ -170,8 +170,10 @@ through BB's plugin SDK, so it works the same under every provider (Claude Code,
 Pi) with no per-harness hook.
 
 - **Recorded** from the same `message.dispatch` hook as attribution, for *every*
-  proceeding dispatch, not just the first: `(sha256 of the prompt text, sender, a one-line
-  preview, time)`. **Identified senders only** — an unknown sender (a CLI send, an
+  proceeding dispatch, not just the first: `(sha256 of the prompt text, sender, the
+  sender's default email, a one-line preview, time)`. The email is the person's first
+  directory email, else the request's own; it is stored so the agent can credit the
+  people it paired with. **Identified senders only** — an unknown sender (a CLI send, an
   automation, a browser with no identity) leaves no entry, so the agent is told a name or
   told nothing, never "someone unidentified". The sender is the dispatch's own identity,
   never one inherited from a parent thread. A back-to-back repeat of the same text by the
@@ -179,10 +181,12 @@ Pi) with no per-harness hook.
   50 entries per thread and is observe-only: it cannot affect a dispatch, and its failures
   are swallowed.
 - **`identity_recent_senders`** (agent tool, optional `limit`) lists the thread's recent
-  prompts newest first as `Aldric (2m ago): "and the UI?"`. The content digest is stored so
-  a caller can match a prompt by its text rather than trusting order.
+  prompts newest first as `Aldric (@aldric, 2m ago): "and the UI?"`, then one ready-to-paste
+  `Co-authored-by: Aldric <aldric@example.com>` trailer per distinct person (GitHub's
+  `<handle>@users.noreply.github.com` form when no email is known). The content digest is
+  stored so a caller can match a prompt by its text rather than trusting order.
 - **Dynamic instructions**: when the thread has known senders, Identity contributes one
-  line naming them ("People who have sent prompts on this thread: Matt, Aldric. …") and
+  line naming them ("People who have sent prompts on this thread: Matt (@mattwynne), Aldric (@aldric). …") and
   pointing at the tool. The SDK resolves this when a provider session is constructed, not
   mid-session, and the provider must be synchronous — so it reads the ledger's in-memory
   copy, which is warmed by the dispatch hook and by any read. A thread first seen after a
