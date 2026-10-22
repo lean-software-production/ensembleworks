@@ -291,16 +291,22 @@ export class AttributionLedger {
   }
 
   /**
-   * Record a thread's starter, FIRST WRITE WINS: a later dispatch never rewrites it.
-   * Returns whether this call was the write, and the record now in force (null only
-   * when storage failed).
+   * Record a thread's starter, FIRST IDENTIFIED WRITE WINS: once a record names a
+   * person, a later dispatch never rewrites it. A record with no starter (a `bb thread
+   * spawn` from a shell, a drain, the plugin-load race) is a placeholder, and the first
+   * dispatch that does name a person replaces it — that person is who the thread is
+   * for, and without this a thread born anonymous stayed anonymous forever (every
+   * unknown starter in the box's logs on 2026-10-21 was a CLI spawn followed within
+   * minutes by its owner's first browser prompt). Returns whether this call was the
+   * write, and the record now in force (null only when storage failed).
    *
    * Safe against concurrent first dispatches because bb runs the whole
    * `message.dispatch` pass under one server-wide lock (SDK `PluginHooks.on`).
    */
   async record(record: StarterRecord): Promise<{ recorded: boolean; record: StarterRecord | null }> {
     const existing = await this.get(record.threadId);
-    if (existing !== null) return { recorded: false, record: existing };
+    const upgrade = existing !== null && existing.starter === null && record.starter !== null;
+    if (existing !== null && !upgrade) return { recorded: false, record: existing };
     try {
       const written = await withTimeout(this.#kv.set(KEY_PREFIX + record.threadId, record), this.#timeoutMs);
       if (written === TIMED_OUT) {
@@ -308,7 +314,8 @@ export class AttributionLedger {
         return { recorded: false, record: null };
       }
       this.#remember(record.threadId, record);
-      await this.#appendToIndex(record.threadId);
+      // An upgraded thread is already in the index; appending again would double-count it.
+      if (!upgrade) await this.#appendToIndex(record.threadId);
       return { recorded: true, record };
     } catch {
       this.#cache.delete(record.threadId);

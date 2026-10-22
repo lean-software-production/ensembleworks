@@ -204,6 +204,28 @@ describe("AttributionLedger", () => {
     expect(await ledger.get("thr_1")).toEqual(first);
   });
 
+  it("upgrades a record with no starter when a later dispatch names one", async () => {
+    const anonymous = record({ threadId: "thr_1", starter: null, email: null, via: "unknown", origin: "cli" });
+    await ledger.record(anonymous);
+    const identified = record({ threadId: "thr_1", starter: david, email: "david@example.com", recordedAt: 900 });
+    expect(await ledger.record(identified)).toEqual({ recorded: true, record: identified });
+    expect(await ledger.get("thr_1")).toEqual(identified);
+  });
+
+  it("never downgrades: an unidentified later dispatch leaves an anonymous record alone", async () => {
+    const anonymous = record({ threadId: "thr_1", starter: null, email: null, via: "unknown", origin: "cli" });
+    await ledger.record(anonymous);
+    const later = record({ threadId: "thr_1", starter: null, email: null, via: "unknown", recordedAt: 900 });
+    expect(await ledger.record(later)).toEqual({ recorded: false, record: anonymous });
+    expect(await ledger.get("thr_1")).toEqual(anonymous);
+  });
+
+  it("does not grow the eviction index when upgrading an anonymous record", async () => {
+    await ledger.record(record({ threadId: "thr_1", starter: null, email: null, via: "unknown" }));
+    await ledger.record(record({ threadId: "thr_1", starter: david, email: "david@example.com" }));
+    expect(await ledger.count()).toBe(1);
+  });
+
   it("survives a new ledger over the same storage", async () => {
     await ledger.record(record({ threadId: "thr_1" }));
     expect(await new AttributionLedger(kv).get("thr_1")).toEqual(record({ threadId: "thr_1" }));
@@ -394,6 +416,20 @@ describe("attributeDispatch", () => {
     });
     expect(result).toEqual({ action: "proceed" });
     expect(logs.join("\n")).toContain("no directory");
+  });
+
+  it("names the first identified person on a thread that started anonymously — a CLI spawn", async () => {
+    const ledger = new AttributionLedger(new FakeKv());
+    await ledger.record(record({ threadId: "thr_new", starter: null, email: null, via: "unknown", origin: "cli" }));
+    const logs: string[] = [];
+    await attributeDispatch(dispatchContext, {
+      ledger,
+      identity: () => ({ email: "david@example.com", person: david }),
+      now: () => 4_000,
+      log: { info: (m) => logs.push(`info:${m}`), warn: (m) => logs.push(`warn:${m}`) },
+    });
+    expect(logs).toEqual(["info:identity: thread thr_new started by mrdavidlaing (via browser)"]);
+    expect(await ledger.get("thr_new")).toMatchObject({ starter: david, via: "browser" });
   });
 
   it("stays silent about a thread whose starter was already recorded", async () => {

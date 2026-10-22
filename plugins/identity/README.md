@@ -155,8 +155,12 @@ thread it writes `threadId -> { starter, via }` to its own KV storage:
 - `via: unknown` — nothing identified it: a header-less shell, a drain, an email that
   matches nobody, or a request that beat the patch during plugin load.
 
-**First write wins**: a thread's starter is never rewritten by a later dispatch, so a
-follow-up from someone else cannot take a thread over. Attribution and audit swallow
+**First identified write wins**: once a thread's starter names a person, a later
+dispatch never rewrites it, so a follow-up from someone else cannot take a thread over.
+A thread that started with no starter at all (a `bb thread spawn` from a shell carries
+no identity) is upgraded by the first dispatch that does name a person — typically its
+owner's first browser prompt. Agents spawning threads should pass `--parent-self` so
+the new thread inherits its parent's starter instead of starting anonymous. Attribution and audit swallow
 their own errors; only the separately configured machine guardrail can reject a dispatch.
 
 Read it back with `identity_thread_starter` (RPC) or
