@@ -160,6 +160,40 @@ machine bb resolved for that dispatch (`null` on records written before it was r
 index, capped at 2000 threads; past the cap the oldest records are deleted and read
 back as `null`. Attribution is a guardrail aid, not an audit log.
 
+## Who sent each prompt (for the agent)
+
+Attribution above answers "who started this thread". When two people pair in one
+thread, the agent also needs "who sent *this* prompt", or it talks about a person who
+is right there in the third person and muddles two people's questions. Identity keeps
+a small per-thread **sender log** for that (`senders.ts`), and exposes it to the agent
+through BB's plugin SDK, so it works the same under every provider (Claude Code, Codex,
+Pi) with no per-harness hook.
+
+- **Recorded** from the same `message.dispatch` hook as attribution, for *every*
+  proceeding dispatch, not just the first: `(sha256 of the prompt text, sender, a one-line
+  preview, time)`. **Identified senders only** — an unknown sender (a CLI send, an
+  automation, a browser with no identity) leaves no entry, so the agent is told a name or
+  told nothing, never "someone unidentified". The sender is the dispatch's own identity,
+  never one inherited from a parent thread. A back-to-back repeat of the same text by the
+  same person is one entry (the hook re-runs on retry and drain). The log keeps the newest
+  50 entries per thread and is observe-only: it cannot affect a dispatch, and its failures
+  are swallowed.
+- **`identity_recent_senders`** (agent tool, optional `limit`) lists the thread's recent
+  prompts newest first as `Aldric (2m ago): "and the UI?"`. The content digest is stored so
+  a caller can match a prompt by its text rather than trusting order.
+- **Dynamic instructions**: when the thread has known senders, Identity contributes one
+  line naming them ("People who have sent prompts on this thread: Matt, Aldric. …") and
+  pointing at the tool. The SDK resolves this when a provider session is constructed, not
+  mid-session, and the provider must be synchronous — so it reads the ledger's in-memory
+  copy, which is warmed by the dispatch hook and by any read. A thread first seen after a
+  restart contributes nothing until its first read or dispatch.
+- Read it back over HTTP with `GET /api/v1/plugins/identity/http/thread-senders?threadId=<id>`.
+
+The dispatch hook cannot amend a message (it is a decision, not an author), so the agent
+is nudged rather than stamped: it must call the tool to learn the sender of a specific
+prompt. In practice the names in the instructions are what stop "I'm not sure Aldric
+would approve" when Aldric is the one asking.
+
 ## Ownership UI
 
 Identity **shows** who owns what. The ownership UI only labels: nothing in it can reject,
