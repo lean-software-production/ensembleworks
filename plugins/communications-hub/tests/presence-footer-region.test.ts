@@ -322,17 +322,20 @@ describe("bb 0.46.1: the footer lives in a horizontal, clipped row", () => {
     document.body.append(shell);
     const host = sidebar0461({ parent: shell });
     // A horizontal root with the footer row as its only child: nothing inside
-    // the root is a column, so there is no footer region to sit above.
+    // the root is a column, so there is no line the row could have to itself.
+    // Joining a side-by-side container would resize bb's layout (see
+    // presence-grid-footer.test.ts), so the row stays out instead of escaping
+    // into the shell or squeezing in beside the footer row.
     host.root.setAttribute("style", ROW);
     host.root.replaceChildren(host.region);
+    const shellChildren = Array.from(shell.children);
     const strip = mount();
     await strip.refresh();
 
-    expect(document.querySelectorAll("#ewzp-row-root")).toHaveLength(1);
-    expect(shell.contains(rowRoot())).toBe(true);
-    expect(host.root.contains(rowRoot())).toBe(true);
-    expect(host.region.contains(rowRoot())).toBe(false);
-    expect(rowRoot()!.parentElement).toBe(host.root);
+    expect(rowRoot()).toBeNull();
+    expect(Array.from(shell.children)).toEqual(shellChildren);
+    expect(Array.from(host.root.children)).toEqual([host.region]);
+    expect(host.region.querySelector("#ewzp-row-root")).toBeNull();
   });
 
   it("stops at a vertical stack that holds other content, rather than jumping above it", async () => {

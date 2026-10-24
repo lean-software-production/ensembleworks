@@ -97,29 +97,38 @@ export interface RegionLayout<T> {
   horizontal(node: T): boolean;
   /** True when `child` is this element's only element child, ignoring our own row. */
   onlyChild(node: T, child: T): boolean;
+  /** True when this element stacks its children on lines of their own (block flow or a flex column). */
+  vertical(node: T): boolean;
 }
 
 /**
  * The element the row should sit immediately above: the footer plus everything
- * bb lays out on the same line as it.
+ * bb lays out on the same line as it — or null when there is no safe line.
  *
  * Up to bb 0.46.0 that is the footer itself, a child of the vertical sidebar
  * body. bb 0.46.1 put the footer inside a horizontal footer row (settings-gear
  * rail cell + a clipped collapsible body), so "the footer's previous sibling"
  * became a slot INSIDE that line: the row took its width and pushed every footer
  * item past the clip. So climb from the footer while the parent is a side-by-side
- * row or a wrapper holding nothing else, and stop at the first parent that stacks
- * other content vertically — the row belongs there, between that content and the
- * footer region, never above the thread list. The climb never passes `root`, so
- * the row cannot leave the sidebar for the app around it.
+ * row or a wrapper holding nothing else, and stop at the first parent that holds
+ * other content. The climb never passes `root`, so the row cannot leave the
+ * sidebar for the app around it.
+ *
+ * The row only gets a line of its own when that parent STACKS its children
+ * vertically. bb 0.47.1 stops the climb at a CSS grid (rail | thread list over
+ * gear | footer); a sibling there is an auto-placed grid item that lands in an
+ * implicit row of the `auto` rail column, widens it to the row's width and
+ * squeezes the thread list to a sliver. Any parent that is not a vertical stack
+ * therefore answers null, and the caller decides where else (if anywhere) is safe.
  */
-export function footerRegion<T>(footer: T, root: T, layout: RegionLayout<T>): T {
+export function footerRegion<T>(footer: T, root: T, layout: RegionLayout<T>): T | null {
   let region = footer;
-  for (let parent = layout.parent(region); parent !== null && parent !== root; parent = layout.parent(region)) {
-    if (!layout.horizontal(parent) && !layout.onlyChild(parent, region)) break;
+  let parent = layout.parent(region);
+  while (parent !== null && parent !== root && (layout.horizontal(parent) || layout.onlyChild(parent, region))) {
     region = parent;
+    parent = layout.parent(region);
   }
-  return region;
+  return parent !== null && layout.vertical(parent) ? region : null;
 }
 
 /** One candidate sidebar found in the document. */

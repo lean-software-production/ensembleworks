@@ -196,36 +196,47 @@ export function mountPresenceStrip(options: PresenceMountOptions): MountedPresen
       return style !== undefined && style.display.includes("flex") && !style.flexDirection.startsWith("column");
     },
     onlyChild: (node, child) => Array.from(node.children).every((each) => each === child || each === strip.root),
+    vertical: (node) => {
+      const style = doc.defaultView?.getComputedStyle(node);
+      if (style === undefined) return false;
+      if (style.display.includes("flex")) return style.flexDirection.startsWith("column");
+      return style.display === "block" || style.display === "flow-root";
+    },
   };
   /**
-   * The last footer region resolved, so the per-frame sync on every unrelated
-   * mutation does not re-read computed styles up the ancestor chain.
+   * Where the row may go in one sidebar, remembered so the per-frame sync on
+   * every unrelated mutation does not re-read computed styles.
    *
-   * `path` is the chain that produced the answer: the footer, every wrapper the
-   * climb went past, and the parent it stopped at. The answer is reused only
-   * while each link still has the same parent and the stop is still inside the
-   * root — identity checks, no style reads. Re-parenting the SAME footer, or any
-   * wrapper or the region itself, breaks a link and forces a fresh walk; so do a
-   * different footer and a resize (a breakpoint can change layout without a
-   * mutation).
+   * `region` is the footer region to sit above (null when its parent is not a
+   * vertical stack, e.g. bb 0.47.1's grid); `rootStacks` says whether the end of
+   * the sidebar root is a line of its own (the fallback when there is no
+   * region). `path` is the footer and every ancestor up to the root. The answer
+   * is reused only while each link still has the same parent — identity checks,
+   * no style reads. Re-parenting the SAME footer, any wrapper or region, or
+   * handing us a different footer or root forces a fresh look; so does a resize
+   * (a breakpoint can change layout without a mutation).
    */
-  let resolved: { region: Element; path: Element[] } | null = null;
-  const stillResolved = (footer: Element, root: Element): boolean => {
-    const path = resolved?.path;
-    if (!path || path[0] !== footer || !root.contains(path[path.length - 1]!)) return false;
+  let resolved: { root: Element; footer: Element | null; region: Element | null; rootStacks: boolean; path: Element[] } | null = null;
+  const stillResolved = (footer: Element | null, root: Element): boolean => {
+    if (!resolved || resolved.root !== root || resolved.footer !== footer) return false;
+    const path = resolved.path;
     return path.every((node, index) => index === 0 || path[index - 1]!.parentElement === node);
   };
-  const regionFor = (footer: Element, root: Element): Element => {
-    if (resolved && stillResolved(footer, root)) return resolved.region;
-    const region = footerRegion(footer, root, regionLayout);
-    const path: Element[] = [footer];
-    for (let node: Element | null = footer; node !== null && node !== region; ) {
-      node = node.parentElement;
-      if (node !== null) path.push(node);
+  const placementFor = (footer: Element | null, root: Element): NonNullable<typeof resolved> => {
+    if (resolved && stillResolved(footer, root)) return resolved;
+    const path: Element[] = [];
+    for (let node: Element | null = footer; node !== null; node = node.parentElement) {
+      path.push(node);
+      if (node === root) break;
     }
-    if (region.parentElement !== null) path.push(region.parentElement);
-    resolved = { region, path };
-    return region;
+    resolved = {
+      root,
+      footer,
+      region: footer ? footerRegion(footer, root, regionLayout) : null,
+      rootStacks: regionLayout.vertical(root),
+      path,
+    };
+    return resolved;
   };
 
   const syncAnchor = (): void => {
@@ -237,10 +248,12 @@ export function mountPresenceStrip(options: PresenceMountOptions): MountedPresen
       visible: isSidebarShown(root),
     }));
     const host = chooseSidebar(candidates);
-    const region = host?.footer ? regionFor(host.footer, host.root) : null;
+    const placement = host ? placementFor(host.footer, host.root) : null;
     const decision = decideAnchor({
-      footer: region,
-      sidebar: host?.root ?? null,
+      footer: placement?.region ?? null,
+      // The end of the sidebar is only a fallback when the root stacks its
+      // children; anywhere else the row would join (and resize) bb's layout.
+      sidebar: placement?.rootStacks ? host!.root : null,
       attached,
       connected: strip.root.isConnected,
       beforeFooter: attached?.kind === "footer" && attached.host.previousElementSibling === strip.root,
