@@ -115,16 +115,18 @@ describe("choosing between bb's two sidebars", () => {
 
 describe("the footer region the row sits above", () => {
   /** A plain tree: each node names its parent, its layout and its children. */
-  interface Node { name: string; parent: Node | null; horizontal: boolean; children: Node[] }
-  const node = (name: string, parent: Node | null, horizontal = false): Node => {
-    const made = { name, parent, horizontal, children: [] as Node[] };
+  type Layout = "row" | "column" | "grid";
+  interface Node { name: string; parent: Node | null; layout: Layout; children: Node[] }
+  const node = (name: string, parent: Node | null, layout: Layout = "column"): Node => {
+    const made = { name, parent, layout, children: [] as Node[] };
     parent?.children.push(made);
     return made;
   };
   const layout: RegionLayout<Node> = {
     parent: (n) => n.parent,
-    horizontal: (n) => n.horizontal,
+    horizontal: (n) => n.layout === "row",
     onlyChild: (n, child) => n.children.every((each) => each === child),
+    vertical: (n) => n.layout === "column",
   };
 
   it("is the footer itself when it already sits in a vertical stack (bb 0.45 / 0.46.0)", () => {
@@ -132,24 +134,36 @@ describe("the footer region the row sits above", () => {
     const body = node("app-sidebar-body", root);
     node("content", body);
     const footer = node("footer", body);
-    expect(footerRegion(footer, root, layout).name).toBe("footer");
+    expect(footerRegion(footer, root, layout)?.name).toBe("footer");
   });
 
   it("is the whole horizontal footer row in bb 0.46.1", () => {
     const root = node("sidebar", null);
-    node("rail-and-body", root);
-    const row = node("sidebar-footer-row", root, true);
+    node("rail-and-body", root, "row");
+    const row = node("sidebar-footer-row", root, "row");
     node("rail-cell", row);
     const body = node("collapsible-body", row);
-    const inner = node("collapsible-inner", body, true);
+    const inner = node("collapsible-inner", body, "row");
     const footer = node("footer", inner);
-    expect(footerRegion(footer, root, layout).name).toBe("sidebar-footer-row");
+    expect(footerRegion(footer, root, layout)?.name).toBe("sidebar-footer-row");
   });
 
-  it("never climbs past the sidebar root", () => {
+  it("is null when the climb stops at bb 0.47.1's grid, which would adopt the row as a grid item", () => {
+    const root = node("sidebar", null);
+    const grid = node("grid", root, "grid");
+    node("nav-rail", grid);
+    node("nav-rail-sidebar-body", grid);
+    node("settings-cell", grid, "row");
+    const cell = node("sidebar-footer-body", grid);
+    const inner = node("collapsible-inner", cell, "row");
+    const footer = node("footer", inner);
+    expect(footerRegion(footer, root, layout)).toBeNull();
+  });
+
+  it("never climbs past the sidebar root, and gives no line in a root that is not a vertical stack", () => {
     const shell = node("app-shell", null);
-    const root = node("sidebar", shell, true);
+    const root = node("sidebar", shell, "row");
     const footer = node("footer", root);
-    expect(footerRegion(footer, root, layout).name).toBe("footer");
+    expect(footerRegion(footer, root, layout)).toBeNull();
   });
 });
