@@ -63,6 +63,20 @@ glyphs, and agents populate and read back:
 Structural changes (add/remove outcomes, initiatives, metrics, features) go
 through a replace op — regenerate the document and replace it.
 
+## Spawning BB threads
+
+Only spawn a thread when a human has asked for one. When you do, pass
+`--parent-self` so the new thread is linked to yours:
+
+```sh
+bb thread spawn --parent-self --title "..." --prompt-file prompt.md
+```
+
+A `bb thread spawn` carries no identity of its own: the CLI authenticates as the
+machine, not as a person, so without a parent the new thread's starter is recorded
+as unknown. With `--parent-self` the Identity plugin inherits your thread's starter,
+so the thread is attributed to the person who started yours.
+
 ## Pushing to GitHub
 
 You commit and push as the box's **GitHub App bot** (`ensembleworks-lsp[bot]` on

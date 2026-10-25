@@ -177,6 +177,8 @@ export type DispatchContextLike = {
   queuedMessages?: readonly { id: string; senderThreadId: string | null }[];
   /** The machine the turn will run on; null when neither environment nor intent names one. */
   host: { id: string; name: string } | null;
+  /** The prompt this dispatch carries (bb's `PluginDispatchInput`); absent in older callers and tests. */
+  input?: { text: string } | null;
 };
 
 /** Turn one dispatch plus the requester's identity into the facts of an attribution. */
@@ -289,16 +291,22 @@ export class AttributionLedger {
   }
 
   /**
-   * Record a thread's starter, FIRST WRITE WINS: a later dispatch never rewrites it.
-   * Returns whether this call was the write, and the record now in force (null only
-   * when storage failed).
+   * Record a thread's starter, FIRST IDENTIFIED WRITE WINS: once a record names a
+   * person, a later dispatch never rewrites it. A record with no starter (a `bb thread
+   * spawn` from a shell, a drain, the plugin-load race) is a placeholder, and the first
+   * dispatch that does name a person replaces it — that person is who the thread is
+   * for, and without this a thread born anonymous stayed anonymous forever (every
+   * unknown starter in the box's logs on 2026-10-21 was a CLI spawn followed within
+   * minutes by its owner's first browser prompt). Returns whether this call was the
+   * write, and the record now in force (null only when storage failed).
    *
    * Safe against concurrent first dispatches because bb runs the whole
    * `message.dispatch` pass under one server-wide lock (SDK `PluginHooks.on`).
    */
   async record(record: StarterRecord): Promise<{ recorded: boolean; record: StarterRecord | null }> {
     const existing = await this.get(record.threadId);
-    if (existing !== null) return { recorded: false, record: existing };
+    const upgrade = existing !== null && existing.starter === null && record.starter !== null;
+    if (existing !== null && !upgrade) return { recorded: false, record: existing };
     try {
       const written = await withTimeout(this.#kv.set(KEY_PREFIX + record.threadId, record), this.#timeoutMs);
       if (written === TIMED_OUT) {
@@ -306,7 +314,8 @@ export class AttributionLedger {
         return { recorded: false, record: null };
       }
       this.#remember(record.threadId, record);
-      await this.#appendToIndex(record.threadId);
+      // An upgraded thread is already in the index; appending again would double-count it.
+      if (!upgrade) await this.#appendToIndex(record.threadId);
       return { recorded: true, record };
     } catch {
       this.#cache.delete(record.threadId);
@@ -499,6 +508,14 @@ export type DispatchDeps = {
    * here — it is bookkeeping, never a gate.
    */
   observeStarter?: (person: string) => Promise<unknown>;
+  /**
+   * Called with EVERY proceeding dispatch's sender and text — follow-ups included, unlike
+   * the first-write-wins starter — so the per-message sender log can tell two people
+   * pairing in one thread apart. `person` is the dispatch's own identity, never an
+   * inherited one; the observer decides what an unidentified sender means. Bookkeeping,
+   * never a gate: its failure is swallowed.
+   */
+  observeSender?: (input: { threadId: string; text: string; person: StarterSummary | null; email: string | null; at: number }) => Promise<unknown>;
 };
 
 /**
@@ -561,6 +578,13 @@ async function decideDispatch(context: DispatchContextLike, deps: DispatchDeps):
     }
 
     const outcome = await deps.ledger.record(decided);
+    const text = context.input?.text;
+    if (typeof text === "string" && deps.observeSender !== undefined) {
+      await deps.observeSender({ threadId: facts.threadId, text, person: facts.person, email: facts.email, at: facts.now })
+        .catch((error: unknown) => {
+          deps.log.warn(`identity: could not record the sender: ${(error as Error).message}`);
+        });
+    }
     const starter = decided.starter?.person ?? null;
     if (starter !== null && deps.observeStarter !== undefined) {
       await deps.observeStarter(starter).catch((error: unknown) => {

@@ -60,6 +60,8 @@ export const attachmentSchema = z.object({
   /** The sitting currently being read. Null only for a room nobody has met in yet. */
   conversationId: z.string().nullable(),
   cursor: z.number(),
+  channelTeamId: z.string().nullable().optional(),
+  channelId: z.string().nullable().optional(),
 });
 export type ThreadAttachment = z.infer<typeof attachmentSchema>;
 export const watchSchema = z.object({

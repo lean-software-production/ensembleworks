@@ -37,6 +37,7 @@ import {
   type ThreadStatus,
 } from "./sidebar-fallback.js";
 import { IdentityPicker } from "./components/IdentityPicker.js";
+import { Avatar, avatarUrl } from "./components/Avatar.js";
 import { Explain } from "./components/Explain.js";
 import { IdentitySettings } from "./components/settings/IdentitySettings.js";
 
@@ -144,6 +145,18 @@ function PresenceCoordinator() {
         tone: entry.typing > 0 ? "running" as const : "default" as const,
         badge: String(entry.viewers),
         badgeColor: entry.typing > 0 ? "var(--warning, #f59e0b)" : "var(--success, #22c55e)",
+        // Named viewers stack as ringed photos, like the header bubbles; the ring says
+        // viewing (green) or typing (amber). Anonymous viewers trail as "+N".
+        stack: entry.people.map((person) => {
+          const color = resolvePersonColor(person.person, rosterRef.current, colorsRef.current).color;
+          return {
+            avatarUrl: avatarUrl(person.github, 14),
+            badge: initials(person.displayName),
+            color, ink: readableInk(color),
+            ring: person.typing ? "var(--warning, #f59e0b)" : "var(--success, #22c55e)",
+          };
+        }),
+        overflow: Math.max(0, entry.viewers - entry.people.length),
       }]));
       paint();
     }).catch(() => undefined);
@@ -215,6 +228,7 @@ function PresenceCoordinator() {
           badge: status.badge,
           badgeColor: resolved.color,
           badgeInk: readableInk(resolved.color),
+          avatarUrl: entry.starter === null ? null : avatarUrl(entry.starter.github, 14),
         }] as const;
       }));
       paint();
@@ -359,27 +373,29 @@ function ThreadOwnershipChip({ threadId }: { threadId: string }) {
           }}
         >
           <span aria-hidden="true" style={{ display: "inline-flex", alignItems: "center" }}>
-            <span data-identity-bubble="owner" style={{
-              display: "inline-flex", alignItems: "center", justifyContent: "center",
-              width: 26, height: 26, borderRadius: "50%", fontSize: 11, fontWeight: 700,
-              background: color, color: readableInk(color), zIndex: 10,
-              border: ownerPresence?.typing
-                ? "2px solid var(--warning, #f59e0b)"
-                : "2px solid var(--background)",
-              boxSizing: "border-box",
-            }}>{row.badge}</span>
+            <Avatar data-identity-bubble="owner"
+              github={ownership.starter?.github ?? null}
+              displayName={ownership.starter?.displayName ?? ""}
+              fallback={row.badge}
+              color={color} size={26} fontSize={11}
+              style={{
+                zIndex: 10,
+                border: ownerPresence?.typing
+                  ? "2px solid var(--warning, #f59e0b)"
+                  : "2px solid var(--background)",
+              }} />
             {visibleViewers.map((entry, index) => {
               const viewerColor = resolvePersonColor(entry.person, list?.roster ?? [], list?.colors ?? {}).color;
               return (
-                <span key={entry.person} data-identity-bubble="viewer" style={{
-                  display: "inline-flex", alignItems: "center", justifyContent: "center",
-                  width: 20, height: 20, marginLeft: -6, borderRadius: "50%",
-                  fontSize: 8, fontWeight: 700, boxSizing: "border-box",
-                  background: viewerColor, color: readableInk(viewerColor), zIndex: 9 - index,
-                  border: entry.typing
-                    ? "2px solid var(--warning, #f59e0b)"
-                    : "2px solid var(--background)",
-                }}>{initials(entry.displayName)}</span>
+                <Avatar key={entry.person} data-identity-bubble="viewer"
+                  github={entry.github} displayName={entry.displayName}
+                  color={viewerColor} size={20} fontSize={8}
+                  style={{
+                    marginLeft: -6, zIndex: 9 - index,
+                    border: entry.typing
+                      ? "2px solid var(--warning, #f59e0b)"
+                      : "2px solid var(--background)",
+                  }} />
               );
             })}
             {hiddenViewerCount > 0 ? (
@@ -664,39 +680,10 @@ function IdentityPromptOverlay() {
 }
 
 function PersonRow({ entry, list }: { entry: PresentPerson; list?: MachineList | null }) {
-  const [avatarFailed, setAvatarFailed] = useState(false);
-  const fallbackColor = resolvePersonColor(entry.person, list?.roster ?? [], list?.colors ?? {}).color;
+  const color = resolvePersonColor(entry.person, list?.roster ?? [], list?.colors ?? {}).color;
   return (
     <div style={{ alignItems: "center", display: "flex", gap: 8, fontSize: 12, lineHeight: 1.5, marginBottom: 4 }}>
-      {avatarFailed ? (
-        <span
-          aria-hidden="true"
-          style={{
-            alignItems: "center",
-            background: fallbackColor,
-            borderRadius: "50%",
-            display: "inline-flex",
-            flex: "0 0 auto",
-            fontSize: 9,
-            color: readableInk(fallbackColor),
-            fontWeight: 600,
-            height: 20,
-            justifyContent: "center",
-            width: 20,
-          }}
-        >
-          {initials(entry.displayName)}
-        </span>
-      ) : (
-        <img
-          src={`https://github.com/${encodeURIComponent(entry.github)}.png?size=40`}
-          alt={entry.displayName}
-          width={20}
-          height={20}
-          onError={() => setAvatarFailed(true)}
-          style={{ borderRadius: "50%", flex: "0 0 auto" }}
-        />
-      )}
+      <Avatar github={entry.github} displayName={entry.displayName} color={color} size={20} fontSize={9} />
       <span style={{ flex: "1 1 auto" }}>{entry.displayName}
         {entry.provenance === "self-selected" ? " · chosen in a browser" :
           entry.provenance === "configured-fallback" ? " · configured fallback" :

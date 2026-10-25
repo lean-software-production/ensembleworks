@@ -6,6 +6,9 @@ import { headerChip, ownershipRowStatus } from "./ownership-labels.js";
 import { readableInk, resolvePersonColor } from "./person-colors.js";
 import type { MachineList, ThreadOwnership, WhoAmI } from "./server.js";
 import { stubPopoverDom } from "./popover-test-dom.js";
+import { avatarUrl } from "./components/Avatar.js";
+
+const photo = (bubble: Element | null) => bubble?.querySelector("img")?.getAttribute("src");
 
 const starter = { person: "erin", displayName: "Erin Example", github: "erin" };
 const ownership: ThreadOwnership = {
@@ -48,7 +51,7 @@ describe("thread ownership interaction contract", () => {
     const trigger = await screen.findByRole("button", {
       name: `${ownershipRowStatus(ownership).label}. Alex and Sam here; Sam is typing. Show thread details`,
     });
-    expect(trigger.querySelector('[data-identity-bubble="owner"]')?.textContent).toBe("EE");
+    expect(photo(trigger.querySelector('[data-identity-bubble="owner"]'))).toBe(avatarUrl("erin", 26));
     expect(trigger.querySelectorAll('[data-identity-bubble="viewer"]')).toHaveLength(2);
     expect(trigger.style.minWidth).toBe("44px");
     expect(trigger.style.height).toBe("44px");
@@ -78,9 +81,9 @@ describe("thread ownership interaction contract", () => {
       { person: "alex", displayName: "Alex", github: "alex", typing: false },
     ]);
     const trigger = await screen.findByRole("button", { name: /Erin Example and Alex here; Erin Example is typing/ });
-    expect(trigger.querySelector('[data-identity-bubble="owner"]')?.textContent).toBe("EE");
+    expect(photo(trigger.querySelector('[data-identity-bubble="owner"]'))).toBe(avatarUrl("erin", 26));
     expect(trigger.querySelectorAll('[data-identity-bubble="viewer"]')).toHaveLength(1);
-    expect(trigger.querySelector('[data-identity-bubble="viewer"]')?.textContent).toBe("A");
+    expect(photo(trigger.querySelector('[data-identity-bubble="viewer"]'))).toBe(avatarUrl("alex", 20));
     expect((trigger.querySelector('[data-identity-bubble="owner"]') as HTMLSpanElement).style.border)
       .toContain("var(--warning");
   });
@@ -93,7 +96,9 @@ describe("thread ownership interaction contract", () => {
   ])("preserves existing labels and details for $via / $host.kind", async (view) => {
     mount(view);
     const trigger = await screen.findByRole("button", { name: new RegExp(`^${ownershipRowStatus(view).label.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}\\.`) });
-    expect(trigger.querySelector('[data-identity-bubble="owner"]')?.textContent).toBe(ownershipRowStatus(view).badge);
+    const owner = trigger.querySelector('[data-identity-bubble="owner"]');
+    if (view.starter === null) expect(owner?.textContent).toBe(ownershipRowStatus(view).badge);
+    else expect(photo(owner)).toBe(avatarUrl(view.starter.github, 26));
     expect(trigger.title).toBe(headerChip(view, { ...machines, sharedUser: machines.sharedMachineUser }).text);
   });
 });
