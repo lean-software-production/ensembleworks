@@ -1,0 +1,113 @@
+name: canvas-soak
+on:
+  schedule:
+    - cron: '23 5 * * *' # nightly soak, never on PRs (canvas-sync/src/soak-smoke.test.ts under `bun run test` covers per-commit)
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  soak:
+    # schedule + manual only — this job is intentionally never triggered by
+    # pull_request; the smoke test is what gates every commit/PR.
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+      - uses: oven-sh/setup-bun@v2
+        with: { bun-version: 1.3.14 }
+      - uses: actions/setup-node@v4
+        with: { node-version: 22.12.0 }
+      - run: bun install --frozen-lockfile
+      # SCALE NOTE (deviates from this task's illustrative "--clients 10
+      # --ops 200000" example — calibrated down after measuring real
+      # behavior, not guessed): canvas-sync's SyncServerPeer/SyncClientPeer
+      # have no compaction primitive of their own (only the server-side
+      # DocumentActor compacts — a different phase's scope), so a soak's
+      # docs hold their FULL oplog history in memory for the run's entire
+      # duration, and per-op cost grows as that history grows (canvas-doc's
+      # documented O(n) `nodeByShapeId` scan — loro-canvas-doc.ts's own PERF
+      # comment — gets more expensive as the tree/history grows). Measured
+      # directly via this same CLI at --clients 5 --ops 20000 --chaos 0.5:
+      # ~135-190s wall time, ~4.3GB peak RSS (already ~60% of a standard
+      # GitHub-hosted runner's 7GB). The trend across 500/5,000/20,000-op
+      # calibration runs is clearly superlinear, so extrapolating to the
+      # illustrative 200,000/10-client scale risks EITHER blowing the
+      # 60-minute timeout OR OOM-killing the runner outright (a hard crash
+      # with zero useful metrics) — worse than a smaller, reliable nightly
+      # signal. 20,000 ops / 5 clients is the largest scale actually
+      # validated end-to-end (twice, with different seeds) to complete
+      # successfully; timeout-minutes: 60 is kept as a generous safety
+      # margin (~15-25x the measured wall time) in case CI runners are
+      # slower or a future regression makes a run legitimately take longer.
+      # Revisit this scale if/when canvas-doc's O(n) lookup is addressed, or
+      # if a compaction step is ever added to this clean-room soak path.
+      - name: run soak (seed derived from the run number — replayable from the logged value)
+        run: |
+          bun canvas-sync/soak-cli.ts \
+            --clients 5 \
+            --ops 20000 \
+            --seed "$GITHUB_RUN_NUMBER" \
+            --chaos 0.5
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: canvas-soak-metrics-${{ github.run_id }}
+          path: canvas-soak-summary.json
+          retention-days: 14
+
+  soak-actor:
+    # Task H4: the DocumentActor-backed compacting soak variant (real SQLite
+    # persistence + periodic compaction — server/src/canvas-v2/soak-actor.ts),
+    # exercising the "prod-faithful growth curve" the Phase-2 deferral asked
+    # for. Independent job (not a step in `soak` above): a different
+    # workspace (@ensembleworks/server, which can import canvas-sync;
+    # canvas-sync itself never imports server) and its own scale/timeout —
+    # schedule + manual only, same as `soak`; the per-commit smoke
+    # (server/src/canvas-v2/soak-actor.test.ts) is what gates every PR.
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - uses: oven-sh/setup-bun@v2
+        with: { bun-version: 1.3.14 }
+      - uses: actions/setup-node@v4
+        with: { node-version: 22.12.0 }
+      - run: bun install --frozen-lockfile
+      # SCALE NOTE (validated, not guessed — see soak-actor-cli.ts's own
+      # DEFAULT SCALE comment, soak-actor.ts's CALIBRATION section, and the
+      # Task H3 execution notes for the full transcript): H4 first validated
+      # 5 clients / 15,000 ops locally (~17s wall time, disk-growth ratio
+      # 2.96x). Task H3 then RE-CALIBRATED at >=20k ops — three runs (5/
+      # 20,000/seed 42, 5/20,000/seed 1, 5/25,000/seed 7, all chaos 0.5),
+      # ~26-38s wall time each, all converged, disk-sustained-highwater
+      # ratios 2.90x-6.52x (well inside DISK_SUSTAINED_HIGHWATER_MULTIPLIER's
+      # calibrated 10x bound) and quartile-mean RSS ratios 2.26x-2.85x (well
+      # inside soak-actor-cli.ts's tightened FLAT_RSS_TOLERANCE = 8x). 20,000
+      # is now the validated default in soak-actor-cli.ts itself — this
+      # nightly step is bumped to match explicitly so an override here can
+      # never silently supersede that calibration. Still smaller than the
+      # bare-peer `soak` job's 20,000-op run's wall time per-op cost because
+      # this variant ALSO does real SQLite I/O (append + periodic
+      # compaction) on top of the same op-routing/chaos work, so it was
+      # validated at its OWN scale rather than assumed to inherit the
+      # bare-peer number. timeout-minutes: 30 leaves generous headroom for a
+      # slower/busier CI runner.
+      - name: run actor soak (seed derived from the run number — replayable from the logged value)
+        run: |
+          bun server/src/canvas-v2/soak-actor-cli.ts \
+            --clients 5 \
+            --ops 20000 \
+            --seed "$GITHUB_RUN_NUMBER" \
+            --chaos 0.5
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: canvas-soak-actor-metrics-${{ github.run_id }}
+          path: canvas-soak-actor-summary.json
+          retention-days: 14

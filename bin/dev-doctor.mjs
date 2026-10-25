@@ -6,16 +6,16 @@
  */
 import { spawnSync } from 'node:child_process'
 import { existsSync } from 'node:fs'
-import { atLeast, PORTS } from './dev-lib.mjs'
+import { atLeast } from './dev-lib.mjs'
 import {
 	devEnvPath,
 	makeCtx,
 	onPath,
-	probePort,
 	repoDir,
 	sessionRunning,
 	wantedBun,
 } from './dev-main.mjs'
+import { probePort } from './dev-net.mjs'
 
 /**
  * @typedef {{ name: string, level: 'required' | 'optional' | 'info',
@@ -93,7 +93,10 @@ export async function runDoctor(opts) {
 	// Ports: only meaningful when OUR session isn't the thing holding them.
 	if (!sessionRunning()) {
 		const taken = []
-		for (const [name, port] of Object.entries(PORTS)) {
+		for (const [name, port] of Object.entries(ctx.ports).filter(
+			// livekitUdp can't be detected by a TCP probe (it's a UDP mux) — skip it.
+			([name]) => name !== 'livekitUdp' && (name !== 'neko' || ctx.has.docker),
+		)) {
 			if (await probePort(port)) taken.push(`${name}:${port}`)
 		}
 		checks.push({
@@ -112,6 +115,15 @@ export async function runDoctor(opts) {
 		detail: existsSync(devEnvPath)
 			? `present at ${devEnvPath}`
 			: `absent (${devEnvPath}) — fine: defaults are keyless`,
+	})
+
+	checks.push({
+		name: 'port offset',
+		level: 'info',
+		ok: true,
+		detail: ctx.portOffset
+			? `+${ctx.portOffset} (session workspace-${ctx.portOffset}, edge :${ctx.ports.caddy})`
+			: 'none (default ports)',
 	})
 
 	if (opts.json) {

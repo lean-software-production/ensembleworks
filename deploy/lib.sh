@@ -115,14 +115,18 @@ ew_poll_health() {
 
 # ew_boot_check <release-dir> [run] -> 0 iff the fetched server (sync + term +
 # files) and transcriber (--check) all boot on scratch dirs/ephemeral ports.
-# Hermetic: fresh DATA_DIR/CLIENT_DIST, scratch files root, no TERM_RUN_AS, no
-# room.connect(). Fail-closed.
+# Hermetic: fresh storage triple (DATA_DIR/DATABASE_DIR/DATABASE_BACKUPS_DIR) +
+# CLIENT_DIST, scratch files root, no TERM_RUN_AS, no room.connect(). Fail-closed.
 ew_boot_check() {
-	local NEW="$1" run="${2:-}" ddir cdir fdir port pid ok=1 log="/tmp/ew-bootcheck-$$"
+	local NEW="$1" run="${2:-}" ddir cdir fdir dbdir bdir port pid ok=1 log="/tmp/ew-bootcheck-$$"
 	ddir="$($run mktemp -d)"; cdir="$($run mktemp -d)"; fdir="$($run mktemp -d)"
+	# Scratch storage triple: sync REQUIRES DATA_DIR + DATABASE_DIR +
+	# DATABASE_BACKUPS_DIR and refuses collision shapes (storage-geometry
+	# validation at startup); sibling mktemp dirs satisfy it hermetically.
+	dbdir="$($run mktemp -d)"; bdir="$($run mktemp -d)"
 	# --- server sync: /api/health -> 200 ---
 	port="$(ew_free_port)"
-	$run env PORT="$port" DATA_DIR="$ddir" CLIENT_DIST="$cdir" \
+	$run env PORT="$port" DATA_DIR="$ddir" DATABASE_DIR="$dbdir" DATABASE_BACKUPS_DIR="$bdir" CLIENT_DIST="$cdir" \
 		"${NEW}/ensembleworks-server" sync >"${log}-sync.log" 2>&1 & pid=$!
 	ew_poll_health "http://127.0.0.1:$port/api/health" "$pid" || { echo "boot-check FAILED: server sync" >&2; ok=0; }
 	kill "$pid" 2>/dev/null; wait "$pid" 2>/dev/null
@@ -144,7 +148,7 @@ ew_boot_check() {
 	# --- discord bot: --check links + /post face binds, exit 0 (arch integrity) ---
 	$run timeout 15 "${NEW}/ensembleworks-discord" --check >"${log}-discord.log" 2>&1 \
 		|| { echo "boot-check FAILED: discord --check nonzero" >&2; ok=0; }
-	$run rm -rf "$ddir" "$cdir" "$fdir"
+	$run rm -rf "$ddir" "$cdir" "$fdir" "$dbdir" "$bdir"
 	[ "$ok" = 1 ]
 }
 

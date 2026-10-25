@@ -28,8 +28,11 @@ because the mob wants to drive any repo (and its CI) from inside EnsembleWorks. 
 breadth is intentional, the safety rests entirely on the *other* controls:
 
 - **Short-lived tokens** — the App's private key mints installation tokens that
-  expire in ~1 hour, so a leaked token has a 1-hour blast radius. Mint a per-repo
-  token (`gh-app-token.bash --repos <repo>`) when a job only needs one repo.
+  expire in ~1 hour, so a leaked token has a 1-hour blast radius. Tokens are
+  **org-wide tokens only** (EW25 removed `ensembleworks-gh-token`'s repo
+  argument): a repo-scoped token cached by git's credential cache gets replayed
+  against a different repo and 403s, and the App is installed org-wide anyway,
+  so scoping bought nothing but a confusing failure.
 - **PR-only via branch protection** — protect `main` on *every repo whose `main`
   matters* (not just `ensembleworks`): the bot can push branches and open PRs but a human
   merges with their own creds. This is the real safety valve, and because the token
@@ -69,7 +72,17 @@ Under **Repository permissions** set:
 | Contents       | Read and write | push commits and branches                   |
 | Pull requests  | Read and write | open PRs                                     |
 | Workflows      | Read and write | edit `.github/workflows/` (CI) from the mob |
+| Actions        | Read-only      | see workflow runs and their logs            |
+| Checks         | Read-only      | read check runs (`gh pr checks`)            |
+| Commit statuses | Read-only     | read commit statuses (`statusCheckRollup`)  |
 | Metadata       | Read-only      | mandatory, auto-selected                    |
+
+The three read-only rows were added on 2026-10-06. Without them, agents get
+`403 Resource not accessible by integration` on every Actions/check/status
+call against a **private** repo, so they can't tell whether CI passed or a
+publish ran. Public repos hide the gap, because anyone can read their CI. After
+changing permissions, an org owner must accept the update on the installation
+before new tokens carry it.
 
 Leave the rest at "No access" — Administration, Secrets, Members, Deployments,
 Environments. Account permissions: none. Subscribe to events: none.
@@ -156,19 +169,23 @@ narrow wrapper run as the app user:
   > "sessions will NOT start" warning even though sessions work. The laingville
   > bootstrap provisions both rules.
 
-- A canvas agent then mints + pushes:
+- A canvas agent doesn't mint anything by hand — `/usr/local/bin/gh` and
+  `git-credential-ensembleworks` call the wrapper for it, so plain `git push`
+  and `gh` authenticate as the bot in any shell. To mint one manually (operator
+  debugging only; the wrapper takes **no arguments** — org-wide tokens only):
 
   ```sh
-  TOKEN=$(sudo -u ensembleworks ensembleworks-gh-token)        # or: … ensembleworks-gh-token myrepo
-  git push "https://x-access-token:${TOKEN}@github.com/lean-software-production/<repo>.git" HEAD:my-branch
+  TOKEN=$(sudo -n -u ensembleworks ensembleworks-gh-token)
   ```
 
+  When auth misbehaves, run `ensembleworks-gh-doctor` rather than guessing.
+
 The wrapper hardcodes `--env` to the app user's own `github-app.env` and accepts
-only a validated comma-separated repo allowlist — it never forwards arbitrary
-`gh-app-token.bash` flags, so the sandbox user can't redirect `--env` to read files
-as the app user. Net effect on a prod box: a leaked *token* still has a ~1h blast
-radius, but the *key* can no longer be exfiltrated by the mob at all. Revocation
-(step "Revocation") is unchanged.
+no arguments at all — it never forwards arbitrary `gh-app-token.bash` flags, so
+the sandbox user can't redirect `--env` to read files as the app user. Net
+effect on a prod box: a leaked *token* still has a ~1h blast radius, but the
+*key* can no longer be exfiltrated by the mob at all. Revocation (step
+"Revocation") is unchanged.
 
 ## 7. Branch protection on `main` (the real control)
 
@@ -181,6 +198,16 @@ Repo → **Settings → Branches → Add branch ruleset / protection rule** for 
 
 Net effect: `ensembleworks[bot]` can create branches and open PRs but **cannot
 push to `main`** — a human must review and merge.
+
+> **Status (2026-10-06): not in force anywhere.** No org repo currently has a
+> ruleset or classic protection on `main` (`gh api repos/<owner>/<repo>/branches/main --jq .protected`
+> → `false`). Private repos such as `workshops` can't have either on the org's
+> current plan ("Upgrade to GitHub Pro or make this repository public"). Agents
+> have pushed to `main` and merged their own PRs. Until protection is enabled,
+> the PR-only rule rests on `deploy/agent-home/AGENTS.md` and Claude Code's
+> auto-mode classifier, which blocks an agent merging its own PR unless a human
+> in the conversation asked for that merge (the `Trainer-Requested Merge` rule in
+> `deploy/agent-home/.claude/ensembleworks-settings.json`).
 
 ## 8. Remote over HTTPS (so a token can push)
 

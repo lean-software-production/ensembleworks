@@ -1,0 +1,120 @@
+{
+  "version": 1,
+  "name": "Fix a reproduced bug",
+  "workflow": "workflow.fabro",
+  "files": [
+    "workflow.fabro",
+    "runner.mjs"
+  ],
+  "environment": "local",
+  "autoApprove": true,
+  "inputSchema": {
+    "type": "object",
+    "additionalProperties": false,
+    "required": [
+      "validationCommands",
+      "qualityCommand",
+      "reproductionCommand",
+      "expectedFailureExitCode",
+      "regressionPaths"
+    ],
+    "properties": {
+      "setupCommands": {
+        "type": "array",
+        "items": {
+          "type": "string",
+          "minLength": 1
+        },
+        "maxItems": 8
+      },
+      "validationCommands": {
+        "type": "array",
+        "minItems": 1,
+        "maxItems": 12,
+        "items": {
+          "type": "string",
+          "minLength": 1
+        }
+      },
+      "qualityCommand": {
+        "type": "string",
+        "minLength": 1
+      },
+      "qualityMode": {
+        "type": "string",
+        "enum": [
+          "gate",
+          "report"
+        ],
+        "description": "Default gate requires exit zero. Report allows findings but still rejects execution errors."
+      },
+      "reproductionCommand": {
+        "type": "string",
+        "minLength": 1
+      },
+      "expectedFailureExitCode": {
+        "type": "integer",
+        "minimum": 1,
+        "maximum": 125
+      },
+      "regressionPaths": {
+        "type": "array",
+        "minItems": 1,
+        "items": {
+          "type": "string",
+          "pattern": "^(?!/)(?!.*\\\\)(?!.*(?:^|/)\\.\\.(?:/|$)).+$"
+        }
+      }
+    }
+  },
+  "outputSchema": {
+    "type": "object",
+    "required": [
+      "baseSha",
+      "resultSha",
+      "changedFiles",
+      "before",
+      "after",
+      "review",
+      "outcome",
+      "reproductionBefore",
+      "reproductionAfter"
+    ],
+    "properties": {
+      "baseSha": {
+        "type": "string",
+        "pattern": "^[a-f0-9]{40}$"
+      },
+      "resultSha": {
+        "type": "string",
+        "pattern": "^[a-f0-9]{40}$"
+      },
+      "changedFiles": {
+        "type": "array",
+        "items": {
+          "type": "string"
+        }
+      },
+      "before": {
+        "type": "object"
+      },
+      "after": {
+        "type": "object"
+      },
+      "review": {
+        "type": "string",
+        "minLength": 1
+      },
+      "outcome": {
+        "const": "changed"
+      },
+      "reproductionBefore": {
+        "type": "object"
+      },
+      "reproductionAfter": {
+        "type": "object"
+      }
+    }
+  },
+  "acceptanceInstructions": "Independently verify the reproduced assertion failure matches the work order (a nonzero exit alone is not proof), the same immutable regression passes after the fix, the scoped diff fixes the bug without weakening tests, all checks pass, and repository interaction-contract obligations are met. No merge or publication. For canvas-editor tools, canvas-react, or client canvas-v2 input/tool changes, declare or extend an interaction contract (or justify ux-contract: none), record verbatim RED before fixing and stop if unreachable, implement Obs additions in both FSM and browser adapters, and independently verify RED/GREEN during review."
+}

@@ -1,0 +1,1483 @@
+// Run: bun src/canvas-v2/CanvasV2App.test.ts
+//
+// THE LOAD-BEARING INTEGRATION TEST for Task G3 — mirrors canvas-react's OWN
+// house precedent for exactly this kind of test (see
+// canvas-react/src/embed/embed-reconciler.test.ts's header): happy-dom + a
+// REAL react-dom/client reconciler + <StrictMode>, because
+// renderToStaticMarkup (this repo's usual component-test rig) never runs
+// effects at all — and CanvasV2App's entire construction sequence (connect
+// -> SyncClientPeer -> resolvePageId -> Editor -> ToolContext -> mount) lives
+// inside effects. No real WebSocket/server process: `connect` is CanvasV2App's
+// own documented test seam, injected here to hand back one half of a
+// canvas-sync `makePair()` memory-transport pair wired to a REAL
+// `SyncServerPeer` + real `LoroCanvasDoc`, in-process — proving the actual
+// sync/render code paths, not a mock of them.
+//
+// DOM GLOBALS BEFORE REACT-DOM (same reasoning as embed-reconciler.test.ts):
+// happy-dom's window/document must be installed on globalThis BEFORE
+// react-dom/client (which binds to `document` at createRoot time) or any
+// canvas-react import runs — static `import` declarations hoist above any
+// statement, so every React-flavored and canvas-v2 import below is dynamic,
+// AFTER the globals are set. IS_REACT_ACT_ENVIRONMENT makes React 19's
+// act() flush renders + effects (incl. StrictMode's dev-only double-invoke)
+// synchronously, which is what makes the assertions below deterministic
+// despite CanvasV2App's async boot sequence (act() accepts an async
+// callback and awaits it before returning).
+import assert from 'node:assert/strict'
+import { Window } from 'happy-dom'
+
+const win = new Window()
+;(globalThis as any).window = win
+;(globalThis as any).document = win.document
+;(globalThis as any).navigator = win.navigator
+;(globalThis as any).location = win.location
+;(globalThis as any).ResizeObserver = win.ResizeObserver
+;(globalThis as any).IS_REACT_ACT_ENVIRONMENT = true
+
+const { createElement, StrictMode, act } = await import('react')
+const { createRoot } = await import('react-dom/client')
+const { SyncServerPeer, SyncClientPeer, PresenceStore, makePair } = await import('@ensembleworks/canvas-sync')
+const { CanvasV2App } = await import('./CanvasV2App.js')
+const { buildSetStyleIntent } = await import('@ensembleworks/canvas-editor')
+type Transport = import('@ensembleworks/canvas-sync').Transport
+type Shape = import('@ensembleworks/canvas-model').Shape
+
+function seedShape(id: string, x: number, y: number): Shape {
+	return {
+		id, kind: 'geo', parentId: 'page:p', index: 'a1', x, y, rotation: 0,
+		isLocked: false, opacity: 1, meta: {}, props: { w: 80, h: 60 },
+	} as Shape
+}
+
+async function main() {
+	// ==========================================================================
+	// (0) TASK P4 — buildSetStyleIntent PURE MAPPING (isolated unit coverage,
+	// no session/DOM/click needed): the exact axis -> SetStyle intent shape
+	// the wiring in case (i) below dispatches at runtime — a PROP axis (e.g.
+	// color) patches `props`; the OPACITY axis sets the envelope `opacity`
+	// field and carries NO `props` key at all (Task P4 mutant table: "put
+	// opacity in props" / "wrong ids"). `ids` passes through unchanged.
+	// ==========================================================================
+	{
+		const ids = ['shape:a', 'shape:b']
+		assert.deepEqual(
+			buildSetStyleIntent(ids, 'color', 'blue'),
+			{ type: 'SetStyle', ids, props: { color: 'blue' } },
+			'a PROP axis (color) must build a SetStyle with a `props` patch, ids passed through unchanged',
+		)
+		const opacityIntent = buildSetStyleIntent(ids, 'opacity', 0.5) as { props?: unknown }
+		assert.deepEqual(
+			opacityIntent,
+			{ type: 'SetStyle', ids, opacity: 0.5 },
+			'the OPACITY axis must build a SetStyle with the envelope `opacity` field, NEVER `props.opacity`',
+		)
+		assert.equal(opacityIntent.props, undefined, 'the opacity axis intent must carry no `props` key at all')
+		console.log('ok: CanvasV2App — buildSetStyleIntent maps prop axes to `props` and the opacity axis to the envelope field')
+	}
+
+	// ==========================================================================
+	// Server-side fixture: a REAL SyncServerPeer/LoroCanvasDoc, pre-seeded with
+	// a page + one shape BEFORE the client ever connects — this is the "the
+	// server's existing shapes" the mount must render.
+	// ==========================================================================
+	const server = new SyncServerPeer({ peerId: 1n })
+	server.doc.putPage({ id: 'page:p', name: 'Canvas' })
+	server.doc.putShape(seedShape('shape:seed-1', 10, 10))
+	server.doc.commit()
+
+	// A FRESH memory-transport pair per `connect()` CALL, not one shared pair
+	// reused across calls — StrictMode invokes the mount effect TWICE (mount
+	// -> simulated cleanup -> mount again), and the first (cancelled) mount's
+	// cleanup calls `transport.close()` on whatever it connected; memory-
+	// transport.ts's `close()` tears down BOTH ends of a `makePair()` pair
+	// together (one shared `open` flag), so reusing a single pair across both
+	// StrictMode invocations would have the cancelled mount's cleanup silently
+	// kill the transport the SURVIVING mount goes on to use — the exact
+	// StrictMode hazard this test wants to prove CanvasV2App does NOT have
+	// (its own cleanup only ever closes the transport ITS OWN boot sequence
+	// connected, never one it didn't). A real WebSocket doesn't have this
+	// failure mode either way (each `new WebSocket(url)` call opens an
+	// independent connection), so this per-call-fresh-pair setup is what
+	// makes the in-process test fixture behave like the real thing.
+	function connect(): Promise<Transport> {
+		const [serverSide, clientSide]: [Transport, Transport] = makePair()
+		server.connect(serverSide)
+		return Promise.resolve(clientSide)
+	}
+
+	// Via the bare global `document` (not `win.document`) so TS resolves it
+	// through the ambient lib.dom `Document`/`HTMLDivElement` types — the
+	// same types react-dom's `createRoot(Container)` expects — rather than
+	// happy-dom's own (structurally different) class types, which `win.
+	// document.createElement(...)` would carry and createRoot would then
+	// reject at the type level (see this file's own history: that's exactly
+	// what happened here before this comment was added).
+	const container = document.createElement('div')
+	document.body.appendChild(container)
+	const root = createRoot(container)
+
+	// (a) MOUNT HANDSHAKES AND RENDERS THE SERVER'S EXISTING SHAPES.
+	// `connect` hands back the CLIENT half of the pair directly (already
+	// "open" — no ws handshake to await), and `settleMs: 0` skips the
+	// production settle window (see CanvasV2App's own module header + Table
+	// bootstrap-page.ts's KNOWN RACE note): the memory transport's round trip
+	// is SYNCHRONOUS (canvas-sync/src/memory-transport.ts's `send` dispatches
+	// on the same call stack, no queueMicrotask anywhere), so by the time
+	// `connect()`'s promise resolves the server's existing content has
+	// already been imported into the client's doc.
+	await act(async () => {
+		root.render(
+			createElement(
+				StrictMode,
+				null,
+				createElement(CanvasV2App, {
+					roomId: 'dogfood-test',
+					userId: 'test-user',
+					connect,
+					settleMs: 0,
+				}),
+			),
+		)
+		// Flush the async boot sequence's microtask chain (connect() ->
+		// SyncClientPeer construction -> delay(0) -> resolvePageId -> setSession)
+		// inside act() so React's synchronous-update flushing covers it.
+		await new Promise((r) => setTimeout(r, 0))
+		await new Promise((r) => setTimeout(r, 0))
+	})
+
+	assert.ok(
+		container.querySelector('[data-shape-id="shape:seed-1"]'),
+		`the server's pre-existing shape must be rendered after the sync handshake — DOM: ${container.innerHTML}`,
+	)
+	console.log("ok: CanvasV2App — mount handshakes and renders the server's existing shapes")
+
+	// ==========================================================================
+	// (a2) VISUAL CHROME (Task visual-chrome): the viewport surface carries the
+	// brand paper background (gap 1), and a real pointermove over a shape with
+	// the select tool active (the default active tool) paints a hover
+	// indicator that disappears once the pointer moves off it (gaps "hover
+	// shape indicator" / "hover outline") — end to end through the real
+	// select.ts FSM -> editor.ts's `hover` state -> Overlay.tsx -> Hover.tsx,
+	// not just Hover.tsx's own isolated component test (canvas-react/src/
+	// overlay.test.ts covers that in isolation).
+	// ==========================================================================
+	const viewportContainerEl = container.querySelector('[data-canvas-v2-viewport]') as HTMLElement | null
+	assert.ok(viewportContainerEl, `the viewport container must render — DOM: ${container.innerHTML}`)
+	assert.equal(
+		viewportContainerEl!.style.background,
+		'var(--wm-bg-warm)',
+		'the viewport container must carry the brand paper background token, not browser-default white',
+	)
+
+	const hoverViewportEl = container.querySelector('[tabindex]') as HTMLElement | null
+	assert.ok(hoverViewportEl, `the viewport element must exist — DOM: ${container.innerHTML}`)
+	assert.ok(
+		!container.querySelector('[data-overlay="hover-indicator"]'),
+		'precondition: nothing is hovered before any pointermove',
+	)
+	await act(async () => {
+		// shape:seed-1 is a geo shape at world (10,10), 80x60 (seedShape's
+		// defaults) -- at the identity default camera (x:0,y:0,z:1) and this
+		// happy-dom container's (0,0) bounding rect, screen coords equal world
+		// coords, so clientX/Y (50,50) lands inside it.
+		hoverViewportEl!.dispatchEvent(new (win as any).PointerEvent('pointermove', { bubbles: true, cancelable: true, pointerId: 99, clientX: 50, clientY: 50, buttons: 0 }))
+	})
+	const hoverIndicator = container.querySelector('[data-overlay="hover-indicator"]')
+	assert.ok(hoverIndicator, `hovering shape:seed-1 with the select tool active must paint a hover indicator — DOM: ${container.innerHTML}`)
+	assert.equal(hoverIndicator!.getAttribute('data-shape-id'), 'shape:seed-1', 'the hover indicator must be tagged with the hovered shape\'s id')
+
+	await act(async () => {
+		// Move far away, off every shape.
+		hoverViewportEl!.dispatchEvent(new (win as any).PointerEvent('pointermove', { bubbles: true, cancelable: true, pointerId: 99, clientX: 5000, clientY: 5000, buttons: 0 }))
+	})
+	assert.ok(
+		!container.querySelector('[data-overlay="hover-indicator"]'),
+		`moving the pointer off every shape must clear the hover indicator — DOM: ${container.innerHTML}`,
+	)
+	console.log('ok: CanvasV2App — the viewport carries the brand paper background, and a real pointermove paints/clears a hover indicator (Task visual-chrome)')
+
+	// ==========================================================================
+	// (a3) HOVER IS GATED TO THE SELECT TOOL (Task visual-chrome fixer round —
+	// validator-reported blocking finding): editorState.hover lives on the
+	// editor's shared state, not on the active tool, and canvas-editor's
+	// select.ts only ever CLEARS it from its own idle pointermove — switching
+	// away to another tool leaves the last hovered id (and its painted
+	// indicator) stuck forever, since the new tool's FSM never touches hover
+	// at all. Re-hover shape:seed-1, then switch to the Frame tool via the
+	// real toolbar button (not a direct editor.apply) and assert the
+	// indicator is gone AND stays gone through a further pointermove (the
+	// "frozen" repro from the validator's browser session).
+	// ==========================================================================
+	await act(async () => {
+		hoverViewportEl!.dispatchEvent(new (win as any).PointerEvent('pointermove', { bubbles: true, cancelable: true, pointerId: 99, clientX: 50, clientY: 50, buttons: 0 }))
+	})
+	assert.ok(
+		container.querySelector('[data-overlay="hover-indicator"]'),
+		`precondition: re-hovering shape:seed-1 must paint the indicator again — DOM: ${container.innerHTML}`,
+	)
+
+	const frameToolButton = container.querySelector('[data-canvas-tool="frame"]') as HTMLElement | null
+	assert.ok(frameToolButton, `the Frame tool button must render — DOM: ${container.innerHTML}`)
+	await act(async () => {
+		frameToolButton!.dispatchEvent(new (win as any).MouseEvent('click', { bubbles: true, cancelable: true }))
+	})
+	assert.ok(
+		!container.querySelector('[data-overlay="hover-indicator"]'),
+		`switching to the Frame tool must clear the stale hover indicator — DOM: ${container.innerHTML}`,
+	)
+
+	await act(async () => {
+		// A further pointermove while Frame is active — must NOT resurrect the
+		// indicator (select.ts's FSM isn't even running, so nothing recomputes
+		// hover; it must simply stay cleared).
+		hoverViewportEl!.dispatchEvent(new (win as any).PointerEvent('pointermove', { bubbles: true, cancelable: true, pointerId: 99, clientX: 55, clientY: 55, buttons: 0 }))
+	})
+	assert.ok(
+		!container.querySelector('[data-overlay="hover-indicator"]'),
+		`the hover indicator must stay cleared while a non-select tool is active, even after further pointermoves — DOM: ${container.innerHTML}`,
+	)
+	console.log('ok: CanvasV2App — switching off the select tool clears the stale hover indicator instead of freezing it (Task visual-chrome fixer round)')
+
+	// ==========================================================================
+	// (b) A SERVER-SIDE putShape APPEARS IN THE DOM AFTER SYNC.
+	// ==========================================================================
+	await act(async () => {
+		server.doc.putShape(seedShape('shape:live-add', 200, 200))
+		server.doc.commit() // subscribeLocalUpdates -> broadcast -> client import (all synchronous over the memory transport)
+		await new Promise((r) => setTimeout(r, 0))
+	})
+	assert.ok(
+		container.querySelector('[data-shape-id="shape:live-add"]'),
+		`a server-side putShape committed after mount must render into the client DOM — DOM: ${container.innerHTML}`,
+	)
+	console.log('ok: CanvasV2App — a server-side putShape after mount appears in the DOM')
+
+	// ==========================================================================
+	// (c) PRESENCE (Task G4): a SECOND peer's published cursor renders in this
+	// mount's DOM, and this mount's OWN presence entry never renders itself
+	// (self-filtered — Cursors.tsx's documented contract, unit-tested
+	// directly in canvas-react/src/cursors.test.ts; this is the end-to-end
+	// proof over the real wire + a real SyncServerPeer).
+	// ==========================================================================
+	const [serverSideB, clientSideB]: [Transport, Transport] = makePair()
+	server.connect(serverSideB)
+	const presenceB = new PresenceStore('peer-b')
+	const peerB = new SyncClientPeer({ peerId: 2n, transport: clientSideB, presence: presenceB })
+
+	const ewPresence = (globalThis as any).window.__ew as { presencePublisher: { setCursor(c: { x: number; y: number } | null): void } }
+	assert.ok(ewPresence?.presencePublisher, 'window.__ew.presencePublisher must be set by the mount (Task G4)')
+
+	await act(async () => {
+		// Peer B publishes a cursor -- relayed over the wire (server + this
+		// mount's SyncClientPeer/PresenceStore) to the mount under test.
+		presenceB.publish({ cursor: { x: 50, y: 50 }, viewport: null, stamp: null, presenting: [] })
+		// This mount ALSO publishes its OWN cursor (via the test-only __ew hook,
+		// standing in for a real pointermove) -- proving self-exclusion is
+		// actually filtering a REAL entry, not merely "nothing to filter".
+		ewPresence.presencePublisher.setCursor({ x: 60, y: 60 })
+		// The wire relay is effectively synchronous (memory transport), but this
+		// mount's Cursors render is driven by CanvasV2App's PRESENCE_POLL_MS
+		// (150ms) polling tick, not a push -- wait past at least one tick.
+		await new Promise((r) => setTimeout(r, 250))
+	})
+
+	assert.ok(
+		container.querySelector('[data-presence-key="peer-b"]'),
+		`peer B's published cursor must render in this mount's DOM after the wire relay — DOM: ${container.innerHTML}`,
+	)
+	assert.ok(
+		!container.querySelector('[data-presence-key="test-user"]'), // 'test-user' is this mount's OWN userId/selfKey (CanvasV2App props above)
+		'this mount\'s OWN presence entry must never render itself, even though it has a real (non-null) cursor',
+	)
+	console.log("ok: CanvasV2App — a peer's published presence cursor renders in the DOM, this mount's own entry self-filtered")
+
+	// ==========================================================================
+	// (c2) CAMERA-ONLY CHANGE REPUBLISHES THE CURSOR (quality-review fix
+	// round): record a screen cursor via setCursorFromScreen (standing in for
+	// a real pointermove), then apply a SetCamera with NO further pointer
+	// event — the mount's editor-subscribe effect must re-derive and
+	// republish the world cursor, observable from peer B's presence store
+	// over the real wire. Waits >60ms (PRESENCE_THROTTLE_MS) between the two
+	// publishes so the refresh isn't dropped by the shared cursor throttle.
+	// ==========================================================================
+	const ewFull = (globalThis as any).window.__ew as {
+		editor: { apply(intent: unknown): void }
+		presencePublisher: { setCursorFromScreen(s: { x: number; y: number }, c: { x: number; y: number; z: number }): void }
+	}
+	await act(async () => {
+		// Screen (100,100) at the identity camera -> world (100,100).
+		ewFull.presencePublisher.setCursorFromScreen({ x: 100, y: 100 }, { x: 0, y: 0, z: 1 })
+		await new Promise((r) => setTimeout(r, 100)) // clear the 60ms throttle window before the camera change
+	})
+	assert.deepEqual(
+		(presenceB.all()['test-user'] as { cursor: unknown }).cursor,
+		{ x: 100, y: 100 },
+		'precondition: peer B sees the pre-pan world cursor',
+	)
+	await act(async () => {
+		// Camera-only change, NO pointermove: the world point under the same
+		// screen point becomes (100/2 - (-50), 100/2 - 0) = (100, 50).
+		ewFull.editor.apply({ type: 'SetCamera', x: -50, y: 0, z: 2 })
+		await new Promise((r) => setTimeout(r, 100))
+	})
+	assert.deepEqual(
+		(presenceB.all()['test-user'] as { cursor: unknown }).cursor,
+		{ x: 100, y: 50 },
+		'a camera-only change republishes the cursor at the RECOMPUTED world position (peers no longer see it frozen at the pre-pan spot)',
+	)
+	console.log('ok: CanvasV2App — a camera-only change republishes the world cursor to peers')
+
+	peerB.close()
+	presenceB.destroy()
+
+	// ==========================================================================
+	// (d) DELETE/BACKSPACE -> DeleteShapes (Task B2), including the
+	// text-editing SUPPRESSION case: TextEditor owns Delete/Backspace while a
+	// shape is being edited (`editingId !== null`), so a real DOM keydown must
+	// reach handleInput (it bubbles all the way up through Viewport's own
+	// onKeyDown — TextEditor's own handler, handleEditorKeyDown, never calls
+	// stopPropagation, see TextEditor.tsx) WITHOUT deleting the shape being
+	// edited. Drives the FULL real path end to end: a genuine bubbling
+	// `KeyboardEvent` dispatched on the focusable viewport div (the tabIndex
+	// target Viewport.tsx documents as required for onKeyDown to ever fire at
+	// all) -> Viewport's keyEventToInput -> CanvasV2App.handleInput's new
+	// Delete/Backspace branch -> deleteSelectionIntents -> editor.applyAll.
+	// ==========================================================================
+	const ewDel = (globalThis as any).window.__ew as {
+		editor: {
+			get(): { selection: ReadonlySet<string>; editingId: string | null }
+			apply(intent: unknown): void
+			applyAll(intents: unknown[]): void
+		}
+		doc: { getShape(id: string): unknown }
+	}
+	// The tabIndex=0 div Viewport itself renders (see Viewport.tsx's
+	// ABANDONMENT-GAP / keyboard-focus header) — the ONLY element in this whole
+	// render tree carrying an explicit tabIndex, so a plain attribute selector
+	// finds it unambiguously.
+	const viewportEl = container.querySelector('[tabindex]') as HTMLElement | null
+	assert.ok(viewportEl, `the focusable viewport div (Viewport.tsx's tabIndex=0 root) must exist in the DOM — DOM: ${container.innerHTML}`)
+
+	function pressKey(key: 'Delete' | 'Backspace'): void {
+		viewportEl!.dispatchEvent(new (win as any).KeyboardEvent('keydown', { key, bubbles: true, cancelable: true }))
+	}
+
+	// (d1) Delete, editingId === null: deletes the selection.
+	await act(async () => {
+		ewDel.editor.apply({ type: 'CreateShape', shape: seedShape('shape:del-a', 400, 400) })
+		ewDel.editor.apply({ type: 'SetSelection', ids: ['shape:del-a'] })
+	})
+	assert.ok(ewDel.doc.getShape('shape:del-a'), 'precondition: shape:del-a exists and is selected before the keypress')
+	await act(async () => {
+		pressKey('Delete')
+	})
+	assert.equal(ewDel.doc.getShape('shape:del-a'), undefined, 'Delete with a non-empty selection and editingId===null deletes the selected shape')
+	assert.deepEqual([...ewDel.editor.get().selection], [], 'the selection is cleared after the Delete-driven DeleteShapes')
+	console.log('ok: CanvasV2App — a real Delete keydown deletes the selected shape (editingId===null)')
+
+	// (d2) Backspace, editingId === null: same wiring, the other bound key.
+	await act(async () => {
+		ewDel.editor.apply({ type: 'CreateShape', shape: seedShape('shape:del-b', 420, 420) })
+		ewDel.editor.apply({ type: 'SetSelection', ids: ['shape:del-b'] })
+	})
+	assert.ok(ewDel.doc.getShape('shape:del-b'), 'precondition: shape:del-b exists and is selected before the keypress')
+	await act(async () => {
+		pressKey('Backspace')
+	})
+	assert.equal(ewDel.doc.getShape('shape:del-b'), undefined, 'Backspace with a non-empty selection and editingId===null deletes the selected shape')
+	console.log('ok: CanvasV2App — a real Backspace keydown deletes the selected shape (editingId===null)')
+
+	// (d3) SUPPRESSION: editingId !== null -- neither key deletes the shape
+	// being edited. BeginEdit stands in for the real double-click-to-edit
+	// gesture (already covered by tool-loop.test.ts's own transform/select
+	// probes) -- what matters here is CanvasV2App's own gate on editingId, not
+	// how editingId got set.
+	await act(async () => {
+		ewDel.editor.apply({ type: 'CreateShape', shape: seedShape('shape:del-c', 440, 440) })
+		ewDel.editor.apply({ type: 'SetSelection', ids: ['shape:del-c'] })
+		ewDel.editor.apply({ type: 'BeginEdit', id: 'shape:del-c' })
+	})
+	assert.equal(ewDel.editor.get().editingId, 'shape:del-c', 'precondition: shape:del-c is being edited')
+	await act(async () => {
+		pressKey('Delete')
+	})
+	assert.ok(ewDel.doc.getShape('shape:del-c'), 'Delete while editingId!==null must NOT delete the shape being edited (TextEditor owns the keyboard)')
+	assert.equal(ewDel.editor.get().editingId, 'shape:del-c', 'editingId is unchanged by the suppressed Delete')
+	await act(async () => {
+		pressKey('Backspace')
+	})
+	assert.ok(ewDel.doc.getShape('shape:del-c'), 'Backspace while editingId!==null must NOT delete the shape being edited either')
+	console.log('ok: CanvasV2App — Delete and Backspace are both suppressed while editingId!==null (TextEditor owns the keyboard)')
+
+	// Clean up: end the edit and delete shape:del-c through the same real
+	// keyboard path, so the doc is back to its pre-(d) shape count (2) for the
+	// unmount section's precondition below.
+	await act(async () => {
+		ewDel.editor.apply({ type: 'EndEdit' })
+	})
+	await act(async () => {
+		pressKey('Delete')
+	})
+	assert.equal(ewDel.doc.getShape('shape:del-c'), undefined, 'shape:del-c is deleted once editingId is cleared (cleanup, also re-proving the un-suppressed path)')
+
+	// ==========================================================================
+	// (d3e) ESCAPE, PRIMARY PATH (Task B3): a real `Escape` keydown dispatched
+	// on the FOCUSED VIEWPORT DIV (not a toolbar button — that's d4's fallback
+	// path) drives the WHOLE primary chain end to end: Viewport.onKeyDown ->
+	// keyEventToInput -> the session's handleInput (canvas-ui) -> the shared
+	// resolveShortcut policy -> cancelAndReset -> the in-flight preview's
+	// DeleteShapes. The other Escape integration case (d4) deliberately
+	// bypasses handleInput (it dispatches on a focused sibling button, so only
+	// the document-level listener sees it), so this is the ONLY test that
+	// exercises handleInput's own keydown branch for Escape — and, after the
+	// shared-gate refactor, the shared policy via that primary path. Nets zero
+	// shapes (the preview is created then cancelled) so (e)'s pre-unmount count
+	// precondition still holds.
+	// ==========================================================================
+	const geoBtnEsc = container.querySelector('[data-canvas-tool="geo"]') as HTMLElement | null
+	const selectBtnEsc = container.querySelector('[data-canvas-tool="select"]') as HTMLElement | null
+	assert.ok(geoBtnEsc && selectBtnEsc, `the geo and select toolbar buttons must exist — DOM: ${container.innerHTML}`)
+
+	// Switch to the geo tool (real click) so a viewport drag creates a preview.
+	await act(async () => {
+		geoBtnEsc!.click()
+	})
+
+	const ewEsc = (globalThis as any).window.__ew as { doc: { listShapes(): Array<{ id: string }> } }
+	const idsBeforeEscDrag = new Set(ewEsc.doc.listShapes().map((s) => s.id))
+
+	// Focus the VIEWPORT DIV itself (not a toolbar button) — the primary path's
+	// precondition. Then a real pointerdown + pointermove ON the viewport start
+	// a geo create-drag crossing the threshold (mirrors tool-loop.test.ts's own
+	// create-drag deltas).
+	await act(async () => {
+		viewportEl!.focus()
+		viewportEl!.dispatchEvent(new (win as any).PointerEvent('pointerdown', { bubbles: true, cancelable: true, pointerId: 21, clientX: 500, clientY: 500, buttons: 1 }))
+		viewportEl!.dispatchEvent(new (win as any).PointerEvent('pointermove', { bubbles: true, cancelable: true, pointerId: 21, clientX: 560, clientY: 560, buttons: 1 }))
+	})
+	const escPreview = ewEsc.doc.listShapes().find((s) => !idsBeforeEscDrag.has(s.id))
+	assert.ok(escPreview, `precondition: the geo drag created an in-flight preview shape — shapes: ${JSON.stringify(ewEsc.doc.listShapes())}`)
+	assert.equal(document.activeElement, viewportEl, 'precondition: the VIEWPORT div holds focus (this is the primary onKeyDown path, not the toolbar fallback)')
+
+	// The real primary-path Escape: dispatched ON the focused viewport div, so
+	// it flows through Viewport.onKeyDown -> handleInput -> resolveShortcut
+	// (NOT the document-level fallback — the fallback's containment guard skips
+	// any target inside the viewport container, so this is unambiguously the
+	// primary path).
+	await act(async () => {
+		viewportEl!.dispatchEvent(new (win as any).KeyboardEvent('keydown', { key: 'Escape', bubbles: true, cancelable: true }))
+	})
+	assert.equal(
+		ewEsc.doc.listShapes().find((s) => s.id === escPreview!.id),
+		undefined,
+		'a real Escape keydown on the FOCUSED VIEWPORT cancels the in-flight create-drag preview (handleInput -> shared resolveShortcut -> cancelAndReset)',
+	)
+	console.log('ok: CanvasV2App — a real Escape keydown on the focused viewport cancels an in-flight gesture (primary handleInput path)')
+
+	// Restore the select tool (cleanup) so d4 starts from the same state it did
+	// before this case was inserted.
+	await act(async () => {
+		selectBtnEsc!.click()
+	})
+
+	// ==========================================================================
+	// (d4) KEYBOARD DELIVERY SURVIVES A TOOLBAR CLICK (B3's CARRIED
+	// CODE-QUALITY FIX): the v2 keydown listener lived on Viewport's own div;
+	// the toolbar `<button>`s are DOM SIBLINGS of Viewport (see
+	// CanvasV2App.tsx's JSX — the toolbar div and the viewport-wrapping div are
+	// siblings under the outermost flex container), so a keydown dispatched to
+	// a FOCUSED toolbar button never bubbles into Viewport's own onKeyDown at
+	// all — before this fix, Escape/Delete/Backspace would silently no-op the
+	// moment a toolbar button held focus (the real-browser default after a
+	// click). This proves the NEW document-level fallback listener
+	// (CanvasV2App.tsx's GLOBAL KEYBOARD-DELIVERY FALLBACK effect) closes that
+	// gap: focus is moved to a toolbar button PROGRAMMATICALLY (`.focus()`, not
+	// `.click()` — a click on a DIFFERENT tool button would itself trigger
+	// `selectTool`'s own cancelAndReset via the tool-switch path, which is a
+	// real but DIFFERENT trigger than the one under test here), then a real
+	// bubbling keydown is dispatched on that FOCUSED BUTTON (not the viewport)
+	// for both Escape (cancels an in-flight create-drag) and Delete (removes a
+	// selected shape).
+	// ==========================================================================
+	const geoBtn = container.querySelector('[data-canvas-tool="geo"]') as HTMLElement | null
+	const selectBtn = container.querySelector('[data-canvas-tool="select"]') as HTMLElement | null
+	assert.ok(geoBtn && selectBtn, `both the geo and select toolbar buttons must exist in the DOM — DOM: ${container.innerHTML}`)
+
+	// Switch to the geo (Shape) tool via a REAL click on its own button (this
+	// is the ordinary tool-switch path, exercised here only to get an
+	// in-flight create-drag gesture going below — not itself part of the
+	// regression being proven).
+	await act(async () => {
+		geoBtn!.click()
+	})
+
+	const ewFocus = (globalThis as any).window.__ew as {
+		editor: { get(): { selection: ReadonlySet<string> }; apply(intent: unknown): void; applyAll(intents: unknown[]): void }
+		doc: { listShapes(): Array<{ id: string }> }
+	}
+	const shapeIdsBeforeDrag = new Set(ewFocus.doc.listShapes().map((s) => s.id))
+
+	// A real pointerdown + pointermove ON THE VIEWPORT (not the toolbar) starts
+	// a geo create-drag gesture crossing the drag threshold — mirrors
+	// tool-loop.test.ts's own create-drag fixture deltas (500,500 -> 560,560).
+	await act(async () => {
+		viewportEl!.dispatchEvent(new (win as any).PointerEvent('pointerdown', { bubbles: true, cancelable: true, pointerId: 11, clientX: 500, clientY: 500, buttons: 1 }))
+		viewportEl!.dispatchEvent(new (win as any).PointerEvent('pointermove', { bubbles: true, cancelable: true, pointerId: 11, clientX: 560, clientY: 560, buttons: 1 }))
+	})
+	const previewShape = ewFocus.doc.listShapes().find((s) => !shapeIdsBeforeDrag.has(s.id))
+	assert.ok(previewShape, `precondition: the geo drag must have created an in-flight preview shape — shapes: ${JSON.stringify(ewFocus.doc.listShapes())}`)
+
+	// Move focus to a DIFFERENT toolbar button WITHOUT clicking it (no
+	// tool-switch side effect) — simulates the real-browser "a button holds
+	// focus after being clicked" default this fix targets.
+	await act(async () => {
+		selectBtn!.focus()
+	})
+	assert.equal(document.activeElement, selectBtn, 'precondition: the (different) select toolbar button holds focus, NOT the viewport')
+
+	// The real regression: dispatch Escape on the FOCUSED BUTTON (not the
+	// viewport) — before this fix, this event never reached CanvasV2App at all.
+	await act(async () => {
+		selectBtn!.dispatchEvent(new (win as any).KeyboardEvent('keydown', { key: 'Escape', bubbles: true, cancelable: true }))
+	})
+	assert.equal(
+		ewFocus.doc.listShapes().find((s) => s.id === previewShape!.id),
+		undefined,
+		'an Escape keydown dispatched on a FOCUSED TOOLBAR BUTTON (not the viewport) still cancels the in-flight create-drag preview',
+	)
+	console.log('ok: CanvasV2App — Escape reaches cancelAndReset even while a toolbar button (a DOM sibling of Viewport) holds focus')
+
+	// Same proof for Delete: select an existing shape, keep focus on the
+	// toolbar button, dispatch Delete there instead of on the viewport.
+	await act(async () => {
+		ewFocus.editor.apply({ type: 'CreateShape', shape: seedShape('shape:toolbar-focus-del', 460, 460) })
+		ewFocus.editor.apply({ type: 'SetSelection', ids: ['shape:toolbar-focus-del'] })
+	})
+	assert.ok(ewFocus.doc.listShapes().some((s) => s.id === 'shape:toolbar-focus-del'), 'precondition: shape:toolbar-focus-del exists and is selected')
+	assert.equal(document.activeElement, selectBtn, 'precondition: focus is still on the toolbar button, not the viewport')
+	await act(async () => {
+		selectBtn!.dispatchEvent(new (win as any).KeyboardEvent('keydown', { key: 'Delete', bubbles: true, cancelable: true }))
+	})
+	assert.equal(
+		ewFocus.doc.listShapes().find((s) => s.id === 'shape:toolbar-focus-del'),
+		undefined,
+		'a Delete keydown dispatched on a FOCUSED TOOLBAR BUTTON (not the viewport) still deletes the selected shape',
+	)
+	console.log('ok: CanvasV2App — Delete reaches deleteSelectionIntents even while a toolbar button holds focus')
+
+	// Restore the select tool as the active tool (cleanup — the geo tool
+	// switch above is otherwise left active for the rest of the file).
+	await act(async () => {
+		selectBtn!.click()
+	})
+
+	// ==========================================================================
+	// (f) CTRL+Z / CTRL+SHIFT+Z / CTRL+Y -> editor.undo()/redo() (Task B4),
+	// through the SAME shared `resolveShortcut` policy Escape/Delete/
+	// Backspace use (canvas-editor's session/keyboard.ts).
+	// Every case here asserts a REAL doc effect (a shape appearing/
+	// disappearing), never a mock of editor.undo()/redo() — proving the
+	// keydown actually drove the real undo/redo stack, not just that some
+	// function got called. Each case is designed to net ZERO shapes by its own
+	// end (create then undo, or create+undo+redo+undo), so the doc is back to
+	// its pre-(f) 2-shape state by the time (e)'s unmount precondition reads
+	// it below.
+	// ==========================================================================
+	const ewUndo = (globalThis as any).window.__ew as {
+		editor: {
+			get(): { editingId: string | null }
+			apply(intent: unknown): void
+		}
+		doc: { listShapes(): Array<{ id: string }>; getShape(id: string): unknown }
+	}
+
+	// Returns whatever `dispatchEvent` itself returns: `false` iff the event
+	// was cancelable AND some listener called `preventDefault()` on it — used
+	// below (Task keyboard fix-round) to prove Ctrl/Cmd+A's preventDefault
+	// actually fires, not just that a handler ran.
+	function dispatchKey(target: HTMLElement, opts: { key: string; ctrlKey?: boolean; metaKey?: boolean; shiftKey?: boolean }): boolean {
+		return target.dispatchEvent(
+			new (win as any).KeyboardEvent('keydown', {
+				key: opts.key,
+				ctrlKey: opts.ctrlKey ?? false,
+				metaKey: opts.metaKey ?? false,
+				shiftKey: opts.shiftKey ?? false,
+				bubbles: true,
+				cancelable: true,
+			}),
+		)
+	}
+
+	// (f1) PRIMARY PATH (viewport focus): Ctrl+Z undoes a CreateShape.
+	await act(async () => {
+		ewUndo.editor.apply({ type: 'CreateShape', shape: seedShape('shape:undo-a', 500, 500) })
+	})
+	assert.ok(ewUndo.doc.getShape('shape:undo-a'), 'precondition: shape:undo-a exists before Ctrl+Z')
+	await act(async () => {
+		viewportEl!.focus()
+		dispatchKey(viewportEl!, { key: 'z', ctrlKey: true })
+	})
+	assert.equal(ewUndo.doc.getShape('shape:undo-a'), undefined, 'Ctrl+Z on the focused VIEWPORT drives editor.undo(), removing the just-created shape')
+	console.log('ok: CanvasV2App — Ctrl+Z (viewport focus, primary handleInput path) drives editor.undo()')
+
+	// (f2) Cmd+Z (metaKey) undoes too, and Ctrl+Shift+Z redoes it back —
+	// ending with a second Ctrl+Z so this case nets zero shapes.
+	await act(async () => {
+		ewUndo.editor.apply({ type: 'CreateShape', shape: seedShape('shape:undo-b', 520, 520) })
+	})
+	assert.ok(ewUndo.doc.getShape('shape:undo-b'), 'precondition: shape:undo-b exists before Cmd+Z')
+	await act(async () => {
+		dispatchKey(viewportEl!, { key: 'z', metaKey: true })
+	})
+	assert.equal(ewUndo.doc.getShape('shape:undo-b'), undefined, 'Cmd+Z (metaKey, no ctrlKey) also drives editor.undo()')
+	console.log('ok: CanvasV2App — Cmd+Z (metaKey) drives editor.undo()')
+	await act(async () => {
+		// key: 'Z' (uppercase) — a real browser reports the shifted letter this
+		// way on some platforms; this proves the shared policy's
+		// `key.toLowerCase()` comparison matches regardless of reported case.
+		dispatchKey(viewportEl!, { key: 'Z', ctrlKey: true, shiftKey: true })
+	})
+	assert.ok(ewUndo.doc.getShape('shape:undo-b'), 'Ctrl+Shift+Z drives editor.redo(), restoring shape:undo-b')
+	console.log('ok: CanvasV2App — Ctrl+Shift+Z drives editor.redo() (case-insensitive key match)')
+	await act(async () => {
+		dispatchKey(viewportEl!, { key: 'z', ctrlKey: true }) // cleanup: undo the redo so this case nets zero shapes
+	})
+	assert.equal(ewUndo.doc.getShape('shape:undo-b'), undefined, 'cleanup: shape:undo-b undone again')
+
+	// (f3) Ctrl+Y is the other bound redo key.
+	await act(async () => {
+		ewUndo.editor.apply({ type: 'CreateShape', shape: seedShape('shape:undo-c', 540, 540) })
+	})
+	await act(async () => {
+		dispatchKey(viewportEl!, { key: 'z', ctrlKey: true }) // undo the create
+	})
+	assert.equal(ewUndo.doc.getShape('shape:undo-c'), undefined, 'precondition: shape:undo-c undone before testing Ctrl+Y')
+	await act(async () => {
+		dispatchKey(viewportEl!, { key: 'y', ctrlKey: true })
+	})
+	assert.ok(ewUndo.doc.getShape('shape:undo-c'), 'Ctrl+Y drives editor.redo(), restoring shape:undo-c')
+	console.log('ok: CanvasV2App — Ctrl+Y drives editor.redo()')
+	await act(async () => {
+		dispatchKey(viewportEl!, { key: 'z', ctrlKey: true }) // cleanup: nets this case to zero shapes
+	})
+	assert.equal(ewUndo.doc.getShape('shape:undo-c'), undefined, 'cleanup: shape:undo-c undone again')
+
+	// (f4) SUPPRESSION while editingId !== null: TextEditor owns the keyboard
+	// (its own undo, per the textarea's native undo stack), so the shared
+	// policy's editingId gate must block Ctrl+Z here too, same as Escape/
+	// Delete/Backspace above — the just-created shape must survive the
+	// keypress. Ending the edit and re-issuing Ctrl+Z proves the SAME
+	// CreateShape is still sitting on top of the undo stack (untouched by the
+	// suppressed attempt), not merely that nothing visibly changed.
+	await act(async () => {
+		ewUndo.editor.apply({ type: 'CreateShape', shape: seedShape('shape:undo-d', 560, 560) })
+		ewUndo.editor.apply({ type: 'SetSelection', ids: ['shape:undo-d'] })
+		ewUndo.editor.apply({ type: 'BeginEdit', id: 'shape:undo-d' })
+	})
+	assert.equal(ewUndo.editor.get().editingId, 'shape:undo-d', 'precondition: shape:undo-d is being edited')
+	await act(async () => {
+		dispatchKey(viewportEl!, { key: 'z', ctrlKey: true })
+	})
+	assert.ok(ewUndo.doc.getShape('shape:undo-d'), 'Ctrl+Z is a no-op while editingId!==null — the shape being edited must NOT be undone away')
+	assert.equal(ewUndo.editor.get().editingId, 'shape:undo-d', 'editingId is unchanged by the suppressed Ctrl+Z')
+	console.log('ok: CanvasV2App — Ctrl+Z is suppressed while editingId!==null (TextEditor owns the keyboard)')
+	await act(async () => {
+		ewUndo.editor.apply({ type: 'EndEdit' })
+	})
+	await act(async () => {
+		dispatchKey(viewportEl!, { key: 'z', ctrlKey: true }) // now un-suppressed: undoes the CreateShape, cleanup to net zero
+	})
+	assert.equal(ewUndo.doc.getShape('shape:undo-d'), undefined, "cleanup: shape:undo-d's CreateShape is undone once editingId is cleared")
+
+	// (f5) FROM THE TOOLBAR-FOCUSED PATH (the document-level listener, not
+	// handleInput): proves the shared gate delivers Ctrl+Z regardless of
+	// focus — the payoff of B3's shared-shortcut extraction. Moves focus
+	// to a toolbar button WITHOUT clicking it (no tool-switch side effect),
+	// same technique (d4) uses above.
+	const selectBtnUndo = container.querySelector('[data-canvas-tool="select"]') as HTMLElement | null
+	assert.ok(selectBtnUndo, `the select toolbar button must exist — DOM: ${container.innerHTML}`)
+	await act(async () => {
+		ewUndo.editor.apply({ type: 'CreateShape', shape: seedShape('shape:undo-e', 580, 580) })
+	})
+	assert.ok(ewUndo.doc.getShape('shape:undo-e'), 'precondition: shape:undo-e exists before the toolbar-focused Ctrl+Z')
+	await act(async () => {
+		selectBtnUndo!.focus()
+	})
+	assert.equal(document.activeElement, selectBtnUndo, 'precondition: the toolbar button holds focus, NOT the viewport')
+	await act(async () => {
+		dispatchKey(selectBtnUndo!, { key: 'z', ctrlKey: true })
+	})
+	assert.equal(
+		ewUndo.doc.getShape('shape:undo-e'),
+		undefined,
+		'Ctrl+Z dispatched on a FOCUSED TOOLBAR BUTTON (the document-listener path) still drives editor.undo() — same shared gate as the viewport path',
+	)
+	console.log('ok: CanvasV2App — Ctrl+Z reaches editor.undo() even while a toolbar button holds focus (document-listener path)')
+
+	// ==========================================================================
+	// (f6) TASK D1 — CTRL/CMD+D / C / X / V: duplicate/copy/cut/paste, driven
+	// through the SAME shared `resolveShortcut` policy as Escape/Delete/
+	// undo above. Ctrl+D never touches `navigator.clipboard` at all (pure
+	// `editor.applyAll(duplicateSelectionIntents(...))`); C/X/V go through the
+	// REAL `navigator.clipboard` — happy-dom implements a genuine in-memory
+	// Clipboard (verified directly: writeText then readText round-trips), not
+	// a stub of one — so this exercises the actual async write/read, not a
+	// mock of it. The DEFINITIVE end-to-end proof (a real browser, real OS
+	// clipboard permissions) is K1/K2's job (browser contracts, next); this
+	// is the happy-dom-level wiring proof available without one. Every case
+	// cleans up after itself so the doc is back to its pre-(f6) 2-shape state
+	// by the time (e)'s unmount precondition reads it below.
+	// ==========================================================================
+	const ewClip = (globalThis as any).window.__ew as {
+		editor: {
+			get(): { selection: ReadonlySet<string>; editingId: string | null }
+			apply(intent: unknown): void
+			applyAll(intents: unknown[]): void
+		}
+		doc: { listShapes(): Array<{ id: string }>; getShape(id: string): unknown }
+	}
+	const clip = (globalThis as any).navigator.clipboard as { writeText(t: string): Promise<void>; readText(): Promise<string> }
+
+	// (f6a) Ctrl+D duplicates the selection: a fresh id, offset by
+	// clipboard-intents.ts's DUP_OFFSET (20,20), and a NEW SetSelection over
+	// just the clone's root id.
+	await act(async () => {
+		ewClip.editor.apply({ type: 'CreateShape', shape: seedShape('shape:dup-src', 700, 700) })
+		ewClip.editor.apply({ type: 'SetSelection', ids: ['shape:dup-src'] })
+	})
+	await act(async () => {
+		dispatchKey(viewportEl!, { key: 'd', ctrlKey: true })
+	})
+	const afterDup = ewClip.editor.get().selection
+	assert.equal(afterDup.size, 1, 'Ctrl+D selects exactly the new duplicate (one root id)')
+	const dupId = [...afterDup][0]!
+	assert.notEqual(dupId, 'shape:dup-src', 'the duplicate has a fresh id, not the original')
+	assert.ok(ewClip.doc.getShape('shape:dup-src'), 'the ORIGINAL shape is untouched by duplicate')
+	const dupShape = ewClip.doc.getShape(dupId) as { x: number; y: number } | undefined
+	assert.ok(dupShape, 'the DUPLICATE shape now exists in the doc')
+	assert.equal(dupShape!.x, 720, 'the duplicate is offset +20 on x (DUP_OFFSET) from the 700 original')
+	assert.equal(dupShape!.y, 720, 'the duplicate is offset +20 on y (DUP_OFFSET) from the 700 original')
+	console.log('ok: CanvasV2App — Ctrl+D duplicates the selection (fresh id, +20/+20 offset, new SetSelection)')
+
+	// Undo the duplicate — proves the Task D1 carry-forward:
+	// pruneDanglingSelectionIntents must clear the now-dangling selection,
+	// not just that editor.undo() removes the shape itself.
+	await act(async () => {
+		dispatchKey(viewportEl!, { key: 'z', ctrlKey: true })
+	})
+	assert.equal(ewClip.doc.getShape(dupId), undefined, 'undo removed the duplicate shape')
+	assert.deepEqual([...ewClip.editor.get().selection], [], 'undoing the duplicate also prunes the now-dangling selection (Task D1 carry-forward)')
+	console.log('ok: CanvasV2App — Ctrl+Z after Ctrl+D removes the duplicate AND prunes the dangling selection')
+
+	// Cleanup: remove the temp original directly (test bookkeeping, not part
+	// of what is under test here).
+	await act(async () => {
+		ewClip.editor.apply({ type: 'DeleteShapes', ids: ['shape:dup-src'] })
+		ewClip.editor.apply({ type: 'SetSelection', ids: [] })
+	})
+
+	// (f6b) Ctrl+D suppressed while editingId !== null — TextEditor owns the
+	// keyboard (Ctrl+D has no meaning inside a text field), same gate as
+	// Escape/Delete/undo above.
+	await act(async () => {
+		ewClip.editor.apply({ type: 'CreateShape', shape: seedShape('shape:dup-edit', 700, 700) })
+		ewClip.editor.apply({ type: 'SetSelection', ids: ['shape:dup-edit'] })
+		ewClip.editor.apply({ type: 'BeginEdit', id: 'shape:dup-edit' })
+	})
+	const shapeCountBeforeSuppressedDup = ewClip.doc.listShapes().length
+	await act(async () => {
+		dispatchKey(viewportEl!, { key: 'd', ctrlKey: true })
+	})
+	assert.equal(ewClip.doc.listShapes().length, shapeCountBeforeSuppressedDup, 'Ctrl+D while editingId!==null must NOT duplicate anything')
+	console.log('ok: CanvasV2App — Ctrl+D is suppressed while editingId!==null (TextEditor owns the keyboard)')
+	await act(async () => {
+		ewClip.editor.apply({ type: 'EndEdit' })
+		ewClip.editor.apply({ type: 'DeleteShapes', ids: ['shape:dup-edit'] })
+		ewClip.editor.apply({ type: 'SetSelection', ids: [] })
+	})
+
+	// (f6c) Ctrl+C serializes the selection to navigator.clipboard — copy
+	// never mutates the doc or the selection.
+	await act(async () => {
+		ewClip.editor.apply({ type: 'CreateShape', shape: seedShape('shape:clip-src', 720, 720) })
+		ewClip.editor.apply({ type: 'SetSelection', ids: ['shape:clip-src'] })
+	})
+	await act(async () => {
+		dispatchKey(viewportEl!, { key: 'c', ctrlKey: true })
+		await new Promise((r) => setTimeout(r, 0)) // let the async navigator.clipboard.writeText settle
+	})
+	const copiedPayload = JSON.parse(await clip.readText())
+	assert.equal(copiedPayload['ensembleworks/clipboard'], 1, 'Ctrl+C writes the versioned clipboard envelope')
+	assert.equal(copiedPayload.shapes.length, 1, 'Ctrl+C serializes exactly the one selected shape')
+	assert.equal(copiedPayload.shapes[0].id, 'shape:clip-src', 'the copied shape keeps its ORIGINAL id — copy never reids')
+	assert.ok(ewClip.doc.getShape('shape:clip-src'), 'Ctrl+C never deletes the source shape')
+	assert.deepEqual([...ewClip.editor.get().selection], ['shape:clip-src'], 'Ctrl+C never changes the selection')
+	console.log('ok: CanvasV2App — Ctrl+C serializes the selection to navigator.clipboard, doc/selection untouched')
+
+	// (f6d-pre) D-7's ordering, the FAILURE-PATH proof: "a failed write must
+	// not lose shapes" is only actually tested by making the write fail —
+	// asserting the end state after a SUCCESSFUL write can't tell
+	// write-then-delete apart from delete-then-write (both land on the same
+	// final doc/clipboard state), so this monkey-patches
+	// `navigator.clipboard.writeText` to reject once and proves the source
+	// shape SURVIVES a Ctrl+X whose clipboard write failed.
+	const realWriteText = clip.writeText.bind(clip)
+	await act(async () => {
+		ewClip.editor.apply({ type: 'CreateShape', shape: seedShape('shape:clip-failcut', 900, 900) })
+		ewClip.editor.apply({ type: 'SetSelection', ids: ['shape:clip-failcut'] })
+	})
+	;(clip as { writeText(t: string): Promise<void> }).writeText = () => Promise.reject(new Error('simulated clipboard write failure'))
+	await act(async () => {
+		dispatchKey(viewportEl!, { key: 'x', ctrlKey: true })
+		await new Promise((r) => setTimeout(r, 0))
+	})
+	;(clip as { writeText(t: string): Promise<void> }).writeText = realWriteText
+	assert.ok(ewClip.doc.getShape('shape:clip-failcut'), 'D-7: a Ctrl+X whose clipboard write FAILS must NOT delete the source shape')
+	assert.deepEqual(
+		[...ewClip.editor.get().selection],
+		['shape:clip-failcut'],
+		'D-7: the selection is untouched too — the delete branch never ran at all',
+	)
+	console.log('ok: CanvasV2App — Ctrl+X never deletes when the clipboard write fails (D-7: write-then-delete, not delete-then-write)')
+	await act(async () => {
+		ewClip.editor.apply({ type: 'DeleteShapes', ids: ['shape:clip-failcut'] })
+		// Restore the selection to shape:clip-src (f6c left it selected) —
+		// the very next case, (f6d), depends on that still being the case.
+		ewClip.editor.apply({ type: 'SetSelection', ids: ['shape:clip-src'] })
+	})
+
+	// (f6d) Ctrl+X writes the SAME payload, then — only once that write
+	// resolves (D-7's ordering) — deletes the source, same as Delete/
+	// Backspace's own DeleteShapes + SetSelection([]) pair.
+	await act(async () => {
+		dispatchKey(viewportEl!, { key: 'x', ctrlKey: true })
+		await new Promise((r) => setTimeout(r, 0))
+	})
+	const cutPayload = JSON.parse(await clip.readText())
+	assert.equal(cutPayload.shapes[0].id, 'shape:clip-src', 'Ctrl+X writes the same shape to the clipboard before deleting it')
+	assert.equal(ewClip.doc.getShape('shape:clip-src'), undefined, 'Ctrl+X deletes the source AFTER the clipboard write resolves (D-7 ordering)')
+	assert.deepEqual([...ewClip.editor.get().selection], [], 'Ctrl+X clears the selection the same way Delete does')
+	console.log('ok: CanvasV2App — Ctrl+X copies then deletes the selection (D-7 ordering)')
+
+	// (f6d-toctou) CUT ATOMIC CAPTURE (coordinator-flagged TOCTOU): the
+	// clipboard write is async (a real microtask window, however brief), and
+	// `deleteSelectionIntents` reads the LIVE selection — so if the delete
+	// set were computed freshly AFTER the write resolves (instead of
+	// captured from the SAME selection that was serialized), a selection
+	// change DURING that window could make cut delete a different set than
+	// it copied. The dangerous direction: selection GROWS mid-write -> cut
+	// deletes a shape that was never placed on the clipboard -> data lost
+	// with no clipboard copy of it. This proves cut deletes EXACTLY what it
+	// copied, regardless of a selection change before the write resolves.
+	await act(async () => {
+		ewClip.editor.apply({ type: 'CreateShape', shape: seedShape('shape:cut-a', 950, 950) })
+		ewClip.editor.apply({ type: 'CreateShape', shape: seedShape('shape:cut-b', 970, 970) })
+		ewClip.editor.apply({ type: 'SetSelection', ids: ['shape:cut-a'] })
+	})
+	// Monkey-patch writeText to return a promise that stays pending until
+	// THIS test explicitly resolves it (via the captured `resolveWrite`),
+	// carving out an observable window between "the write started" and "the
+	// write resolved" to change the selection inside.
+	const realWriteText3 = clip.writeText.bind(clip)
+	let resolveWrite: (() => void) | undefined
+	;(clip as { writeText(t: string): Promise<void> }).writeText = (t: string) =>
+		new Promise<void>((resolve) => {
+			resolveWrite = () => {
+				void realWriteText3(t).then(resolve)
+			}
+		})
+	await act(async () => {
+		// The keydown dispatch runs the session's cut command
+		// SYNCHRONOUSLY, all the way through starting the (now-pending)
+		// clipboard write — so whatever it captures (or doesn't) for the
+		// eventual delete is already decided by the time dispatchEvent
+		// returns, before the line below ever runs.
+		dispatchKey(viewportEl!, { key: 'x', ctrlKey: true })
+		assert.ok(resolveWrite, 'precondition: the clipboard write must have started (and be pending) synchronously within the keydown dispatch')
+		// CHANGE THE SELECTION mid-write-window, BEFORE letting the write
+		// resolve — shape:cut-b was never selected/copied.
+		ewClip.editor.apply({ type: 'SetSelection', ids: ['shape:cut-a', 'shape:cut-b'] })
+		resolveWrite!()
+		await new Promise((r) => setTimeout(r, 0)) // let the .then() callback (and its applyAll) run
+	})
+	;(clip as { writeText(t: string): Promise<void> }).writeText = realWriteText3
+	const toctouPayload = JSON.parse(await clip.readText())
+	assert.deepEqual(
+		toctouPayload.shapes.map((s: { id: string }) => s.id),
+		['shape:cut-a'],
+		'the clipboard payload holds exactly the ORIGINALLY-selected shape (shape:cut-a), never the mid-write selection change',
+	)
+	assert.equal(ewClip.doc.getShape('shape:cut-a'), undefined, 'cut deletes shape:cut-a — the shape that was actually copied')
+	assert.ok(
+		ewClip.doc.getShape('shape:cut-b'),
+		'cut must NOT delete shape:cut-b — it was added to the selection AFTER the copy, so it was never on the clipboard',
+	)
+	console.log('ok: CanvasV2App — Ctrl+X deletes EXACTLY the shapes it copied, immune to a selection change during the async clipboard write')
+
+	// Cleanup: shape:cut-b legitimately survived (that's the point of the
+	// test above) — remove it directly to restore the pre-(f6) baseline.
+	await act(async () => {
+		ewClip.editor.apply({ type: 'DeleteShapes', ids: ['shape:cut-b'] })
+		ewClip.editor.apply({ type: 'SetSelection', ids: [] })
+	})
+
+	// (f6e) Ctrl+V pastes the just-cut clipboard content back as a brand-new
+	// shape (fresh id — decodeClipboard/cloneWithNewIds never reuse the
+	// original's — offset position, selected).
+	await act(async () => {
+		dispatchKey(viewportEl!, { key: 'v', ctrlKey: true })
+		await new Promise((r) => setTimeout(r, 0))
+	})
+	const afterPaste = ewClip.editor.get().selection
+	assert.equal(afterPaste.size, 1, 'Ctrl+V selects exactly the pasted root shape')
+	const pastedId = [...afterPaste][0]!
+	assert.notEqual(pastedId, 'shape:clip-src', "the pasted shape has a fresh id (the original was cut/deleted, so it couldn't be reused anyway)")
+	assert.ok(ewClip.doc.getShape(pastedId), 'the pasted shape now exists in the doc')
+	console.log('ok: CanvasV2App — Ctrl+V pastes the clipboard content back as a new shape, selecting it')
+
+	// Cleanup: remove the pasted shape directly, restoring the pre-(f6)
+	// 2-shape baseline the (e) unmount precondition below depends on.
+	await act(async () => {
+		ewClip.editor.apply({ type: 'DeleteShapes', ids: [pastedId] })
+		ewClip.editor.apply({ type: 'SetSelection', ids: [] })
+	})
+
+	// ==========================================================================
+	// (f7) TASK keyboard FIX-ROUND — Ctrl/Cmd+A must preventDefault, from
+	// BOTH keydown entry points (validator repro: without this, the
+	// browser's native select-all also fires, painting the whole app chrome
+	// text-selection-blue). Proven directly via `dispatchEvent`'s own return
+	// value (`false` iff some listener called `preventDefault()` on a
+	// cancelable event) rather than inspecting `window.getSelection()` —
+	// happy-dom doesn't implement native document text selection, but it DOES
+	// implement the real DOM event contract this assertion depends on.
+	// ==========================================================================
+	{
+		// (f7a) PRIMARY PATH — dispatched on the focused viewport div.
+		let notPreventedViewport = true
+		await act(async () => {
+			viewportEl!.focus()
+			notPreventedViewport = dispatchKey(viewportEl!, { key: 'a', ctrlKey: true })
+		})
+		assert.equal(
+			notPreventedViewport,
+			false,
+			'Ctrl+A dispatched on the focused VIEWPORT must call preventDefault (dispatchEvent returns false) so the browser\'s native select-all never also fires',
+		)
+		console.log('ok: CanvasV2App — Ctrl+A calls preventDefault on the primary (viewport-focused) path')
+
+		// (f7b) DOCUMENT-LEVEL FALLBACK PATH — a toolbar button holds focus,
+		// same technique (f5)/(d4) use above.
+		const selectBtnA = container.querySelector('[data-canvas-tool="select"]') as HTMLElement | null
+		assert.ok(selectBtnA, `the select toolbar button must exist — DOM: ${container.innerHTML}`)
+		await act(async () => {
+			selectBtnA!.focus()
+		})
+		assert.equal(document.activeElement, selectBtnA, 'precondition: the toolbar button holds focus, NOT the viewport')
+		let notPreventedToolbar = true
+		await act(async () => {
+			notPreventedToolbar = dispatchKey(selectBtnA!, { key: 'a', ctrlKey: true })
+		})
+		assert.equal(
+			notPreventedToolbar,
+			false,
+			'Ctrl+A dispatched on a FOCUSED TOOLBAR BUTTON must ALSO call preventDefault (document-level fallback path)',
+		)
+		console.log('ok: CanvasV2App — Ctrl+A calls preventDefault even while a toolbar button holds focus (document-listener path)')
+	}
+
+	// ==========================================================================
+	// (f8) TASK keyboard FIX-ROUND — arrow-key nudge must not be dead
+	// whenever a toolbar button holds focus. Validator repro: click the
+	// Select toolbar button (so it holds focus, exactly the state a real
+	// click leaves), then ArrowRight must still nudge the selection by 1
+	// world unit, same as it does from the viewport-focused path.
+	// ==========================================================================
+	{
+		const ewNudge = (globalThis as any).window.__ew as {
+			editor: { get(): { selection: ReadonlySet<string> }; apply(intent: unknown): void }
+			doc: { getShape(id: string): { x: number; y: number } | undefined }
+		}
+		await act(async () => {
+			ewNudge.editor.apply({ type: 'CreateShape', shape: seedShape('shape:nudge-a', 900, 900) })
+			ewNudge.editor.apply({ type: 'SetSelection', ids: ['shape:nudge-a'] })
+		})
+		const selectBtnNudge = container.querySelector('[data-canvas-tool="select"]') as HTMLElement | null
+		assert.ok(selectBtnNudge, `the select toolbar button must exist — DOM: ${container.innerHTML}`)
+		// Move focus to the toolbar button WITHOUT clicking it (no tool-switch
+		// side effect) — the same real-browser "a button holds focus after
+		// being clicked" state (f5)/(d4) simulate above.
+		await act(async () => {
+			selectBtnNudge!.focus()
+		})
+		assert.equal(document.activeElement, selectBtnNudge, 'precondition: the select toolbar button holds focus, NOT the viewport')
+		await act(async () => {
+			dispatchKey(selectBtnNudge!, { key: 'ArrowRight' })
+		})
+		const nudged = ewNudge.doc.getShape('shape:nudge-a')
+		assert.equal(nudged?.x, 901, 'ArrowRight dispatched on a FOCUSED TOOLBAR BUTTON must still nudge the selection by 1 world unit (document-listener path)')
+		assert.equal(nudged?.y, 900, 'ArrowRight only moves x')
+		console.log('ok: CanvasV2App — arrow-key nudge reaches the select tool FSM even while a toolbar button holds focus')
+
+		// Cleanup: remove the temp shape, net zero for the (e) precondition below.
+		await act(async () => {
+			ewNudge.editor.apply({ type: 'DeleteShapes', ids: ['shape:nudge-a'] })
+			ewNudge.editor.apply({ type: 'SetSelection', ids: [] })
+		})
+	}
+
+	// ==========================================================================
+	// (f9) TASK keyboard FIX-ROUND — Escape returns to the select tool (an
+	// explicit goal item, tldraw parity: Idle.onCancel -> setCurrentTool
+	// ('select')). Validator repro: arm the note tool ('n'), then Escape —
+	// the note toolbar button must no longer be aria-pressed, and the select
+	// button must be.
+	// ==========================================================================
+	{
+		const noteBtnEsc = container.querySelector('[data-canvas-tool="note"]') as HTMLElement | null
+		const selectBtnEsc2 = container.querySelector('[data-canvas-tool="select"]') as HTMLElement | null
+		assert.ok(noteBtnEsc && selectBtnEsc2, `the note and select toolbar buttons must exist — DOM: ${container.innerHTML}`)
+		await act(async () => {
+			viewportEl!.focus()
+			dispatchKey(viewportEl!, { key: 'n' })
+		})
+		assert.equal(noteBtnEsc!.getAttribute('aria-pressed'), 'true', 'precondition: the note tool is armed after pressing "n"')
+		await act(async () => {
+			dispatchKey(viewportEl!, { key: 'Escape' })
+		})
+		assert.equal(noteBtnEsc!.getAttribute('aria-pressed'), 'false', 'Escape must disarm the note tool')
+		assert.equal(selectBtnEsc2!.getAttribute('aria-pressed'), 'true', 'Escape must switch the active tool back to select (tldraw parity)')
+		console.log('ok: CanvasV2App — Escape switches the active tool back to select')
+	}
+
+	// ==========================================================================
+	// (e) UNMOUNT DISPOSES CLEANLY: no more sync reaches the (now-torn-down)
+	// client peer. `window.__ew.doc` was set once by CanvasV2App's boot
+	// sequence (the design's E2E hook) — capture that SAME doc reference
+	// before unmount, then prove a further server-side write never reaches it
+	// afterward. This is the closest thing to a "dispose was called" proof
+	// available without reaching into CanvasV2App's private Session state:
+	// SyncClientPeer.close() closes the transport, and canvas-sync's
+	// makePair() closes BOTH sides of the pair together (memory-transport.ts:
+	// `close: () => { if (open) { open = false; aClose?.(); bClose?.() } }`),
+	// which the server observes via its own `onClose` -> removal from
+	// `this.clients` (server-peer.ts's `connect()`) — so a post-unmount
+	// server commit's broadcast has nothing left to deliver to.
+	// ==========================================================================
+	const ew = (globalThis as any).window.__ew as { doc: { listShapes(): unknown[] } }
+	assert.ok(ew?.doc, 'window.__ew.doc must be set by the mount (the design\'s E2E hook)')
+	const shapesBeforeUnmount = ew.doc.listShapes().length
+	assert.equal(shapesBeforeUnmount, 2, 'precondition: the client doc holds both shapes right before unmount')
+
+	await act(async () => {
+		root.unmount()
+	})
+
+	await act(async () => {
+		server.doc.putShape(seedShape('shape:post-unmount', 300, 300))
+		server.doc.commit()
+		await new Promise((r) => setTimeout(r, 0))
+	})
+
+	assert.equal(
+		ew.doc.listShapes().length,
+		shapesBeforeUnmount,
+		'a server-side write AFTER unmount must never reach the disposed client doc — proves close()/dispose() actually tore down the transport',
+	)
+	console.log('ok: CanvasV2App — unmount disposes cleanly (no further sync reaches the torn-down client peer)')
+
+	// ==========================================================================
+	// (g) TASK E1 — THE "DEAD DOGFOOD" CASE: `connect()` REJECTS (mirrors
+	// production's `defaultConnect` when the socket errors/closes before ever
+	// opening — wrong port, route absent, EW_CANVAS_SYNC unset server-side).
+	// Before this task, that rejection reached only the internal
+	// `boot().catch(...)` console.error and left the mount stuck silently on
+	// "Connecting to canvas…" forever, with `session` never set and NOTHING
+	// visible telling a developer the room is dead. Now the ConnectionBanner
+	// must render the 'failed' message.
+	// ==========================================================================
+	{
+		function connectFailing(): Promise<Transport> {
+			return Promise.reject(new Error('simulated dead dogfood: route absent'))
+		}
+
+		const failContainer = document.createElement('div')
+		document.body.appendChild(failContainer)
+		const failRoot = createRoot(failContainer)
+
+		await act(async () => {
+			failRoot.render(
+				createElement(
+					StrictMode,
+					null,
+					createElement(CanvasV2App, { roomId: 'dogfood-fail', userId: 'test-user-fail', connect: connectFailing, settleMs: 0 }),
+				),
+			)
+			await new Promise((r) => setTimeout(r, 0))
+			await new Promise((r) => setTimeout(r, 0))
+		})
+
+		const banner = failContainer.querySelector('[data-canvas-v2-connection-banner]')
+		assert.ok(banner, `a ConnectionBanner must render when connect() rejects — DOM: ${failContainer.innerHTML}`)
+		assert.equal(
+			banner!.getAttribute('data-connection-state'),
+			'failed',
+			"a connect() rejection (socket errored/closed before ever opening) must land the banner on 'failed', not stay silently 'connecting'",
+		)
+		console.log("ok: CanvasV2App — a connect() rejection (dead dogfood) renders a visible ConnectionBanner in the 'failed' state")
+
+		await act(async () => {
+			failRoot.unmount()
+		})
+	}
+
+	// ==========================================================================
+	// (h) TASK E1 — BANNER SHOWS ON A POST-OPEN CLOSE, HIDES ON RECOVERY: a
+	// transport wrapping a REAL memory-transport pair (so the session actually
+	// mounts and syncs, same as case (a)) plus this task's additive
+	// getConnectionState/onConnectionStateChange accessors, driven manually
+	// here to simulate the wsClientTransport state machine's own transitions
+	// (ws-client-transport.test.ts proves those transitions in isolation;
+	// this proves CanvasV2App's OWN reaction to them: banner mounts/unmounts
+	// the DOM node as `connectionState` changes, never blocking the canvas
+	// underneath — the shape seeded below stays rendered throughout).
+	// ==========================================================================
+	{
+		const server2 = new SyncServerPeer({ peerId: 3n })
+		server2.doc.putPage({ id: 'page:p', name: 'Canvas' })
+		server2.doc.putShape(seedShape('shape:banner-seed', 5, 5))
+		server2.doc.commit()
+
+		let liveTransport: {
+			getConnectionState(): string
+			onConnectionStateChange(cb: (s: string) => void): void
+			simulateState(s: 'connecting' | 'open' | 'reconnecting' | 'failed'): void
+		} | null = null
+
+		function connectStateful(): Promise<Transport> {
+			const [serverSide, clientSide]: [Transport, Transport] = makePair()
+			server2.connect(serverSide)
+			let state: 'connecting' | 'open' | 'reconnecting' | 'failed' = 'open' // resolves post-"open", mirroring defaultConnect
+			let onStateCb: ((s: string) => void) | null = null
+			const wrapped = {
+				send: (bytes: Uint8Array) => clientSide.send(bytes),
+				onMessage: (cb: (bytes: Uint8Array) => void) => clientSide.onMessage(cb),
+				onClose: (cb: () => void) => clientSide.onClose(cb),
+				close: () => clientSide.close(),
+				getConnectionState: () => state,
+				onConnectionStateChange: (cb: (s: string) => void) => {
+					onStateCb = cb
+				},
+				simulateState: (s: 'connecting' | 'open' | 'reconnecting' | 'failed') => {
+					state = s
+					onStateCb?.(s)
+				},
+			}
+			liveTransport = wrapped
+			return Promise.resolve(wrapped as unknown as Transport)
+		}
+
+		const bannerContainer = document.createElement('div')
+		document.body.appendChild(bannerContainer)
+		const bannerRoot = createRoot(bannerContainer)
+
+		await act(async () => {
+			bannerRoot.render(
+				createElement(
+					StrictMode,
+					null,
+					createElement(CanvasV2App, { roomId: 'dogfood-banner', userId: 'test-user-banner', connect: connectStateful, settleMs: 0 }),
+				),
+			)
+			await new Promise((r) => setTimeout(r, 0))
+			await new Promise((r) => setTimeout(r, 0))
+		})
+
+		assert.ok(
+			bannerContainer.querySelector('[data-shape-id="shape:banner-seed"]'),
+			`precondition: the session mounted and rendered the seeded shape — DOM: ${bannerContainer.innerHTML}`,
+		)
+		assert.equal(
+			bannerContainer.querySelector('[data-canvas-v2-connection-banner]'),
+			null,
+			"the banner must NOT render while connectionState is 'open'",
+		)
+		console.log('ok: CanvasV2App — no ConnectionBanner renders while the transport reports open')
+
+		await act(async () => {
+			liveTransport!.simulateState('reconnecting')
+		})
+		const reconnectingBanner = bannerContainer.querySelector('[data-canvas-v2-connection-banner]')
+		assert.ok(
+			reconnectingBanner,
+			`a post-open transition to 'reconnecting' must render a visible ConnectionBanner — DOM: ${bannerContainer.innerHTML}`,
+		)
+		assert.equal(reconnectingBanner!.getAttribute('data-connection-state'), 'reconnecting')
+		assert.ok(
+			bannerContainer.querySelector('[data-shape-id="shape:banner-seed"]'),
+			"the canvas underneath must still render while 'reconnecting' — the banner is an overlay, not a replacement",
+		)
+		console.log("ok: CanvasV2App — a post-open transition to 'reconnecting' renders the banner without hiding the canvas underneath")
+
+		await act(async () => {
+			liveTransport!.simulateState('open')
+		})
+		assert.equal(
+			bannerContainer.querySelector('[data-canvas-v2-connection-banner]'),
+			null,
+			"the banner must disappear once connectionState recovers back to 'open'",
+		)
+		console.log('ok: CanvasV2App — the ConnectionBanner disappears once the connection recovers')
+
+		await act(async () => {
+			bannerRoot.unmount()
+		})
+	}
+
+	// ==========================================================================
+	// (i) TASK P4 — StylePanel's onStyleChange DISPATCHES SetStyle OVER THE
+	// WHOLE SELECTION, not just one id, and the OPACITY axis routes through
+	// the envelope `shape.opacity` field, never `props.opacity` (mutant table,
+	// docs/plans/2026-07-21-canvas-v2-styling.md Task P4). A real click on the
+	// panel's blue swatch/50%-opacity button (happy-dom's `HTMLElement.click()`
+	// dispatches a real bubbling MouseEvent — same idiom the toolbar-button
+	// cases above already use), against a THREE-shape scene where only TWO are
+	// selected, so a "wrote ids=whole doc" mutant is caught by the third shape
+	// staying untouched. One Ctrl+Z reverting BOTH selected shapes' color in a
+	// single undo step proves E1's batch/one-commit guarantee reaches this
+	// wiring, not just the editor-level SetStyle test.
+	// ==========================================================================
+	{
+		const server3 = new SyncServerPeer({ peerId: 4n })
+		server3.doc.putPage({ id: 'page:p', name: 'Canvas' })
+		server3.doc.commit()
+
+		function connectStyle(): Promise<Transport> {
+			const [serverSide, clientSide]: [Transport, Transport] = makePair()
+			server3.connect(serverSide)
+			return Promise.resolve(clientSide)
+		}
+
+		const styleContainer = document.createElement('div')
+		document.body.appendChild(styleContainer)
+		const styleRoot = createRoot(styleContainer)
+
+		await act(async () => {
+			styleRoot.render(
+				createElement(
+					StrictMode,
+					null,
+					createElement(CanvasV2App, { roomId: 'dogfood-style', userId: 'test-user-style', connect: connectStyle, settleMs: 0 }),
+				),
+			)
+			await new Promise((r) => setTimeout(r, 0))
+			await new Promise((r) => setTimeout(r, 0))
+		})
+
+		const ewStyle = (globalThis as any).window.__ew as {
+			editor: {
+				get(): { selection: Set<string>; nextShapeStyle: Record<string, unknown> }
+				apply(intent: unknown): void
+				undo(): void
+			}
+			doc: { getShape(id: string): { opacity: number; props: Record<string, unknown> } | undefined }
+		}
+
+		await act(async () => {
+			ewStyle.editor.apply({ type: 'CreateShape', shape: seedShape('shape:style-x', 100, 100) })
+			ewStyle.editor.apply({ type: 'CreateShape', shape: seedShape('shape:style-y', 300, 100) })
+			ewStyle.editor.apply({ type: 'CreateShape', shape: seedShape('shape:style-untouched', 500, 100) })
+			ewStyle.editor.apply({ type: 'SetSelection', ids: ['shape:style-x', 'shape:style-y'] })
+		})
+
+		// Values live in per-slot popovers: click the slot's trigger, then
+		// re-query (the popover mounts on the re-render).
+		const openSlot = async (slot: string) => {
+			const trigger = styleContainer.querySelector(`[data-style-trigger="${slot}"]`) as HTMLElement | null
+			assert.ok(trigger, `the ${slot} slot trigger must render — DOM: ${styleContainer.innerHTML}`)
+			await act(async () => {
+				trigger!.click()
+			})
+		}
+		await openSlot('color')
+		const blueSwatch = styleContainer.querySelector(
+			'[data-style-popover="color"] [data-style-value="blue"]',
+		) as HTMLElement | null
+		assert.ok(blueSwatch, `the panel's blue color swatch must render for a 2-shape geo selection — DOM: ${styleContainer.innerHTML}`)
+		await act(async () => {
+			blueSwatch!.click()
+		})
+
+		assert.equal(ewStyle.doc.getShape('shape:style-x')?.props.color, 'blue', 'clicking the blue swatch must set BOTH selected shapes color — shape:style-x')
+		assert.equal(ewStyle.doc.getShape('shape:style-y')?.props.color, 'blue', 'clicking the blue swatch must set BOTH selected shapes color — shape:style-y')
+		assert.equal(
+			ewStyle.doc.getShape('shape:style-untouched')?.props.color,
+			undefined,
+			'a shape OUTSIDE the selection must be untouched — proves the wiring dispatches ids=selection, not ids=whole doc',
+		)
+		console.log('ok: CanvasV2App — clicking the StylePanel color swatch dispatches SetStyle across the WHOLE selection, sparing an unselected shape')
+
+
+		await openSlot('more')
+		const opacityBtn = styleContainer.querySelector('[data-style-control="opacity"] [data-style-value="0.5"]') as HTMLElement | null
+		assert.ok(opacityBtn, `the panel's 50% opacity button must render — DOM: ${styleContainer.innerHTML}`)
+		await act(async () => {
+			opacityBtn!.click()
+		})
+		const xAfterOpacity = ewStyle.doc.getShape('shape:style-x')!
+		assert.equal(xAfterOpacity.opacity, 0.5, 'the opacity axis must set the ENVELOPE opacity field')
+		assert.equal(xAfterOpacity.props.opacity, undefined, 'the opacity axis must NEVER write into props.opacity')
+		assert.equal(ewStyle.doc.getShape('shape:style-y')!.opacity, 0.5, 'the opacity click must apply to the whole selection, not just one shape')
+		console.log('ok: CanvasV2App — the StylePanel opacity control writes the envelope `opacity` field, never `props.opacity`')
+
+		const viewportElStyle = styleContainer.querySelector('[tabindex]') as HTMLElement | null
+		assert.ok(viewportElStyle, `the viewport element must exist — DOM: ${styleContainer.innerHTML}`)
+		await act(async () => {
+			viewportElStyle!.focus()
+		})
+		await act(async () => {
+			viewportElStyle!.dispatchEvent(
+				new (win as any).KeyboardEvent('keydown', { key: 'z', ctrlKey: true, bubbles: true, cancelable: true }),
+			)
+		})
+		assert.equal(
+			ewStyle.doc.getShape('shape:style-x')?.opacity,
+			1,
+			'a SINGLE Ctrl+Z must revert the opacity batch for shape:style-x in one step (E1 one-commit guarantee)',
+		)
+		assert.equal(
+			ewStyle.doc.getShape('shape:style-y')?.opacity,
+			1,
+			'a SINGLE Ctrl+Z must revert the opacity batch for shape:style-y in one step (E1 one-commit guarantee)',
+		)
+		assert.equal(
+			ewStyle.doc.getShape('shape:style-x')?.props.color,
+			'blue',
+			'the SAME single Ctrl+Z must not also revert the EARLIER, separately-committed color change',
+		)
+		console.log('ok: CanvasV2App — a single Ctrl+Z reverts the whole StylePanel opacity batch in one step, without touching the earlier color commit')
+
+		// ======================================================================
+		// (i-bis) TASK style-memory (gap 3) — STYLE MEMORY: an ordinary (no
+		// modifier) style click ALSO arms `nextShapeStyle`, so the NEXT created
+		// shape picks up the same style (tldraw parity — StylePanelContext.tsx's
+		// "every style click sets BOTH setStyleForSelectedShapes AND
+		// setStyleForNextShapes unless Ctrl/Cmd held"). The blue-swatch click
+		// above was a plain click, so it must ALSO have armed nextShapeStyle.
+		// ======================================================================
+		assert.equal(
+			ewStyle.editor.get().nextShapeStyle.color,
+			'blue',
+			'a plain (non-modified) style click over a selection must ALSO arm nextShapeStyle — the next-shape style memory tldraw parity gap',
+		)
+		console.log('ok: CanvasV2App — a plain style click over a selection also arms nextShapeStyle (next-shape style memory)')
+
+		// Ctrl/Cmd-held click is the escape hatch: "this shape only", must NOT
+		// touch nextShapeStyle (it stays at whatever it was armed to before).
+		await openSlot('color')
+		const redSwatch = styleContainer.querySelector('[data-style-popover="color"] [data-style-value="red"]') as HTMLElement | null
+		assert.ok(redSwatch, `the panel's red color swatch must render — DOM: ${styleContainer.innerHTML}`)
+		await act(async () => {
+			redSwatch!.dispatchEvent(new (win as any).MouseEvent('click', { ctrlKey: true, bubbles: true, cancelable: true }))
+		})
+		assert.equal(ewStyle.doc.getShape('shape:style-x')?.props.color, 'red', 'a Ctrl-held click still restyles the selected shapes')
+		assert.equal(
+			ewStyle.editor.get().nextShapeStyle.color,
+			'blue',
+			'a Ctrl/Cmd-held style click is the "this shape only" escape hatch — it must NOT arm nextShapeStyle',
+		)
+		console.log('ok: CanvasV2App — a Ctrl/Cmd-held style click restyles the selection only, leaving nextShapeStyle (armed style) untouched')
+
+		await act(async () => {
+			styleRoot.unmount()
+		})
+	}
+
+	// ==========================================================================
+	// (j) TASK W1 — the Draw toolbar button exists, and clicking it makes the
+	// draw tool active (aria-pressed flips on the clicked button, clears on the
+	// previously-active one — same mechanism CanvasV2App.tsx already uses for
+	// every other tool button). A subsequent pointerdown+pointerup on the
+	// viewport (a bare click — the pen tool's own "click creates a dot" design,
+	// draw.ts's header: no drag threshold) must create a new `draw`-kind shape
+	// in the doc, proving CanvasV2App actually routes 'draw' pointer input to
+	// the pen tool's FSM end to end — not just the DOM-free unit coverage in
+	// tool-loop.test.ts.
+	// ==========================================================================
+	{
+		const server5 = new SyncServerPeer({ peerId: 5n })
+		server5.doc.putPage({ id: 'page:p', name: 'Canvas' })
+		server5.doc.commit()
+
+		function connectDraw(): Promise<Transport> {
+			const [serverSide, clientSide]: [Transport, Transport] = makePair()
+			server5.connect(serverSide)
+			return Promise.resolve(clientSide)
+		}
+
+		const drawContainer = document.createElement('div')
+		document.body.appendChild(drawContainer)
+		const drawRoot = createRoot(drawContainer)
+
+		await act(async () => {
+			drawRoot.render(
+				createElement(
+					StrictMode,
+					null,
+					createElement(CanvasV2App, { roomId: 'dogfood-draw', userId: 'test-user-draw', connect: connectDraw, settleMs: 0 }),
+				),
+			)
+			await new Promise((r) => setTimeout(r, 0))
+			await new Promise((r) => setTimeout(r, 0))
+		})
+
+		const drawBtn = drawContainer.querySelector('[data-canvas-tool="draw"]') as HTMLElement | null
+		const selectBtnDraw = drawContainer.querySelector('[data-canvas-tool="select"]') as HTMLElement | null
+		assert.ok(drawBtn, `the Draw toolbar button must render — DOM: ${drawContainer.innerHTML}`)
+		assert.ok(selectBtnDraw, 'precondition: the select button renders')
+		assert.equal(selectBtnDraw!.getAttribute('aria-pressed'), 'true', 'precondition: select is the default active tool')
+
+		await act(async () => {
+			drawBtn!.click()
+		})
+		assert.equal(drawBtn!.getAttribute('aria-pressed'), 'true', 'clicking the Draw button must make it the active tool')
+		assert.equal(selectBtnDraw!.getAttribute('aria-pressed'), 'false', 'switching to Draw must deactivate the previously-active select button')
+
+		const ewDraw = (globalThis as any).window.__ew as {
+			doc: { listShapes(): Array<{ id: string; kind: string }> }
+		}
+		const shapesBeforeDraw = new Set(ewDraw.doc.listShapes().map((s) => s.id))
+
+		const viewportElDraw = drawContainer.querySelector('[tabindex]') as HTMLElement | null
+		assert.ok(viewportElDraw, `the viewport element must exist — DOM: ${drawContainer.innerHTML}`)
+
+		await act(async () => {
+			viewportElDraw!.dispatchEvent(new (win as any).PointerEvent('pointerdown', { bubbles: true, cancelable: true, pointerId: 41, clientX: 300, clientY: 300, buttons: 1 }))
+			viewportElDraw!.dispatchEvent(new (win as any).PointerEvent('pointerup', { bubbles: true, cancelable: true, pointerId: 41, clientX: 300, clientY: 300, buttons: 0 }))
+		})
+
+		const createdDraw = ewDraw.doc.listShapes().find((s) => !shapesBeforeDraw.has(s.id))
+		assert.ok(createdDraw, `a pointerdown+pointerup with the Draw tool active must create a shape — shapes: ${JSON.stringify(ewDraw.doc.listShapes())}`)
+		assert.equal(createdDraw!.kind, 'draw', 'the shape created by the Draw tool must be kind "draw"')
+
+		console.log('ok: CanvasV2App — the Draw toolbar button renders, activates on click, and routes real pointer input to the pen tool FSM (Task W1)')
+
+		await act(async () => {
+			drawRoot.unmount()
+		})
+	}
+
+	console.log('ok: CanvasV2App.test.ts — all cases passed')
+}
+
+main()
+	.catch((err) => {
+		console.error(err)
+		process.exit(1)
+	})
+	.finally(() => {
+		// House rule (embed-reconciler.test.ts's precedent): happy-dom's window
+		// owns timers (and this test's own setTimeout(0) flushes) that can hold
+		// the process open past the last assertion.
+		process.exit(0)
+	})

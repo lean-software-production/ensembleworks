@@ -24,18 +24,32 @@ export const canvasShape: ToolDef = {
 	plugin: 'canvas',
 	id: 'shape',
 	http: { method: 'POST', path: '/api/canvas/shape' },
-	help: 'Create/update/delete a diagram shape (geo, arrow, text, note).',
+	help:
+		'Create/update/delete a diagram shape. create type ∈ geo|text|note|arrow|frame|line|draw|highlight. ' +
+		'line/draw/highlight take --points (parent-relative: page coords on the page, or frame-local when --frame is set — same convention as geo/text/note; [[x,y],…] or [x,y,pressure], JSON or @file); ' +
+		'draw takes --closed/--fill, line takes --spline line|cubic. ' +
+		'update <id> --frame <name> reparents INTO a frame, --to-page reparents OUT to its page ' +
+		'(both preserve page-position; correct for UNROTATED parents only), --rotate <rad>/--lock are riders. ' +
+		'delete <frame-id> keeps children on the frame\'s page; --with-children cascades descendants + bindings.',
 	zodInput: z.object({
 		room,
 		op: z.enum(['create', 'update', 'delete']).default('create'),
 		// create
-		type: z.enum(['geo', 'text', 'note', 'arrow']).optional(),
+		type: z.enum(['geo', 'text', 'note', 'arrow', 'frame', 'line', 'draw', 'highlight']).optional(),
 		frame: z.string().optional(),
 		geo: z.enum(GEO_TYPES as [string, ...string[]]).optional(),
 		fromId: z.string().optional().describe('arrow start shape id'),
 		toId: z.string().optional().describe('arrow end shape id'),
+		name: z.string().optional().describe('frame caption (props.name)'),
+		points: z.array(z.array(z.number())).optional().describe('line/draw/highlight polyline/stroke points; parent-relative (page coords on the page, frame-local under --frame)'),
+		spline: z.enum(['line', 'cubic']).optional().describe('line only; default line'),
+		closed: z.boolean().optional().describe('draw only; sets isClosed'),
 		// update / delete
 		id: z.string().optional().describe('required for update/delete'),
+		rotate: z.number().optional().describe('set rotation in radians (exact)'),
+		lock: z.boolean().optional().describe('set isLocked'),
+		toPage: z.boolean().optional().describe("reparent OUT to the frame's page"),
+		withChildren: z.boolean().optional().describe('frame delete: cascade descendants + bindings'),
 		// shared
 		text: z.string().optional(),
 		color: z.enum(NOTE_COLORS as [string, ...string[]]).optional(),
@@ -55,7 +69,7 @@ export const canvasFrames: ToolDef = {
 	plugin: 'canvas',
 	id: 'frames',
 	http: { method: 'GET', path: '/api/canvas/frames' },
-	help: 'List frames with child counts, nearest-cursor-first.',
+	help: 'List frames with child counts (notes/texts/images/terminals/iframes/drawings), nearest-cursor-first.',
 	zodInput: z.object({ room }),
 	zodOutput: z.object({
 		ok: z.literal(true),
@@ -66,7 +80,8 @@ export const canvasFrames: ToolDef = {
 			id: z.string(), name: z.string(), page: z.string().nullable(),
 			x: z.number(), y: z.number(), w: z.number().optional(), h: z.number().optional(),
 			notes: z.number(), texts: z.number(), images: z.number(),
-			terminals: z.number(), iframes: z.number(), dist: z.number().nullable().optional(),
+			terminals: z.number(), iframes: z.number(), drawings: z.number(),
+			dist: z.number().nullable().optional(),
 		})),
 	}),
 }
@@ -75,7 +90,7 @@ export const canvasFrame: ToolDef = {
 	plugin: 'canvas',
 	id: 'frame',
 	http: { method: 'GET', path: '/api/canvas/frame' },
-	help: "Read one frame's stickies, text, images, terminals, iframes.",
+	help: "Read one frame's stickies, text, images, terminals, iframes, drawings.",
 	zodInput: z.object({ room, name: z.string().min(1).describe('fuzzy frame name') }),
 	zodOutput: z.object({
 		ok: z.literal(true),
@@ -89,6 +104,7 @@ export const canvasFrame: ToolDef = {
 		})),
 		terminals: z.array(z.object({ id: z.string(), sessionId: z.string().optional(), title: z.string().optional(), status: z.string().nullable() })),
 		iframes: z.array(z.object({ id: z.string(), url: z.string().optional(), title: z.string().optional() })),
+		drawings: z.array(z.object({ id: z.string(), type: z.string(), text: z.string().optional() })),
 	}),
 }
 

@@ -10,18 +10,50 @@ import { existsSync } from 'node:fs'
 import path from 'node:path'
 import { accessVerificationEnabled } from './access-identity.ts'
 import { createSyncApp } from './app.ts'
+import { resolveStorageGeometry } from './kernel/storage-geometry.ts'
+import { createShutdownHandler } from './shutdown-signals.ts'
 
 const PORT = Number(process.env.PORT ?? 8788)
-const DATA_DIR = process.env.DATA_DIR ?? path.join(process.cwd(), 'data')
-const DATABASE_DIR = process.env.DATABASE_DIR // optional: fast boot-disk path for room DBs
 const CLIENT_DIST = process.env.CLIENT_DIST ?? path.join(import.meta.dirname, '../../client/dist')
 
-const { server } = createSyncApp({ dataDir: DATA_DIR, databaseDir: DATABASE_DIR, clientDist: CLIENT_DIST })
+// The storage triple is REQUIRED and validated — a misconfigured box must
+// refuse to start here, loudly, not corrupt a room DB 15 minutes later when
+// the backup timer fires (the 2026-07-10 ew-lsp-001 outage). No fallbacks:
+// prod supplies all three via ~/.config/ensembleworks/storage.env; dev/test
+// harnesses set them explicitly. DATABASE_BACKUPS_DIR is validated here even
+// though only the laingville backup units write to it — the sync server is
+// the loud failure point; a dead oneshot backup unit is what went unnoticed.
+let geometry
+try {
+	geometry = resolveStorageGeometry(process.env)
+} catch (err) {
+	console.error(`ensembleworks sync server: ${err instanceof Error ? err.message : err}`)
+	process.exit(1)
+}
+const { dataDir: DATA_DIR, databaseDir: DATABASE_DIR, databaseBackupsDir: DATABASE_BACKUPS_DIR } = geometry
+
+const { server, close } = createSyncApp({ dataDir: DATA_DIR, databaseDir: DATABASE_DIR, clientDist: CLIENT_DIST })
 
 server.listen(PORT, () => {
 	console.log(`ensembleworks sync server listening on :${PORT}`)
 	console.log(`  data dir: ${DATA_DIR}`)
-	console.log(`  database dir: ${DATABASE_DIR ?? '(unset — room DBs under data dir)'}`)
+	console.log(`  database dir: ${DATABASE_DIR}`)
+	console.log(`  database backups dir: ${DATABASE_BACKUPS_DIR} (written by the backup timer, validated here)`)
 	console.log(`  client build: ${existsSync(CLIENT_DIST) ? CLIENT_DIST : '(not built — dev mode)'}`)
 	console.log(`  auth posture: ${accessVerificationEnabled() ? 'verified (CF Access JWT signatures checked)' : 'header-trust (no CF_ACCESS_TEAM_DOMAIN/AUD — trusting edge headers)'}`)
 })
+
+// F2 graceful shutdown: first signal = full teardown (app.ts's close()) then
+// exit 0; second signal mid-teardown = exit 1 immediately. The state machine
+// lives in shutdown-signals.ts (unit-tested there — this entrypoint boots a
+// real server on import, so its logic can't be tested from here); this file
+// only binds the real deps and the real signals.
+const shutdown = createShutdownHandler({
+	close,
+	exit: (code) => process.exit(code),
+	log: (msg) => console.log(msg),
+	warn: (msg) => console.warn(msg),
+	error: (msg, err) => console.error(msg, err),
+})
+process.on('SIGTERM', () => shutdown('SIGTERM'))
+process.on('SIGINT', () => shutdown('SIGINT'))

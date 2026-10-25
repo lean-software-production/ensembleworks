@@ -3,7 +3,7 @@
 // output is unchanged, and the new unverified claim decoder extracts email /
 // common_name. Network-free (verified/JWKS mode is unchanged prod code).
 import assert from 'node:assert/strict'
-import { decodeCfAccessClaimsUnverified, getAccessIdentity } from './access-identity.ts'
+import { decodeCfAccessClaimsUnverified, getAccessIdentity, personField } from './access-identity.ts'
 
 // Header-trust mode (CF_ACCESS_* unset), no dev fallback.
 delete process.env.CF_ACCESS_TEAM_DOMAIN
@@ -44,5 +44,21 @@ assert.deepEqual(
 )
 assert.equal(decodeCfAccessClaimsUnverified('not-a-jwt'), null, 'non-JWT → null')
 assert.equal(decodeCfAccessClaimsUnverified(jwt({ other: 1 })), null, 'no identity claim → null')
+
+// personField renders the identity binding every log plane shares, so a grep
+// for `person=alice@example.com` matches sync, A/V and gateway lines alike.
+assert.equal(
+	personField({ email: 'alice@example.com', verified: true }),
+	'person=alice@example.com verified=true',
+	'verified identity → email + verified=true',
+)
+assert.equal(
+	personField({ email: 'bob@example.com', verified: false }),
+	'person=bob@example.com verified=false',
+	'header-trust identity → email + verified=false',
+)
+// Silence would be indistinguishable from a broken resolver, so an absent
+// identity is logged explicitly.
+assert.equal(personField(null), 'person=none verified=false', 'no identity → person=none')
 
 console.log('ok: access-identity refactor preserved')

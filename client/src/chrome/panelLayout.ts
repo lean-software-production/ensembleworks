@@ -19,11 +19,16 @@ const STORAGE_KEY = 'ensembleworks.panelLayout.v1'
 export interface PanelLayout {
 	width: number
 	collapsed: boolean
+	/** Multiplier applied to the width-derived mosaic tile size (1 = the
+	 * default "everyone fits" size). The mosaic's manual-controls row drives
+	 * it; persisted alongside width so a chosen size survives a reload. */
+	tileScale: number
 }
 
 const DEFAULT_LAYOUT: PanelLayout = {
 	width: 280,
 	collapsed: false,
+	tileScale: 1,
 }
 
 const MIN_WIDTH = 180
@@ -43,6 +48,20 @@ export const RAIL_WIDTH = 32
 // Below this dragged width the grip collapses the panel to the rail (spec §3
 // "Panel states": "drag below ~140px (snaps)").
 const COLLAPSE_THRESHOLD = 140
+
+// Mosaic tile-size multiplier range: halve at one end, double at the other.
+// The slider maps GEOMETRICALLY over it (see sliderPositionForScale), so 1x
+// — the derived "everyone fits" size — sits exactly mid-track and halving is
+// the mirror gesture of doubling. A linear mapping put 1x off-centre and
+// wasted the bottom third of the track below the 36px tile floor.
+export const MIN_TILE_SCALE = 0.5
+export const MAX_TILE_SCALE = 2
+
+/** Clamp a raw tile-scale to [0.5, 2]; non-finite falls back to 1. */
+export function clampTileScale(scale: number): number {
+	if (!Number.isFinite(scale)) return 1
+	return Math.min(MAX_TILE_SCALE, Math.max(MIN_TILE_SCALE, scale))
+}
 
 /**
  * Clamp a candidate panel width to [180, min(720, maxWidth)]. Pure — no
@@ -83,13 +102,17 @@ export function panelDragAction(width: number): 'collapse' | 'resize' | 'ignore'
 export function parsePanelLayout(raw: string | null): PanelLayout {
 	if (!raw) return { ...DEFAULT_LAYOUT }
 	try {
-		const parsed = JSON.parse(raw) as { width?: unknown; collapsed?: unknown }
+		const parsed = JSON.parse(raw) as { width?: unknown; collapsed?: unknown; tileScale?: unknown }
 		const width =
 			typeof parsed.width === 'number' && Number.isFinite(parsed.width)
 				? clampPanelWidth(parsed.width)
 				: DEFAULT_LAYOUT.width
 		const collapsed = typeof parsed.collapsed === 'boolean' ? parsed.collapsed : DEFAULT_LAYOUT.collapsed
-		return { width, collapsed }
+		const tileScale =
+			typeof parsed.tileScale === 'number' && Number.isFinite(parsed.tileScale)
+				? clampTileScale(parsed.tileScale)
+				: DEFAULT_LAYOUT.tileScale
+		return { width, collapsed, tileScale }
 	} catch {
 		return { ...DEFAULT_LAYOUT }
 	}
@@ -131,6 +154,30 @@ function update(patch: Partial<PanelLayout>): void {
 /** Set the panel width, clamped to [180, min(720, maxWidth)] if given. */
 export function setPanelWidth(width: number, maxWidth?: number): void {
 	update({ width: clampPanelWidth(width, maxWidth) })
+}
+
+/**
+ * Slider position (0..1) → tile-size multiplier, geometric: each equal step
+ * along the track multiplies the size by the same factor, so 1x lands dead
+ * centre and 0.5x/2x sit symmetrically at the ends. Rounded to 2dp so the
+ * persisted value and its "1.25x" readout stay tidy.
+ */
+export function scaleForSliderPosition(position: number): number {
+	if (!Number.isFinite(position)) return 1
+	const p = Math.min(1, Math.max(0, position))
+	const raw = MIN_TILE_SCALE * (MAX_TILE_SCALE / MIN_TILE_SCALE) ** p
+	return clampTileScale(Math.round(raw * 100) / 100)
+}
+
+/** The inverse: multiplier → slider position (0..1). */
+export function sliderPositionForScale(scale: number): number {
+	const s = clampTileScale(scale)
+	return Math.log(s / MIN_TILE_SCALE) / Math.log(MAX_TILE_SCALE / MIN_TILE_SCALE)
+}
+
+/** Set the mosaic tile-size multiplier, clamped to [0.5, 2]. */
+export function setTileScale(scale: number): void {
+	update({ tileScale: clampTileScale(scale) })
 }
 
 /** Set the collapsed (rail) flag directly. */

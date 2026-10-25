@@ -49,11 +49,18 @@ async function main() {
 	const longId = await postJson('/api/discord/bindings', { room: 'test', guildId: 'g', channelId: 'c'.repeat(100), direction: 'in', route: { handler: 'frame-sticky' } })
 	assert.equal(longId.status, 400)
 
-	// delete
-	const del = await fetch(`${base}/api/discord/bindings/${created.body.id}`, { method: 'DELETE' })
+	// delete — id travels in the query (?id=), NOT a path param. The CLI's
+	// generic renderer emits GET/DELETE inputs as query and never substitutes a
+	// `:id` segment, so a path-param route would silently no-op; see the guard in
+	// cli/src/render/args.ts and tools.test.ts's no-`:`-path invariant.
+	const del = await fetch(`${base}/api/discord/bindings?id=${created.body.id}`, { method: 'DELETE' })
 	assert.equal(del.status, 200)
 	const empty = await getJson('/api/discord/bindings?room=test')
 	assert.equal(empty.body.bindings.length, 0)
+
+	// missing id → 400 (fail loud instead of deleting nothing and reporting ok).
+	const delNoId = await fetch(`${base}/api/discord/bindings`, { method: 'DELETE' })
+	assert.equal(delNoId.status, 400)
 
 	// POST /api/discord/post — server → bot mediator (E3).
 	{

@@ -63,37 +63,61 @@ glyphs, and agents populate and read back:
 Structural changes (add/remove outcomes, initiatives, metrics, features) go
 through a replace op — regenerate the document and replace it.
 
-## How to work here
+## Spawning BB threads
 
-1. **Take your brief.** `ensembleworks canvas frame <your-frame>` (often your
-   crew name) to see what you've been asked to do and what teammates have
-   drawn.
-2. **Keep your status honest.** `ensembleworks terminal status "$SESSION" working`
-   while heads down; switch to `needs-you` the moment you're blocked on a
-   human, `done` when finished. The status light is how people know whether
-   to come help.
-3. **Share findings as stickies** on the **advice** frame, tagged with
-   `--author <you>` so the room knows who's talking. Keep them short.
-4. **Leave the canvas legible.** Give your terminal a meaningful title and don't
-   flood frames — everyone shares this space.
+Only spawn a thread when a human has asked for one. When you do, pass
+`--parent-self` so the new thread is linked to yours:
+
+```sh
+bb thread spawn --parent-self --title "..." --prompt-file prompt.md
+```
+
+A `bb thread spawn` carries no identity of its own: the CLI authenticates as the
+machine, not as a person, so without a parent the new thread's starter is recorded
+as unknown. With `--parent-self` the Identity plugin inherits your thread's starter,
+so the thread is attributed to the person who started yours.
 
 ## Pushing to GitHub
 
-You commit and push as the **`ensembleworks[bot]`** GitHub App, never a personal
-account. You can't read the App key (it's outside this sandbox) — instead mint a
-short-lived (~1h) token through the wrapper, then push over HTTPS:
+You commit and push as the box's **GitHub App bot** (`ensembleworks-lsp[bot]` on
+the prod boxes), never a personal account — and you don't handle a token to do
+it. Just use `git` and `gh`:
 
 ```sh
-TOKEN=$(sudo -u ensembleworks ensembleworks-gh-token)          # all org repos
-# TOKEN=$(sudo -u ensembleworks ensembleworks-gh-token myrepo) # or scope to one
-git push "https://x-access-token:${TOKEN}@github.com/lean-software-production/<repo>.git" HEAD:my-branch
+git push origin HEAD:my-branch   # HTTPS remote — credentials are automatic
+gh pr create --fill              # acts as the bot
+gh api /repos/lean-software-production/<repo>
 ```
 
-The **`gh` CLI is pre-wrapped** to do this for you — `gh pr create …`, `gh api …`,
-`gh run …` mint a fresh token automatically and act as the bot, so you rarely need
-the raw `git push` above.
+Clones must use an **HTTPS remote**
+(`https://github.com/lean-software-production/<repo>.git`). A `git@github.com:`
+remote goes over SSH, which bypasses the credential helper entirely and will
+fail.
 
-`main` is branch-protected, so open a PR and let a human merge — pushes straight to
-`main` are rejected by design. Credit teammates who paired with you using
-`Co-authored-by:` trailers. If the wrapper says the App isn't provisioned on this
-box, GitHub pushing just isn't set up here — carry on without it.
+Respect the rules of the project you're working in around using pull requests
+versus trunk-based development. Credit teammates who paired with you using
+`Co-authored-by:` trailers.
+
+**When GitHub auth fails, match the symptom before doing anything else:**
+
+- **`gh auth login`, `could not read Username`, `CONNECT tunnel failed`, or a
+  `deny network-outbound github.com` violation** — you're inside an agent
+  sandbox, which blocks the credential path. Re-run the same `git`/`gh` command
+  outside the sandbox. Don't run `gh auth login`, switch to SSH, mint a token
+  by hand, or ask anyone for a personal token.
+- **`Bad credentials` or `Invalid username or token` in a BB thread** — the
+  `GH_TOKEN` BB injected at the start of your turn has expired (it lives ~1h).
+  Run `eval "$(bb github-app-auth env)"` and retry in that same shell.
+- **`Resource not accessible by integration` (403)** — auth worked; the App
+  lacks that permission, or isn't installed on that repo (personal repos never
+  are). Say so and carry on without it; don't work around it with other
+  credentials.
+- **A quiet `git fetch -q` can fail without you noticing.** Check its exit code
+  before trusting `origin/main`.
+
+Otherwise run **`ensembleworks-gh-doctor`**, outside the sandbox. It names the
+actual cause — an expired injected token, App not provisioned on this box,
+missing sudo rule, stale credential config, an SSH remote — instead of the
+generic 403 every one of those produces. If it reports the App isn't
+provisioned here, GitHub pushing just isn't set up on this box: carry on
+without it.

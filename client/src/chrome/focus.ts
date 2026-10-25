@@ -31,6 +31,13 @@ export function useFocusedShapeId(): TLShapeId | null {
  */
 export const FOCUSABLE_SHAPE_TYPES = new Set(['terminal', 'frame'])
 
+import { EDIT_ON_FOCUS_SHAPE_TYPES, focusStartsEditingSession } from './focusEditing'
+
+// Re-exported so focus.ts stays the one module callers reach for; the Set
+// itself lives next door in focusEditing.ts, which is tldraw-free so its
+// policy can be unit-tested under bare `bun`.
+export { EDIT_ON_FOCUS_SHAPE_TYPES } from './focusEditing'
+
 // Camera isLocked at the moment we entered focus, so exitFocus can restore it
 // exactly rather than assuming it was always false beforehand. Module-level
 // rather than atom-housed: it's write-once/read-once bookkeeping for the
@@ -38,6 +45,13 @@ export const FOCUSABLE_SHAPE_TYPES = new Set(['terminal', 'frame'])
 // with an enterFocus/exitFocus call — an atom would just add unneeded
 // reactivity overhead for a value nothing subscribes to.
 let previousIsLocked = false
+
+// Did THIS focus session put the shape into editing (EW26)? Module-level for
+// exactly the same reason as previousIsLocked above: write-once/read-once
+// bookkeeping for the CURRENT session, paired 1:1 with enterFocus/exitFocus,
+// never rendered. Guards the exit path from clearing an editing session the
+// user started themselves (double-click) before entering focus.
+let autoEnteredEditing = false
 
 /**
  * Enter focus on `shapeId`: zoom the camera to the shape's page bounds (16px
@@ -50,6 +64,10 @@ let previousIsLocked = false
  *
  * No-ops if the shape doesn't exist (deleted between the button rendering
  * and the click landing) — nothing to zoom to, so nothing to lock.
+ *
+ * EW26: for shape types in EDIT_ON_FOCUS_SHAPE_TYPES (terminals) this also
+ * enters editing, so the full-screen terminal owns the keyboard from the first
+ * keystroke rather than needing a double-click first.
  */
 export function enterFocus(editor: Editor, shapeId: TLShapeId) {
 	// Defense-in-depth reentrancy guard: a double-call (e.g. a fast double
@@ -63,6 +81,33 @@ export function enterFocus(editor: Editor, shapeId: TLShapeId) {
 	previousIsLocked = editor.getCameraOptions().isLocked
 	editor.zoomToBounds(bounds, { inset: 16, animation: { duration: 220 } })
 	editor.setCameraOptions({ ...editor.getCameraOptions(), isLocked: true })
+	// EW26: attach the keyboard for shape types that want it, BEFORE publishing
+	// the atom. Order matters — FocusOverlay's lost-editing self-heal reads both
+	// the focused id and the editing id, so a render that saw "focused but not
+	// editing" would exit focus the instant it was entered.
+	//
+	// setEditingShape is the STATE half of the mechanism: TerminalShapeUtil
+	// derives its isEditing from editor.getEditingShapeId(). The DOM-focus half
+	// is TerminalShapeUtil's own effect, which keys off focus-view entry as
+	// well as the editing transition — deliberately, because setEditingShape is
+	// a no-op when the shape is already being edited and the transition alone
+	// therefore misses the "already typing, then hit ⛶" path (smoke Finding 2).
+	// The select tool is deliberately NOT transitioned into its `editing_shape`
+	// state — that state owns its own click-outside / cancel semantics, which
+	// would fight focus view's matte and its exit chord for control of the
+	// session. Focus view owns the lifecycle here; exitFocus below unwinds it.
+	autoEnteredEditing = false
+	const shape = editor.getShape(shapeId)
+	if (shape && EDIT_ON_FOCUS_SHAPE_TYPES.has(shape.type)) {
+		// Read BEFORE the call — afterwards there is no way to tell an
+		// inherited session from one we just opened.
+		autoEnteredEditing = focusStartsEditingSession({
+			shapeId,
+			shapeType: shape.type,
+			editingShapeIdBefore: editor.getEditingShapeId(),
+		})
+		editor.setEditingShape(shapeId)
+	}
 	focusedShapeIdAtom.set(shapeId)
 }
 
@@ -80,7 +125,16 @@ export function enterFocus(editor: Editor, shapeId: TLShapeId) {
  * call this defensively without first checking whether focus is even active.
  */
 export function exitFocus(editor: Editor) {
-	if (focusedShapeIdAtom.get() === null) return
+	const focusedShapeId = focusedShapeIdAtom.get()
+	if (focusedShapeId === null) return
+	// EW26: only unwind editing WE entered, and only if it's still ours — if
+	// xterm's double-Esc already cleared it (which is what routed us here in
+	// the first place), or the user moved editing to another shape, there is
+	// nothing of ours left to clear. Keeps this idempotent.
+	if (autoEnteredEditing && editor.getEditingShapeId() === focusedShapeId) {
+		editor.setEditingShape(null)
+	}
+	autoEnteredEditing = false
 	editor.setCameraOptions({ ...editor.getCameraOptions(), isLocked: previousIsLocked })
 	focusedShapeIdAtom.set(null)
 }

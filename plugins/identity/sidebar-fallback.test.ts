@@ -1,0 +1,358 @@
+// @vitest-environment jsdom
+import { afterEach, describe, expect, it, vi } from "vitest";
+import {
+  mountThreadStatusFallback,
+  replaceThreadStatuses,
+  type ThreadStatus,
+} from "./sidebar-fallback.js";
+
+const status: ThreadStatus = {
+  icon: "UsersRound",
+  label: "1 other viewer",
+  tone: "default",
+  badge: "1",
+  badgeColor: "var(--success, #22c55e)",
+};
+
+let dispose: (() => void) | undefined;
+
+afterEach(() => {
+  dispose?.();
+  dispose = undefined;
+  document.body.replaceChildren();
+});
+
+function renderReplacementRow(threadId = "thread-1") {
+  const row = document.createElement("div");
+  row.setAttribute("data-parent-card", "");
+  const anchor = document.createElement("a");
+  anchor.setAttribute("data-sidebar-thread-id", threadId);
+  const titleGroup = document.createElement("span");
+  const title = document.createElement("span");
+  title.textContent = "Thread title";
+  titleGroup.append(title);
+  const controls = document.createElement("span");
+  row.append(anchor, titleGroup, controls);
+  document.body.append(row);
+  return { anchor, row, titleGroup, title };
+}
+
+async function settleObserver() {
+  await new Promise((resolve) => setTimeout(resolve, 0));
+}
+
+describe("replacement sidebar presence fallback", () => {
+  it("adds, updates, and removes a dot while retaining the native setter", async () => {
+    const nativeSetter = vi.fn();
+    const { row, titleGroup, title } = renderReplacementRow();
+    dispose = mountThreadStatusFallback({ document, setNativeStatus: nativeSetter });
+
+    replaceThreadStatuses(new Map([["thread-1", status]]));
+    await settleObserver();
+    expect(nativeSetter).toHaveBeenCalledWith("thread-1", {
+      icon: "UsersRound",
+      label: "1 other viewer",
+      tone: "default",
+    });
+    expect(row.querySelector("[data-bb-presence-badge]")?.getAttribute("aria-label"))
+      .toBe("1 other viewer");
+    const badge = row.querySelector<HTMLElement>("[data-bb-presence-badge]");
+    expect(badge?.textContent).toBe("1");
+    expect(titleGroup.firstElementChild).toBe(badge);
+    expect(badge?.nextElementSibling).toBe(title);
+    expect(badge?.style.position).toBe("");
+
+    const typingStatus: ThreadStatus = {
+      icon: "Edit",
+      label: "2 other viewers · 1 typing",
+      tone: "running",
+      badge: "2",
+      badgeColor: "var(--warning, #f59e0b)",
+    };
+    replaceThreadStatuses(new Map([["thread-1", typingStatus]]));
+    await settleObserver();
+    expect(nativeSetter).toHaveBeenLastCalledWith("thread-1", {
+      icon: "Edit",
+      label: "2 other viewers · 1 typing",
+      tone: "running",
+    });
+    expect(row.querySelector("[data-bb-presence-badge]")?.textContent).toBe("2");
+    expect(row.querySelector<HTMLElement>("[data-bb-presence-badge]")?.style.background)
+      .toContain("#f59e0b");
+
+    replaceThreadStatuses(new Map());
+    await settleObserver();
+    expect(nativeSetter).toHaveBeenCalledWith("thread-1", null);
+    expect(row.querySelector("[data-bb-presence-badge]")).toBeNull();
+  });
+
+  it("follows replacement-list rerenders and yields to a native status", async () => {
+    dispose = mountThreadStatusFallback({ document });
+    replaceThreadStatuses(new Map([["thread-1", status]]));
+
+    const first = renderReplacementRow();
+    await settleObserver();
+    expect(first.row.querySelector("[data-bb-presence-badge]")).not.toBeNull();
+
+    first.row.remove();
+    const second = renderReplacementRow();
+    await settleObserver();
+    expect(second.row.querySelector("[data-bb-presence-badge]")).not.toBeNull();
+
+    const nativeStatus = document.createElement("span");
+    nativeStatus.setAttribute("aria-label", status.label);
+    second.row.append(nativeStatus);
+    await settleObserver();
+    expect(second.row.querySelector("[data-bb-presence-badge]")).toBeNull();
+
+    dispose();
+    dispose = undefined;
+    expect(document.querySelector("[data-bb-presence-badge]")).toBeNull();
+  });
+});
+
+describe("ownership badges", () => {
+  it("renders a starter's initials in its own colour, with no viewer count", async () => {
+    const { row } = renderReplacementRow();
+    dispose = mountThreadStatusFallback({ document });
+    replaceThreadStatuses(new Map([["thread-1", {
+      icon: "User",
+      label: "Started by David",
+      tone: "default",
+      badge: "D",
+      badgeColor: "var(--muted-foreground, #6b7280)",
+    }]]));
+    await settleObserver();
+    const badge = row.querySelector<HTMLElement>("[data-bb-presence-badge]");
+    expect(badge?.textContent).toBe("D");
+    expect(badge?.style.background).toContain("#6b7280");
+    expect(badge?.getAttribute("aria-label")).toBe("Started by David");
+  });
+});
+
+describe("ownership photos", () => {
+  const started: ThreadStatus = {
+    icon: "User", label: "Started by David", tone: "default",
+    badge: "D", badgeColor: "#6b7280", badgeInk: "#ffffff",
+    avatarUrl: "https://github.com/david.png?size=28",
+  };
+
+  it("shows the starter's photo instead of initials when the status carries one", async () => {
+    const { row } = renderReplacementRow();
+    dispose = mountThreadStatusFallback({ document });
+    replaceThreadStatuses(new Map([["thread-1", started]]));
+    await settleObserver();
+    const badge = row.querySelector<HTMLElement>("[data-bb-presence-badge]")!;
+    const img = badge.querySelector("img");
+    expect(img?.getAttribute("src")).toBe(started.avatarUrl);
+    expect(img?.getAttribute("alt")).toBe("");
+    expect(badge.textContent).toBe("");
+    expect(badge.style.background).toBe("rgb(107, 114, 128)");
+    expect(badge.style.width).toBe("14px");
+    expect(badge.style.padding).toBe("0px");
+  });
+
+  it("falls back to initials once the photo fails, and stays there across repaints", async () => {
+    const { row } = renderReplacementRow();
+    dispose = mountThreadStatusFallback({ document });
+    replaceThreadStatuses(new Map([["thread-1", started]]));
+    await settleObserver();
+    const badge = row.querySelector<HTMLElement>("[data-bb-presence-badge]")!;
+    badge.querySelector("img")!.dispatchEvent(new Event("error"));
+    expect(badge.querySelector("img")).toBeNull();
+    expect(badge.textContent).toBe("D");
+    replaceThreadStatuses(new Map([["thread-1", { ...started }]]));
+    await settleObserver();
+    expect(badge.querySelector("img")).toBeNull();
+    expect(badge.textContent).toBe("D");
+  });
+
+  it("tries again when the photo URL changes", async () => {
+    const { row } = renderReplacementRow();
+    dispose = mountThreadStatusFallback({ document });
+    replaceThreadStatuses(new Map([["thread-1", started]]));
+    await settleObserver();
+    const badge = row.querySelector<HTMLElement>("[data-bb-presence-badge]")!;
+    badge.querySelector("img")!.dispatchEvent(new Event("error"));
+    replaceThreadStatuses(new Map([["thread-1", { ...started, avatarUrl: "https://github.com/erin.png?size=28" }]]));
+    await settleObserver();
+    expect(badge.querySelector("img")?.getAttribute("src")).toBe("https://github.com/erin.png?size=28");
+  });
+
+  it("drops the photo when a later status has none", async () => {
+    const { row } = renderReplacementRow();
+    dispose = mountThreadStatusFallback({ document });
+    replaceThreadStatuses(new Map([["thread-1", started]]));
+    await settleObserver();
+    replaceThreadStatuses(new Map([["thread-1", { ...started, avatarUrl: null, badge: "2" }]]));
+    await settleObserver();
+    const badge = row.querySelector<HTMLElement>("[data-bb-presence-badge]")!;
+    expect(badge.querySelector("img")).toBeNull();
+    expect(badge.textContent).toBe("2");
+  });
+});
+
+describe("stacked viewer photos", () => {
+  const alex = { avatarUrl: "https://github.com/alex.png?size=28", badge: "A", color: "#2f6bb8", ink: "#ffffff", ring: "var(--success, #22c55e)" };
+  const sam = { avatarUrl: "https://github.com/sam.png?size=28", badge: "S", color: "#b4322e", ink: "#ffffff", ring: "var(--warning, #f59e0b)" };
+  const viewing: ThreadStatus = {
+    icon: "UsersRound", label: "Alex and Sam here; Sam is typing", tone: "running",
+    badge: "2", badgeColor: "var(--success, #22c55e)", stack: [alex, sam], overflow: 0,
+  };
+  const items = (row: HTMLElement) => [...row.querySelectorAll<HTMLElement>("[data-bb-presence-stack-item]")];
+
+  it("draws one ringed photo per named viewer, overlapping, instead of a count", async () => {
+    const { row } = renderReplacementRow();
+    dispose = mountThreadStatusFallback({ document });
+    replaceThreadStatuses(new Map([["thread-1", viewing]]));
+    await settleObserver();
+    const badge = row.querySelector<HTMLElement>("[data-bb-presence-badge]")!;
+    expect(badge.getAttribute("aria-label")).toBe(viewing.label);
+    const circles = items(row);
+    expect(circles.map((item) => item.querySelector("img")?.getAttribute("src"))).toEqual([alex.avatarUrl, sam.avatarUrl]);
+    expect(circles[0]!.style.borderColor).toBe(alex.ring);
+    expect(circles[0]!.style.borderWidth).toBe("2px");
+    expect(circles[0]!.style.boxShadow).toBe(`0 0 0 1px ${alex.ring}`);
+    expect(circles[1]!.style.borderColor).toBe(sam.ring);
+    expect(circles[0]!.style.marginLeft).toBe("");
+    expect(circles[1]!.style.marginLeft).toBe("-4px");
+    expect(badge.textContent).toBe("");
+  });
+
+  it("adds a +N circle for anonymous viewers, and keeps a lone photo's failure fallback", async () => {
+    const { row } = renderReplacementRow();
+    dispose = mountThreadStatusFallback({ document });
+    replaceThreadStatuses(new Map([["thread-1", { ...viewing, stack: [alex], overflow: 2 }]]));
+    await settleObserver();
+    const circles = items(row);
+    expect(circles).toHaveLength(2);
+    expect(circles[1]!.textContent).toBe("+2");
+    expect(circles[1]!.querySelector("img")).toBeNull();
+    circles[0]!.querySelector("img")!.dispatchEvent(new Event("error"));
+    expect(circles[0]!.textContent).toBe("A");
+    expect(circles[0]!.style.background).toBe("rgb(47, 107, 184)");
+  });
+
+  it("goes back to a single badge when the stack empties, and to a stack again later", async () => {
+    const { row } = renderReplacementRow();
+    dispose = mountThreadStatusFallback({ document });
+    replaceThreadStatuses(new Map([["thread-1", viewing]]));
+    await settleObserver();
+    replaceThreadStatuses(new Map([["thread-1", { ...viewing, stack: [], overflow: 0, badge: "3" }]]));
+    await settleObserver();
+    const badge = row.querySelector<HTMLElement>("[data-bb-presence-badge]")!;
+    expect(items(row)).toHaveLength(0);
+    expect(badge.textContent).toBe("3");
+    replaceThreadStatuses(new Map([["thread-1", { ...viewing, stack: [sam], overflow: 0 }]]));
+    await settleObserver();
+    expect(items(row)).toHaveLength(1);
+    expect(badge.childNodes).toHaveLength(1);
+    expect(items(row)[0]!.querySelector("img")?.getAttribute("src")).toBe(sam.avatarUrl);
+  });
+});
+
+describe("where the badge sits", () => {
+  it("puts the badge in normal flow immediately before the title", async () => {
+    const { row, titleGroup, title } = renderReplacementRow();
+    dispose = mountThreadStatusFallback({ document });
+    replaceThreadStatuses(new Map([["thread-1", status]]));
+    await settleObserver();
+
+    const badge = row.querySelector<HTMLElement>("[data-bb-presence-badge]");
+    expect(badge).not.toBeNull();
+    expect(titleGroup.firstElementChild).toBe(badge);
+    expect(badge?.nextElementSibling).toBe(title);
+    expect(badge?.style.position).toBe("");
+    expect(badge?.style.right).toBe("");
+  });
+
+  it("keeps the ownership colour in the badge without drawing a leading row bracket", async () => {
+    const { row } = renderReplacementRow();
+    dispose = mountThreadStatusFallback({ document });
+    replaceThreadStatuses(new Map([["thread-1", { ...status, badgeColor: "hsl(210 55% 38%)" }]]));
+    await settleObserver();
+    expect(row.querySelector<HTMLElement>("[data-bb-presence-badge]")?.style.background)
+      .toBe("rgb(44, 97, 150)");
+    expect(row.style.boxShadow).toBe("");
+    expect(row.hasAttribute("data-bb-ownership-tint")).toBe(false);
+  });
+});
+
+describe("the badge must not sit on the title", () => {
+  it("takes its own layout space and leaves the host link styles untouched", async () => {
+    const { anchor, row, titleGroup } = renderReplacementRow();
+    anchor.style.paddingRight = "6px";
+    dispose = mountThreadStatusFallback({ document });
+    replaceThreadStatuses(new Map([["thread-1", status]]));
+    await settleObserver();
+
+    const badge = row.querySelector<HTMLElement>("[data-bb-presence-badge]");
+    expect(titleGroup.firstElementChild).toBe(badge);
+    expect(badge?.style.flexShrink).toBe("0");
+    expect(anchor.style.paddingLeft).toBe("");
+    expect(anchor.style.paddingRight).toBe("6px");
+
+    replaceThreadStatuses(new Map());
+    await settleObserver();
+    // Not left behind on a row we do not own.
+    expect(anchor.style.paddingRight).toBe("6px");
+    expect(row.style.boxShadow).toBe("");
+  });
+
+  it("leaves a row the native glyph already handles alone", async () => {
+    // Native rendering means BB positioned its own glyph properly.
+    const { anchor, row } = renderReplacementRow();
+    const native = document.createElement("span");
+    native.setAttribute("aria-label", status.label);
+    anchor.append(native);
+    dispose = mountThreadStatusFallback({ document });
+    replaceThreadStatuses(new Map([["thread-1", status]]));
+    await settleObserver();
+
+    expect(row.querySelector("[data-bb-presence-badge]")).toBeNull();
+    expect(anchor.style.paddingRight).toBe("");
+  });
+});
+
+describe("badge ink follows the badge colour", () => {
+  async function renderWith(badgeColor: string, badgeInk?: string) {
+    const { row } = renderReplacementRow();
+    dispose = mountThreadStatusFallback({ document });
+    replaceThreadStatuses(new Map([["thread-1", {
+      icon: "User", label: "Started by David", tone: "default" as const,
+      badge: "D", badgeColor, ...(badgeInk === undefined ? {} : { badgeInk }),
+    }]]));
+    await settleObserver();
+    return row.querySelector<HTMLElement>("[data-bb-presence-badge]");
+  }
+
+  it("uses the ink it was given, so a light chosen colour is still readable", async () => {
+    // The real failure this prevents: initials in hardcoded white on a pale colour
+    // somebody chose are invisible. The ink is decided from the fill (person-colors.ts)
+    // and carried here rather than re-derived.
+    const badge = await renderWith("#ffff99", "#111827");
+    expect(badge?.style.color).toBe("rgb(17, 24, 39)");
+  });
+
+  it("uses white on a dark chosen colour", async () => {
+    const badge = await renderWith("#111111", "#ffffff");
+    expect(badge?.style.color).toBe("rgb(255, 255, 255)");
+  });
+
+  it("falls back to white when no ink was supplied, as presence badges always were", async () => {
+    const badge = await renderWith("var(--success, #22c55e)");
+    expect(badge?.style.color).toBe("white");
+  });
+
+  it("repaints the ink when the status changes colour, rather than keeping the old one", async () => {
+    const { row } = renderReplacementRow();
+    dispose = mountThreadStatusFallback({ document });
+    const base = { icon: "User", label: "Started by David", tone: "default" as const, badge: "D" };
+    replaceThreadStatuses(new Map([["thread-1", { ...base, badgeColor: "#111111", badgeInk: "#ffffff" }]]));
+    await settleObserver();
+    replaceThreadStatuses(new Map([["thread-1", { ...base, badgeColor: "#ffff99", badgeInk: "#111827" }]]));
+    await settleObserver();
+    expect(row.querySelector<HTMLElement>("[data-bb-presence-badge]")?.style.color)
+      .toBe("rgb(17, 24, 39)");
+  });
+});

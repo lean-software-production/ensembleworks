@@ -1,0 +1,2478 @@
+#!/usr/bin/env python3
+"""relay — one tool for a Relay board: a REST-API CLI, and (with `relay execute`) the
+board *executor* that claims node-jobs from the server and runs them.
+
+This file is generic: it knows the Relay REST API and how to execute node-jobs, but
+NOTHING about any particular board's columns, agents, or skills. All of that lives
+server-side as flow data (ADR 0006) — the executor just runs the node it is handed.
+
+Config (env): RELAY_URL, RELAY_API_KEY  (a board key from /board/settings)
+Executor-local config: .relay/executor.json (worktree namespace + capacity)
+
+  relay execute [--once] [--dry-run] [--interval N]   # the executor
+  relay init [--config-url URL] [--url URL] [--no-self-update]   # scaffold a project (interactive)
+  relay board [--json]        relay card REF [--json]
+  relay why REF [--json]      # why isn't this card moving? — one plain-language answer
+  relay runs REF [--json]     # the card's runs + node executions, detail untruncated
+  relay executors [--json]    # who is connected, their capacity, and the jobs they hold
+  relay version [--json]      # the git SHA the deployed app was built from — no RELAY_API_KEY needed
+  relay comment REF TEXT      relay move REF STAGE        relay status REF STATUS
+  relay create TITLE [--stage N]  relay describe REF TEXT   relay needs-input REF [Q] [--questions @file]
+  relay own REF / release REF relay approve REF           relay reject REF NOTE
+  relay sub-tasks REF @file   relay check REF ID / uncheck REF ID   relay result REF @file
+  relay criteria REF @file    # acceptance criteria (numbered, authored at Spec)
+  relay attach REF FILE [--caption TEXT] [--json]
+  relay tag REF [VALUE]       # set the card's tag (omit VALUE to clear)
+
+TEXT/Q/NOTE accept "-" (stdin) or "@path" (file). --json for machine output;
+--field PATH prints one value bare (e.g. `relay card RLY-12 --field status`).
+"""
+import argparse
+import base64
+import collections
+import difflib
+import fcntl
+import hashlib
+import json
+import mimetypes
+import os
+import queue
+import random
+import re
+import shutil
+import signal
+import socket
+import subprocess
+import sys
+import tempfile
+import threading
+import time
+import urllib.error
+import urllib.request
+
+HERE = os.path.abspath(__file__)
+ROOT = os.path.dirname(os.path.dirname(HERE))
+EXECUTOR_CONFIG_PATH = os.path.join(ROOT, ".relay", "executor.json")
+DRY = False
+FORWARDER = None
+RUN_IDS = {}   # ref -> run_id of the run currently working it (RLY-112)
+NODE_JOB_IDS = {}   # ref -> node_job_id currently running it (executor mode, RLY-135)
+
+# ---- executor version (RLY-184) ----
+#
+# `bin/relay` is loaded into memory at process start, so a long-running `relay execute` keeps
+# serving whatever version it started with — forever, and silently — no matter how many times
+# this file is fixed and merged underneath it. Three cards died that way before anyone noticed.
+# So the executor DECLARES a version on every claim and heartbeat, the server declares the
+# minimum it will work with, and anything below that is refused work and visibly marked.
+#
+# Bump EXECUTOR_VERSION on ANY change to this file and paste the new fingerprint below;
+# bin/test_relay.py's ExecutorFingerprintGuardTest enforces it and prints the value to paste.
+EXECUTOR_VERSION = 24
+EXECUTOR_FINGERPRINT = "fe552facf9f48cb6f1b5f8057953126e738f2a168c2aa500e6f658f4774fbaff"
+
+# The two constant lines above are masked out of the hash: satisfying the guard (bump the
+# integer, paste the fingerprint) must not itself re-break it. Everything else in the file is
+# covered, so no behaviour change can slip through without a deliberate bump.
+FINGERPRINT_MASK = re.compile(r"(?m)^(EXECUTOR_VERSION|EXECUTOR_FINGERPRINT)\s*=.*$")
+
+
+def executor_fingerprint(source=None):
+    """sha256 of this file with the two version constants masked out (RLY-184).
+
+    No git dependency, so it behaves identically in a worktree, on a detached HEAD, or in CI."""
+    if source is None:
+        with open(HERE, encoding="utf-8") as f:
+            source = f.read()
+    masked = FINGERPRINT_MASK.sub(r"\1 = <masked>", source)
+    return hashlib.sha256(masked.encode()).hexdigest()
+
+
+def executor_ident(cfg):
+    """The `executor` dict on the wire, shared by claim_node_job and heartbeat_body (RLY-184).
+
+    Pure and named so bin/test_relay.py can pin `version` against
+    test/fixtures/executor_contract.json the same way outcome_body/heartbeat_body are pinned."""
+    return {"name": cfg["name"], "host": socket.gethostname(), "version": EXECUTOR_VERSION}
+
+
+def die(msg):
+    print(f"relay: {msg}", file=sys.stderr)
+    sys.exit(1)
+
+
+def log(msg, *, ref=None, kind="lifecycle"):
+    print(f"[relay] {msg}", flush=True)
+    forward(kind, msg, ref)
+
+
+# ============================ REST API client ============================
+
+def env(name):
+    v = os.environ.get(name)
+    return v or die(f"{name} is not set")
+
+
+API_MAX_ATTEMPTS = 3  # one initial try + up to two retries
+
+
+def _api_backoff(attempt):
+    """Sleep before retry `attempt` (1-based): 0.5s, then 1s. Isolated in a named
+    helper so tests can monkeypatch it to a no-op and not actually wait."""
+    time.sleep(0.5 * 2 ** (attempt - 1))
+
+
+def _retryable(method, err, idempotent=False):
+    """Whether a failed attempt with this HTTP method should be retried.
+
+    URLError (not an HTTPError): the server never processed the request, so a retry
+    can't double-apply — safe for any method. HTTPError 5xx: retry idempotent methods
+    (GET, PATCH), never a plain POST (could double-apply a mutation) — but an
+    explicitly `idempotent` POST retries too (RLY-202: the outcome POST, which the
+    server answers 200 on a duplicate finalize). 4xx: never."""
+    if isinstance(err, urllib.error.HTTPError):
+        return err.code >= 500 and (method in ("GET", "PATCH") or idempotent)
+    return isinstance(err, urllib.error.URLError)
+
+
+def api(method, path, body=None, soft_404=False, soft_conflict=False, timeout=None, auth=True, idempotent=False):
+    url = env("RELAY_URL").rstrip("/") + path
+    data = json.dumps(body).encode() if body is not None else None
+    req = urllib.request.Request(url, data=data, method=method)
+    if auth:
+        req.add_header("Authorization", f"Bearer {env('RELAY_API_KEY')}")
+    if data is not None:
+        req.add_header("Content-Type", "application/json")
+    # Pass a read timeout only when asked (the long-poll claim): a bare urlopen keeps the
+    # prior global-default behavior for every existing call, byte for byte.
+    open_kwargs = {} if timeout is None else {"timeout": timeout}
+    for attempt in range(1, API_MAX_ATTEMPTS + 1):
+        try:
+            with urllib.request.urlopen(req, **open_kwargs) as resp:
+                raw = resp.read()
+                return json.loads(raw) if raw else {}
+        except socket.timeout:
+            raise   # long-poll read timeout — the claim caller treats it as 'no work'
+        except urllib.error.HTTPError as e:
+            if soft_404 and e.code == 404:
+                return None
+            if soft_conflict and e.code == 409:
+                # A verdict, not a transient error (RLY-184): hand the body to the caller
+                # rather than die()ing into the loop's generic retry.
+                try:
+                    return json.loads(e.read())
+                except Exception:
+                    return {"error": {"code": "conflict"}}
+            if attempt < API_MAX_ATTEMPTS and _retryable(method, e, idempotent):
+                log(f"API {e.code} on {method} {path}, retrying "
+                    f"({attempt}/{API_MAX_ATTEMPTS - 1})", kind="error")
+                _api_backoff(attempt)
+                continue
+            try:
+                msg = json.loads(e.read())["error"]["message"]
+            except Exception:
+                msg = f"HTTP {e.code}"
+            die(f"API {e.code}: {msg}")
+        except urllib.error.URLError as e:
+            if attempt < API_MAX_ATTEMPTS and _retryable(method, e, idempotent):
+                log(f"request failed ({e.reason}) on {method} {path}, retrying "
+                    f"({attempt}/{API_MAX_ATTEMPTS - 1})", kind="error")
+                _api_backoff(attempt)
+                continue
+            die(f"request failed: {e.reason}")
+
+
+def _ref_from_tag(tag):
+    """Extract 'RLY-7' from a per-card feed tag like '[RLY-7] '; None if untagged."""
+    m = re.match(r"\[([^\]]+)\]", tag or "")
+    return m.group(1) if m else None
+
+
+def forward(kind, text, ref=None):
+    """Best-effort: hand one feed line to the background mirror, if one is running."""
+    if FORWARDER is not None:
+        FORWARDER.enqueue(kind, text, ref, RUN_IDS.get(ref), NODE_JOB_IDS.get(ref))
+
+
+class LogForwarder:
+    """Background thread mirroring the runner feed to POST /api/board/logs.
+
+    Best-effort by construction: enqueue() never blocks (drops when the bounded
+    queue is full) and _send() swallows every error — including api()'s die()
+    (SystemExit) — so the log path can never raise into or stall work()."""
+
+    def __init__(self, flush_interval=0.25, batch_size=50, max_queue=1000):
+        self.q = queue.Queue(maxsize=max_queue)
+        self.flush_interval = flush_interval
+        self.batch_size = batch_size
+        self._stop = threading.Event()
+        self._thread = threading.Thread(target=self._run, daemon=True)
+
+    def start(self):
+        self._thread.start()
+
+    def stop(self):
+        self._stop.set()
+
+    def enqueue(self, kind, text, ref=None, run_id=None, node_job_id=None):
+        item = {"kind": kind, "ref": ref, "text": text, "run_id": run_id}
+        if node_job_id is not None:
+            item["node_job_id"] = node_job_id
+        try:
+            self.q.put_nowait(item)
+        except queue.Full:
+            pass
+
+    def _drain(self):
+        batch = []
+        try:
+            batch.append(self.q.get(timeout=self.flush_interval))
+        except queue.Empty:
+            return batch
+        while len(batch) < self.batch_size:
+            try:
+                batch.append(self.q.get_nowait())
+            except queue.Empty:
+                break
+        return batch
+
+    def _send(self, batch):
+        try:
+            api("POST", "/api/board/logs", batch)
+        except SystemExit:  # api() die()s on HTTP/network error
+            pass
+        except Exception:
+            pass
+
+    def _run(self):
+        while not self._stop.is_set():
+            batch = self._drain()
+            if batch:
+                self._send(batch)
+
+
+# Agent names the Claude CLI provides itself rather than as a file on disk. Best-effort
+# allowlist that tracks the CLI: its only failure mode is a MISSED warning (an agent we
+# forgot to list here would be reported missing), never a false alarm about a real agent.
+BUILTIN_AGENTS = {"general-purpose", "Explore", "Plan", "claude", "statusline-setup"}
+
+
+def _md_stems(directory):
+    """File stems of `<directory>/*.md`. A missing directory contributes nothing."""
+    try:
+        names = os.listdir(directory)
+    except OSError:
+        return []
+    return [n[:-len(".md")] for n in names if n.endswith(".md")]
+
+
+def _skill_dirs(directory):
+    """Names of `<directory>/*/SKILL.md` skill directories. A directory without a SKILL.md
+    is not a skill — the name would not resolve."""
+    try:
+        names = os.listdir(directory)
+    except OSError:
+        return []
+    return [n for n in names if os.path.isfile(os.path.join(directory, n, "SKILL.md"))]
+
+
+def collect_capabilities():
+    """What this executor can actually resolve BY NAME — the question only the executor can
+    answer, since the server never sees its filesystem (RLY-182).
+
+    Scans the repo checkout AND the user-level ~/.claude, so a developer with agents
+    installed globally is not reported as missing them. Two different directories back a
+    slash command: `.claude/skills/<name>/SKILL.md` and `.claude/commands/<name>.md` —
+    /write-plan lives ONLY in commands/ on this very repo, so a resolver that checked
+    skills/ alone would report the Plan flow broken here."""
+    homes = [os.path.join(ROOT, ".claude"), os.path.expanduser("~/.claude")]
+    agents, skills = set(BUILTIN_AGENTS), set()
+    for home in homes:
+        agents.update(_md_stems(os.path.join(home, "agents")))
+        skills.update(_skill_dirs(os.path.join(home, "skills")))
+        skills.update(_md_stems(os.path.join(home, "commands")))
+    return {"agents": sorted(agents), "skills": sorted(skills)}
+
+
+def capabilities_hash(capabilities):
+    """Stable digest of an inventory, so the beat can send only on change."""
+    blob = json.dumps(capabilities, sort_keys=True).encode("utf-8")
+    return hashlib.sha256(blob).hexdigest()
+
+
+class ExecutorHeartbeat:
+    """Per-executor heartbeat for `relay execute`. POSTs
+    {executor, capacity, running:[job-ids]} to /api/node-jobs/heartbeat every `interval`s and
+    READS the response's revoked job-ids, handing each to `on_revoke` (§5).
+
+    This is the ONLY way an executor announces itself (RLY-164). It carries two things the
+    pull model has no other channel for:
+
+      * `capacity` — the CONFIGURED per-class totals (cfg["capacity"]), never
+        ExecutorPool.capacity()'s live free count. Relay.Runs.Capacity is what the scheduler
+        reads to decide whether to dispatch, it is lost on every app restart (hence a
+        REPEATING beat, not a one-shot at startup), and Scheduler.Server debits in-flight
+        :running runs server-side — so sending the decremented count would double-debit every
+        running run.
+      * the reply's revoked ids — how taking the baton (ADR 0004) or cancelling from the run
+        panel actually stops a live agent, instead of the executor finding out on its next
+        outcome POST 20+ minutes later.
+      * `capabilities` — the agents and skills this machine can resolve by name, sent on
+        startup and whenever the inventory changes (never on every beat). It is what
+        Relay.Runs.preflight_flow/1 reads to tell a human whether enabling a flow will
+        actually work, before the first card moves.
+
+    Best-effort by construction: swallows api()'s die() (SystemExit) and any other error, so a
+    heartbeat can never stall or raise into a job. soft_404 is kept as belt-and-braces for an
+    executor pointed at an older server, but the route now exists."""
+
+    def __init__(self, executor, running_fn, on_revoke, interval=15, capacity=None,
+                 bound_fn=None, on_release_run=None):
+        self.executor = executor
+        self.running_fn = running_fn
+        self.on_revoke = on_revoke
+        # RLY-218: the run-scoped release channel, symmetric with on_revoke one level up.
+        # bound_fn -> the idle-bound run-ids to report; on_release_run(run_id, status) -> tear
+        # down (done/cancelled) or retain (failed) that worktree. Both default to safe no-ops so
+        # a heartbeat constructed without them still beats.
+        self.bound_fn = bound_fn or (lambda: [])
+        self.on_release_run = on_release_run or (lambda _run_id, _status=None: None)
+        self.interval = interval
+        self.capacity = capacity or {}
+        # Last inventory hash the server ACKNOWLEDGED. None ⇒ send on the next beat, so the
+        # first beat after startup always carries it.
+        self._caps_hash = None
+        self._stop = threading.Event()
+        self._thread = threading.Thread(target=self._run, daemon=True)
+
+    def start(self):
+        self._thread.start()
+
+    def stop(self):
+        self._stop.set()
+
+    def _beat(self):
+        # A handful of listdir calls at the 15s interval — negligible, and it means a skill
+        # or agent added mid-session is reported without restarting the executor.
+        capabilities = collect_capabilities()
+        digest = capabilities_hash(capabilities)
+        send = capabilities if digest != self._caps_hash else None
+        try:
+            resp = api("POST", "/api/node-jobs/heartbeat",
+                       heartbeat_body(self.executor, self.capacity, self.running_fn(),
+                                      self.bound_fn(), send),
+                       soft_404=True) or {}
+            # Only a SUCCESSFUL post advances the stored hash: a failed POST must leave it
+            # alone so the next beat retries.
+            if send is not None:
+                self._caps_hash = digest
+            # The server holds no inventory for this row (recreated row, or an executor
+            # predating RLY-182). Forget what we think it knows and resend next beat —
+            # without this nudge a recreated row shows a permanent, FALSE "missing agents".
+            if resp.get("want_capabilities"):
+                self._caps_hash = None
+            for job_id in resp.get("revoked", []):
+                self.on_revoke(job_id)
+            for item in resp.get("release_runs", []):
+                # RLY-231: the reply now names each terminal bound run with its STATUS so the
+                # recovery teardown can remove (done/cancelled) vs retain (failed). Tolerate the
+                # legacy bare-int form (status None → remove) for a server mid-deploy.
+                if isinstance(item, dict):
+                    self.on_release_run(item.get("run_id"), item.get("status"))
+                else:
+                    self.on_release_run(item, None)
+        except SystemExit:      # api() die()s on HTTP/network error
+            pass
+        except Exception:
+            pass
+
+    def _run(self):
+        while not self._stop.wait(self.interval):
+            self._beat()
+
+
+def read_arg(text):
+    if text == "-":
+        return sys.stdin.read()
+    if text.startswith("@"):
+        with open(text[1:], encoding="utf-8") as f:
+            return f.read()
+    return text
+
+
+def get_board():
+    return api("GET", "/api/board")
+
+
+def get_card(ref):
+    return api("GET", f"/api/cards/{ref}")["data"]
+
+
+def resolve_stage_id(name, board=None):
+    board = board or get_board()
+    for s in board["stages"]:
+        if s["name"] == name:
+            return s["id"]
+    die(f'no stage named "{name}". stages: ' + ", ".join(s["name"] for s in board["stages"]))
+
+
+# board mutations (used by both the CLI and the runner)
+def own(ref):
+    return api("PATCH", f"/api/cards/{ref}", {"owners": ["agent"]})["data"]
+
+
+def release(ref):
+    return api("PATCH", f"/api/cards/{ref}", {"owners": []})["data"]
+
+
+def set_status(ref, status):
+    return api("PATCH", f"/api/cards/{ref}", {"status": status})["data"]
+
+
+def set_description(ref, text):
+    return api("PATCH", f"/api/cards/{ref}", {"description": text})["data"]
+
+
+def set_acceptance_criteria(ref, text):
+    return api("PATCH", f"/api/cards/{ref}", {"acceptance_criteria": text})["data"]
+
+
+def set_spec(ref, text):
+    return api("PATCH", f"/api/cards/{ref}", {"spec": text})["data"]
+
+
+def set_plan(ref, text):
+    return api("PATCH", f"/api/cards/{ref}", {"plan": text})["data"]
+
+
+def set_branch(ref, name):
+    return api("PATCH", f"/api/cards/{ref}", {"branch": name})["data"]
+
+
+def set_pr_url(ref, url):
+    return api("PATCH", f"/api/cards/{ref}", {"pr_url": url})["data"]
+
+
+def set_tag(ref, value):
+    return api("PATCH", f"/api/cards/{ref}", {"tag": value or None})["data"]
+
+
+def set_sub_tasks(ref, text):
+    return api("PATCH", f"/api/cards/{ref}", {"sub_tasks": _parse_sub_tasks(text)})["data"]
+
+
+def _parse_sub_tasks(text):
+    """A JSON array (of strings or {title,done} objects) or newline-per-item text."""
+    text = text.strip()
+    if text.startswith("["):
+        return [{"title": i} if isinstance(i, str) else i for i in json.loads(text)]
+    return [{"title": line.strip()} for line in text.splitlines() if line.strip()]
+
+
+def set_sub_task_done(ref, sub_task_id, done):
+    return api("PATCH", f"/api/cards/{ref}/sub-tasks/{sub_task_id}", {"done": done})["data"]
+
+
+def set_result(ref, text):
+    return api("PATCH", f"/api/cards/{ref}", {"ai_result": json.loads(text)})["data"]
+
+
+def move(ref, stage_name):
+    return api("POST", f"/api/cards/{ref}/move", {"stage": resolve_stage_id(stage_name)})["data"]
+
+
+def create_card(title, stage_name=None, description=None, tag=None):
+    body = {"title": title}
+    if stage_name is not None:
+        body["stage"] = resolve_stage_id(stage_name)
+    if description is not None:
+        body["description"] = description
+    if tag is not None:
+        body["tag"] = tag
+    return api("POST", "/api/cards", body)["data"]
+
+
+def comment(ref, text):
+    return api("POST", f"/api/cards/{ref}/comments", {"body": text})
+
+
+def attach(ref, path):
+    with open(path, "rb") as f:
+        data = f.read()
+    content_type = mimetypes.guess_type(path)[0] or "application/octet-stream"
+    body = {
+        "filename": os.path.basename(path),
+        "content_type": content_type,
+        "data_base64": base64.b64encode(data).decode(),
+    }
+    return api("POST", f"/api/cards/{ref}/attachments", body)["data"]
+
+
+def needs_input_body(question, questions_raw):
+    """POST body for needs-input: {"question": ...} for a plain ask, or a validated
+    {"questions": [...]} from the JSON in questions_raw (already resolved from @file/stdin)."""
+    if questions_raw is None:
+        return {"question": question}
+    try:
+        parsed = json.loads(questions_raw)
+    except json.JSONDecodeError as e:
+        die(f"--questions is not valid JSON: {e}")
+    if not isinstance(parsed, list) or not parsed:
+        die("--questions must be a non-empty JSON array of question objects")
+    return {"questions": parsed}
+
+
+def needs_input(ref, question=None, questions_raw=None):
+    body = needs_input_body(question, questions_raw)
+    return api("POST", f"/api/cards/{ref}/needs-input", body)["data"]
+
+
+# ============================ rendering ============================
+
+def card_line(c):
+    return f'{c["ref"]} [{c.get("status", "?")}/{c.get("active_owner") or "-"}] {c["title"]}'
+
+
+def print_card(c):
+    r = c.get("rejection")
+    if r:
+        date = (r.get("rejected_at") or "")[:10]
+        print(f'⚠  CHANGES REQUESTED — sent back to {r.get("to_stage")} '
+              f'by {r.get("rejected_by")} ({date})')
+        print(f'   {r.get("note", "")}')
+        print("   Address this, then redo the stage.\n")
+    owners = ", ".join(o.get("name", "?") for o in c.get("owners", []))
+    print(f'{c["ref"]}  {c["title"]}')
+    line = f'status: {c.get("status", "?")}   active: {c.get("active_owner") or "-"}   owners: {owners}'
+    if c.get("tag"):
+        line += f'   tag: #{c["tag"]}'
+    print(line + "\n")
+    print(c.get("description") or "(no description)")
+    if c.get("acceptance_criteria"):
+        print("\n--- acceptance criteria ---")
+        print(c["acceptance_criteria"])
+    if c.get("spec"):
+        print("\n--- spec ---")
+        print(c["spec"])
+    for e in c.get("timeline") or []:
+        who = e.get("author", {}).get("name", "?")
+        if e.get("kind") == "comment":
+            print(f"  - {who}: {e.get('body', '')}")
+        else:
+            detail = e.get("text") or e.get("meta") or ""
+            print(f"  * {who} {e.get('type', '')} {detail}".rstrip())
+
+
+def print_why(d):
+    """The prose answer to "why isn't this card moving?" — one or two sentences, never a
+    JSON dump. `--json` is there for the full structure; this is what a human reads."""
+    print(f'{d.get("verdict", "?")}: {d.get("detail", "")}'.rstrip())
+    last = (d.get("evidence") or {}).get("last_execution") or {}
+    if last.get("detail"):
+        print(f'\n--- {last.get("node_key", "?")} ({last.get("outcome", "?")}) ---')
+        print(last["detail"])
+
+
+def indent(text, prefix):
+    return "\n".join(prefix + line for line in text.splitlines())
+
+
+def format_runs(runs):
+    """The card's runs and every node execution, with detail printed IN FULL — truncating
+    it is what sent an operator to `fly ssh console` in the first place (RLY-177)."""
+    out = []
+    for r in runs:
+        out.append(f'run {r.get("id")}  {r.get("flow_key", "?")}  [{r.get("status", "?")}]'
+                   f'  node: {r.get("current_node") or "-"}'
+                   f'  {r.get("started_at") or ""} → {r.get("finished_at") or "…"}')
+        for e in r.get("node_executions") or []:
+            out.append(f'  - {e.get("node_key", "?")} '
+                       f'(visit {e.get("visit", "?")}, attempt {e.get("attempt", "?")}) '
+                       f'→ {e.get("outcome") or "running"}')
+            if e.get("detail"):
+                out.append(indent(e["detail"], "      "))
+        if r.get("failure_detail"):
+            out.append("  failure_detail:")
+            out.append(indent(r["failure_detail"], "      "))
+    return "\n".join(out) if out else "(no runs)"
+
+
+def format_executors(executors):
+    out = []
+    for e in executors:
+        caps = " ".join(f"{k}={v}" for k, v in sorted((e.get("capacity") or {}).items()))
+        # outdated is orthogonal to staleness (RLY-184): a beating-normally executor can
+        # still be refused work for running old code, so it gets its own flag rather than
+        # folding into STALE.
+        flags = "".join([
+            "  STALE" if e.get("stale?") else "",
+            "  OUTDATED" if e.get("outdated") else "",
+        ])
+        out.append(f'{e.get("name", "?")} @ {e.get("host") or "?"}  {caps}  '
+                   f'heartbeat: {e.get("last_heartbeat") or "never"}{flags}')
+        for j in e.get("jobs") or []:
+            out.append(f'  - job {j.get("id")} {j.get("ref", "?")} {j.get("node_key", "?")} [{j.get("state", "?")}]')
+    return "\n".join(out) if out else "(no executors connected)"
+
+
+def format_board(b):
+    by_stage = {}
+    for c in b["cards"]:
+        by_stage.setdefault(c["stage_id"], []).append(c)
+    out = [f'{b["board"]["name"]} ({b["board"]["key"]})\n']
+    for s in b["stages"]:
+        out.append(f'{s["name"]} ({s["type"]})')
+        cards = by_stage.get(s["id"]) or []
+        out.extend("  " + card_line(c) for c in cards)
+        if not cards:
+            out.append("  (empty)")
+        out.append("")
+    return "\n".join(out)
+
+
+def select_field(data, path):
+    """Resolve a dotted path (`status`, `owners.0.name`) against decoded JSON. Dies
+    non-zero on an unresolvable path — a silent empty line would read as "the field is
+    empty", which is exactly the ambiguity this exists to remove."""
+    cur = data
+    for part in path.split("."):
+        if isinstance(cur, list):
+            try:
+                cur = cur[int(part)]
+            except (ValueError, IndexError):
+                die(f"--field: no such path: {path}")
+        elif isinstance(cur, dict) and part in cur:
+            cur = cur[part]
+        else:
+            die(f"--field: no such path: {path}")
+    return cur
+
+
+def render_field(value):
+    """Bare value, no quotes or braces: the whole point is that reading one value needs no
+    piping into `python3 -c` or `jq`. Containers still print as JSON — there is no sensible
+    bare rendering of a list."""
+    if isinstance(value, (dict, list)):
+        return json.dumps(value, indent=2)
+    if value is None:
+        return ""
+    if isinstance(value, bool):
+        return "true" if value else "false"
+    return str(value)
+
+
+def emit(args, data, human):
+    """`human` is a string, or a zero-arg callable for renderers that print directly."""
+    field = getattr(args, "field", None)
+    if field:
+        print(render_field(select_field(data, field)))
+    elif getattr(args, "json", False):
+        print(json.dumps(data, indent=2))
+    elif callable(human):
+        human()
+    else:
+        print(human)
+
+
+# ============================ CLI commands ============================
+
+def cmd_board(args):
+    path = "/api/board?include_done=1" if getattr(args, "include_done", False) else "/api/board"
+    b = api("GET", path)
+    emit(args, b, lambda: print(format_board(b)))
+
+
+def cmd_card(args):
+    c = get_card(args.ref)
+    emit(args, c, lambda: print_card(c))
+
+
+def cmd_why(args):
+    d = api("GET", f"/api/cards/{args.ref}/diagnosis")["data"]
+    emit(args, d, lambda: print_why(d))
+
+
+def cmd_retry(args):
+    """Re-enter a terminally failed run at the node that died (RLY-189).
+
+    The server refuses with a 422 whose message names the reason; api() turns that
+    into a die() — a silent success on a refused retry is the failure mode this
+    command exists to prevent."""
+    body = {"at": args.at} if getattr(args, "at", None) else {}
+    d = api("POST", f"/api/cards/{args.ref}/retry", body)["data"]
+    emit(args, d, lambda: log(f"{args.ref}: run {d['run_id']} re-entered at {d['node']} "
+                              f"(retry {d['retries']})"))
+
+
+def cmd_runs(args):
+    runs = api("GET", f"/api/cards/{args.ref}/runs")["data"]
+    emit(args, runs, lambda: print(format_runs(runs)))
+
+
+def cmd_executors(args):
+    executors = api("GET", "/api/executors")["data"]
+    emit(args, executors, lambda: print(format_executors(executors)))
+
+
+def cmd_flow_stats(args):
+    path = f"/api/flows/{args.key}/metrics"
+    if getattr(args, "window", None):
+        path += f"?window={args.window}"
+    data = api("GET", path)["data"]
+    emit(args, data, lambda: print(format_flow_stats(args.key, data)))
+
+
+def format_flow_stats(key, data):
+    s = data["summary"]
+    lines = [
+        f"{key} flow — {s['total_runs']} runs, {s['completed']} completed ({s['completed_pct']}%)",
+        f"  total spend: {s['total_spend'] or '—'}   median end-to-end: {s['median_end_to_end'] or '—'}s",
+        "",
+        f"  {'NODE':<20} {'RUNS':>5} {'DUR p50/p95':>14} {'COST p50/p95':>16} {'ATT':>5} {'LAPS':>5}",
+    ]
+    for n in data["nodes"]:
+        dur = f"{n['duration_p50']}/{n['duration_p95']}"
+        cost = f"{n['cost_p50'] or '—'}/{n['cost_p95'] or '—'}"
+        lines.append(
+            f"  {n['node_key']:<20} {n['runs']:>5} {dur:>14} {cost:>16} "
+            f"{n['attempts_mean']:>5.1f} {n['loop_laps']:>5}"
+        )
+    return "\n".join(lines)
+
+
+def cmd_version(args):
+    # auth=False: /api/version is unauthenticated by design (RLY-177) so this is the one
+    # verb answerable with only RELAY_URL — no board key required.
+    v = api("GET", "/api/version", auth=False)
+    emit(args, v, f'{v.get("sha", "unknown")}  built {v.get("built_at", "unknown")}  (v{v.get("version", "?")})')
+
+
+def cmd_create(args):
+    card = create_card(
+        args.title,
+        stage_name=args.stage,
+        description=read_arg(args.description) if args.description is not None else None,
+        tag=args.tag,
+    )
+    emit(args, card, lambda: print_card(card))
+
+
+def _simple(fn):
+    """Wrap a mutation returning a card into a CLI handler that prints it."""
+    def run(args):
+        card = fn(args)
+        emit(args, card, card_line(card))
+    return run
+
+
+def cmd_reject(args):
+    card = api("POST", f"/api/cards/{args.ref}/reject", {"note": read_arg(args.note)})["data"]
+    emit(args, card, card_line(card))
+
+
+def cmd_needs_input(args):
+    question = read_arg(args.question) if args.question is not None else None
+    questions_raw = read_arg(args.questions) if args.questions is not None else None
+    if question is None and questions_raw is None:
+        die("needs-input needs a QUESTION argument or --questions")
+    card = needs_input(args.ref, question, questions_raw)
+    emit(args, card, card_line(card))
+
+
+def cmd_comment(args):
+    comment(args.ref, read_arg(args.text))
+    print(f"{args.ref}: comment posted")
+
+
+def cmd_attach(args):
+    data = attach(args.ref, args.file)
+    # --caption rewrites the alt text client-side; otherwise use the server's snippet.
+    md = f"![{args.caption}]({data['url']})" if args.caption else data["markdown"]
+    emit(args, {**data, "markdown": md}, md)
+
+
+# ============================ the executor ============================
+
+def load_executor_config():
+    """Executor-local config from .relay/executor.json. Missing file → sensible defaults;
+    capacity is the only field a developer routinely edits (ADR 0006, table 1)."""
+    defaults = {
+        "name": socket.gethostname(),
+        "namespace": "exec",
+        "capacity": {"shared_clean": 1, "exclusive": 1},
+        "poll_timeout": 25,
+        "heartbeat_interval": 15,
+        "max_retained_failed": 3,
+    }
+    try:
+        with open(EXECUTOR_CONFIG_PATH) as f:
+            cfg = json.load(f)
+    except FileNotFoundError:
+        return defaults
+    except json.JSONDecodeError as e:
+        die(f"{EXECUTOR_CONFIG_PATH} is not valid JSON: {e}")
+    merged = {**defaults, **cfg}
+    merged["capacity"] = {**defaults["capacity"], **(cfg.get("capacity") or {})}
+    return merged
+
+
+WORKTREES_DIR = os.path.join(ROOT, ".claude", "worktrees")
+
+
+def worktree_path(name):
+    return os.path.join(WORKTREES_DIR, name)
+
+
+# ---- ref-updating git fetch, with retry (RLY-224) ----
+#
+# Every exclusive worktree shares ONE .git object store and ref db (they are `git worktree`s
+# of one clone). Two runs' `branch` nodes fetching at once therefore race on
+# refs/remotes/origin/main and one dies with "cannot lock ref … unable to update local ref".
+# The race is transient — a rerun clears it — so retry ANY nonzero fetch a bounded number of
+# times with short jittered backoff, and surface the real captured stderr on the final attempt.
+# Retry is deliberately NOT gated on the lock message: those strings are git-version/locale
+# fragile, and a genuine bad-remote/auth failure costs only a few short backoffs before it
+# surfaces verbatim (RLY-224 AC #3).
+#
+# Future (RLY-224 direction #3, deferred): if retry proves flaky under load, serialize
+# ref-updating fetches across slots with RLY-193's flock instead of racing + retrying. Do NOT
+# give each worktree its own clone — that defeats the shared object store and balloons disk.
+GIT_FETCH_MAX_ATTEMPTS = 4  # one try + three retries; a ref-lock race clears well within this
+
+
+def _fetch_backoff(attempt):
+    """Sleep a short, jittered interval before fetch retry `attempt` (1-based). Jittered so two
+    racing slots don't resynchronize onto the same retry instant. Isolated in a named helper so
+    tests monkeypatch it to a no-op instead of actually waiting."""
+    time.sleep(random.uniform(0.1, 0.3) * attempt)
+
+
+def git_fetch_with_retry(cwd):
+    """`git fetch origin --prune` in `cwd`, retried on the shared-ref-db race (RLY-224).
+
+    Returns True on success. On final failure prints the captured stderr to sys.stderr and
+    returns False, so a genuinely broken fetch still surfaces its real error."""
+    last_err = ""
+    for attempt in range(1, GIT_FETCH_MAX_ATTEMPTS + 1):
+        proc = subprocess.run(["git", "fetch", "origin", "--prune"], cwd=cwd,
+                               capture_output=True, text=True)
+        if proc.returncode == 0:
+            return True
+        last_err = proc.stderr or proc.stdout or ""
+        if attempt < GIT_FETCH_MAX_ATTEMPTS:
+            _fetch_backoff(attempt)
+    sys.stderr.write(last_err)
+    return False
+
+
+def cmd_git_fetch(args):
+    """`relay git-fetch` — the shell-node entry point to git_fetch_with_retry (RLY-224).
+
+    Flow shell nodes (the `branch` node and the @rebase_onto_main sync/resync) call this so a
+    transient ref-lock race retries instead of killing the run; it exits nonzero on final
+    failure so the node's :failed edge still fires for a genuinely broken fetch."""
+    if not git_fetch_with_retry(ROOT):
+        sys.exit(1)
+
+
+def ensure_worktree(name, base):
+    """Create <WORKTREES_DIR>/<name> as a DETACHED checkout at `base` if missing,
+    so it never holds a branch and cannot collide with ROOT's checked-out branch."""
+    path = worktree_path(name)
+    if os.path.isdir(path):
+        return path
+    if not git_fetch_with_retry(ROOT):
+        die("git fetch failed while preparing a worktree")
+    subprocess.run(["git", "worktree", "add", "--detach", path, base],
+                   cwd=ROOT, check=True)
+    return path
+
+
+def reset_worktree(path, base):
+    """Force `path` to a clean detached checkout of `base`, whatever state it is in.
+
+    A pool worktree is scratch space, but a job that dies mid-run can leave edits
+    behind — and `git checkout` REFUSES to clobber them. That is not a small thing:
+    an uncommitted edit once sat in work-1 and silently failed every Code stage two
+    seconds in, for hours, reported only as "Code stage did not complete". So
+    preparing a worktree must never be blockable by leftovers.
+
+    Leftovers are stashed rather than dropped: that stranded edit turned out to
+    contain a real fix, so silent destruction is the wrong default. Recover with
+    `git stash list` in the worktree. The salvage is best-effort — the hard reset
+    runs regardless, so a dirty worktree can never block a job again.
+    """
+    dirty = subprocess.run(["git", "status", "--porcelain"], cwd=path,
+                           capture_output=True, text=True).stdout.strip()
+    if dirty:
+        log(f"  salvaging leftovers in {path} → git stash (recover with `git stash list`)")
+        subprocess.run(["git", "stash", "push", "-u", "-m",
+                        f"auto-salvage before {base}"], cwd=path, check=False)
+    subprocess.run(["git", "reset", "--hard", "-q"], cwd=path, check=False)
+    # -fd, NOT -fdx: gitignored build caches (deps/, _build/, node_modules/) must
+    # survive or every job pays a full rebuild.
+    subprocess.run(["git", "clean", "-fdq"], cwd=path, check=False)
+    subprocess.run(["git", "checkout", "--detach", base], cwd=path, check=False)
+
+
+def refresh_worktree(name, base):
+    """Fast-forward an existing detached worktree to `base`. Caller guarantees the
+    worktree is idle (no in-flight job using it)."""
+    path = worktree_path(name)
+    if not os.path.isdir(path):
+        return
+    git_fetch_with_retry(ROOT)
+    reset_worktree(path, base)
+
+
+def scratch_path(slot_path, ref, node):
+    """Where an agent node writes scratch output (findings, logs) — RLY-214.
+
+    `tmp/<REF>/<node>.md` inside the worktree. Namespacing by REF makes cross-card
+    collision impossible even in the shared_clean worktree, where several jobs run at
+    once and per-worktree isolation buys nothing: an agent reading a leftover file can
+    only ever read its OWN card's.
+
+    Derived from (ref, node) and NOTHING ephemeral — no job id, attempt, pid or
+    timestamp. An executor that dies mid-node is re-queued by RLY-170's orphan recovery,
+    and the replacement process must resolve this same path and see what the dead one
+    left. Repeated attempts at one node therefore share a file, which is intended;
+    different nodes of one card do not.
+
+    Safe inside the checkout: .gitignore's `/tmp/` hides it from `git status --porcelain`
+    (so reset_worktree's salvage never stashes it) and from `git clean -fd` (so it
+    survives a reset, which is what makes returning to a card useful).
+    """
+    return os.path.join(slot_path, "tmp", ref, f"{node}.md")
+
+
+def plan_path(slot_path, ref):
+    """Where the Code flow's `branch` node materializes the card's plan — RLY-223.
+
+    `tmp/<REF>/plan.md` inside the worktree. Unlike `scratch_path`, this is per-REF and
+    deliberately NODE-INDEPENDENT: the `branch` node writes it and the `implement` node (a
+    different node id) reads the SAME file, so the path derives only from (slot, ref).
+
+    This kills the RLY-194 cross-run leak by construction. A worktree-root `plan.md` is
+    gitignored and so survives `git clean -fd`; after a slot is reused (RLY-218 slot
+    instability) `implement` could then read the PREVIOUS run's plan. Namespacing by REF makes
+    two runs' plans different files, so slot reuse can never surface the wrong plan.
+
+    Shares `tmp/<REF>/` with `scratch_path`, so it inherits the same `.gitignore` (`/tmp/`)
+    coverage — the plan survives `reset_worktree` and is never committed — and the directory is
+    already created once per node in `run_node_job`.
+    """
+    return os.path.join(slot_path, "tmp", ref, "plan.md")
+
+
+# Lifecycle vocabulary — pinned to the Elixir source (Schemas.*) through
+# test/fixtures/executor_contract.json and asserted by ExecutorVocabularyContractTest in
+# bin/test_relay.py (RLY-203). Change a member here only alongside the owning Ecto enum.
+# (NODE_OUTCOMES is defined near the CLI below and is pinned the same way.)
+ACTIVE_RUN_STATES = ("running", "parked")
+TERMINAL_RUN_STATES = ("done", "failed", "cancelled")
+ISOLATION_CLASSES = ("shared_clean", "exclusive")
+
+
+RETAINED_MARKER = ".relay-retained"   # gitignored sentinel at a retained worktree's root
+
+
+def _sanitize_ref(ref):
+    """A filesystem/git-safe worktree suffix from a card ref. Refs are normally already
+    safe (`RLY-231`); this only guards a ref that carries a slash or space."""
+    return re.sub(r"[^A-Za-z0-9._-]", "-", str(ref))
+
+
+class ExecutorPool:
+    """Executor-local worktree mapping (never sent to the server). Namespace-disjoint from the
+    watcher's work pool so both runners run at once.
+
+      shared_clean -> one shared worktree `<ns>-clean`, up to `capacity.shared_clean` concurrent
+                      jobs, REUSED (never reset per-job); fast-forwarded to base only when every
+                      shared slot is idle (the watcher's scan() discipline). UNCHANGED (RLY-231).
+      exclusive    -> ONE worktree PER CARD, `<ns>-<ref>`, created on the card's first job and
+                      torn down when the run terminates (RLY-231). Never reused across cards.
+                      Identity is the card's branch, so cross-contamination is impossible by
+                      construction; the binding is derivable from `git worktree list`, so a
+                      restart re-derives it (recover()).
+
+    Each exclusive worktree is tracked in `self.wts` (name -> record) in one of two states:
+      active   -> bound to a non-terminal run; counts toward `max_worktrees`; holds a
+                  MIX_TEST_PARTITION index (RLY-213); `live` True while a job runs in it.
+      retained -> a `failed` run's leftover kept for post-mortem; NOT counted; no partition;
+                  marked on disk (RETAINED_MARKER); evictable oldest-first past
+                  `max_retained_failed` or under capacity pressure.
+    """
+
+    def __init__(self, cfg, base="origin/main"):
+        self.ns = cfg.get("namespace", "exec")
+        self.base = base
+        self.cfg = cfg
+        self.cap_shared = cfg["capacity"]["shared_clean"]
+        self.max_worktrees = cfg["capacity"]["exclusive"]
+        self.max_retained_failed = cfg.get("max_retained_failed", 3)
+        self.shared_name = f"{self.ns}-clean"
+        self.shared_used = 0
+        # name -> {"run_id", "state": "active"|"retained", "live": bool, "partition": str|None}
+        self.wts = {}
+        # free MIX_TEST_PARTITION indices for active worktrees (RLY-213); "0" is shared_clean's.
+        self.free_partitions = [str(i) for i in range(1, self.max_worktrees + 1)]
+        self.lock = threading.Lock()
+
+    # ---- names ----------------------------------------------------------
+    def wt_name(self, ref):
+        return f"{self.ns}-{_sanitize_ref(ref)}"
+
+    def _retired_pool_slot(self, name):
+        """True if `name` is a `<ns>-work-N` worktree from the RETIRED fixed pool (RLY-231).
+        No real card ref sanitizes to `work-N`, so this shape is unambiguously a stale slot to
+        reclaim on recover(), never a per-card worktree to adopt."""
+        return re.fullmatch(rf"{re.escape(self.ns)}-work-\d+", name) is not None
+
+    # ---- partition free-list (RLY-213), caller holds self.lock ----------
+    def _take_partition(self):
+        return self.free_partitions.pop(0) if self.free_partitions else None
+
+    def _release_partition(self, rec):
+        if rec.get("partition") is not None:
+            self.free_partitions.append(rec["partition"])
+            self.free_partitions.sort(key=int)
+            rec["partition"] = None
+
+    def _active_count(self):
+        return sum(1 for r in self.wts.values() if r["state"] == "active")
+
+    def partition_for(self, slot):
+        """The MIX_TEST_PARTITION for a worktree (RLY-213). shared_clean -> "0"; an active
+        per-card worktree -> its held index; anything else -> "0" (safe default)."""
+        if slot == self.shared_name:
+            return "0"
+        with self.lock:
+            rec = self.wts.get(slot)
+            return rec["partition"] if rec and rec.get("partition") else "0"
+
+    # ---- capacity / polling --------------------------------------------
+    def capacity(self):
+        with self.lock:
+            return {
+                "shared_clean": max(0, self.cap_shared - self.shared_used),
+                "exclusive": max(0, self.max_worktrees - self._active_count()),
+            }
+
+    def has_bound_slots(self):
+        """True while any ACTIVE per-card worktree is bound to a run — the poller keeps polling
+        so a pinned resume/next job can be handed over regardless of advertised capacity.
+        Retained worktrees are terminal and do NOT keep the poller alive."""
+        with self.lock:
+            return any(r["state"] == "active" for r in self.wts.values())
+
+    # ---- assign ---------------------------------------------------------
+    def assign(self, job):
+        """Reserve a worktree for `job`; return (slot_name, reset?) or None if none is free.
+        reset? is True when the worktree must be created/re-baselined + warmed (first job of a
+        run, or reclaim of a retained one) and False when a live/recovered worktree is reused."""
+        iso = job["isolation"]
+        run_id = job["run_id"]
+        with self.lock:
+            if iso == "shared_clean":
+                if self.shared_used >= self.cap_shared:
+                    return None
+                self.shared_used += 1
+                return self.shared_name, False
+
+            name = self.wt_name(job["vars"]["ref"])
+            rec = self.wts.get(name)
+
+            # Reuse an active worktree already bound to this run (a later node), OR one recovered
+            # from disk with an unknown binding (run_id None) that this job now adopts. Never
+            # re-baseline here — the branch holds the run's commits.
+            if rec and rec["state"] == "active" and rec["run_id"] in (run_id, None):
+                rec["run_id"] = run_id
+                rec["live"] = True
+                return name, False
+
+            # Reclaim a retained (failed) worktree for a new run of the same card: re-baseline it.
+            if rec and rec["state"] == "retained":
+                if self._active_count() >= self.max_worktrees:
+                    return None
+                if rec.get("partition") is None:
+                    rec["partition"] = self._take_partition()
+                rec.update(run_id=run_id, state="active", live=True)
+                return name, True
+
+            # A brand-new card: create a fresh worktree if there is room.
+            if rec is None:
+                if self._active_count() >= self.max_worktrees:
+                    return None
+                self.wts[name] = {"run_id": run_id, "state": "active", "live": True,
+                                  "partition": self._take_partition()}
+                return name, True
+
+            # rec is active but bound to a *different* live run (should not happen — one card
+            # never runs twice at once). Refuse rather than steal a live worktree.
+            return None
+
+    # ---- release (outcome / revoke path) --------------------------------
+    def release(self, job, slot, run_state):
+        """Free/keep the worktree per the outcome's run_state. shared_clean always frees a slot.
+        For an exclusive per-card worktree: running/parked keep it active; done/cancelled tear it
+        down; failed retains it; a revoke (run_state=None) leaves it active and bound so the
+        pinned run resumes in it (the mid-run reset-on-revoke is GONE — never-detach, RLY-231)."""
+        if job["isolation"] == "shared_clean":
+            with self.lock:
+                self.shared_used = max(0, self.shared_used - 1)
+            return
+        with self.lock:
+            rec = self.wts.get(slot)
+            if rec is None:
+                return
+            rec["live"] = False
+            if run_state is None or run_state in ACTIVE_RUN_STATES:
+                return                                  # revoke or still-live: keep active+bound
+            self._finish_locked(slot, rec, run_state)
+
+    def release_run(self, run_id, status=None):
+        """Recovery path: the heartbeat named `run_id` terminal (server-side) while this executor
+        holds its worktree with no live job. Tear it down (done/cancelled) or retain it (failed)
+        per `status`. A legacy server may send status=None → default to removal (the old
+        behavior). Never touch a worktree with a live job (defense-in-depth)."""
+        with self.lock:
+            for name, rec in list(self.wts.items()):
+                if rec["run_id"] == run_id and rec["state"] == "active" and not rec["live"]:
+                    self._finish_locked(name, rec, status or "done")
+
+    def _finish_locked(self, slot, rec, run_state):
+        """Terminal disposition of an active worktree. Caller holds self.lock."""
+        self._release_partition(rec)
+        if run_state == "failed":
+            rec["state"] = "retained"
+            rec["run_id"] = None
+            self._teardown(slot, retain=True)
+            self._evict_retained_over_cap_locked()
+        else:  # done | cancelled
+            self.wts.pop(slot, None)
+            self._teardown(slot, retain=False)
+
+    def idle_bound_run_ids(self):
+        """Run-ids of ACTIVE worktrees with no live job — the heartbeat's `bound_runs`. A
+        worktree with a live job is excluded so the server can never name a still-running run for
+        release. Recovered worktrees (run_id None) are excluded (nothing to report yet)."""
+        with self.lock:
+            return list({r["run_id"] for r in self.wts.values()
+                         if r["state"] == "active" and not r["live"]
+                         and r["run_id"] is not None})
+
+    # ---- retention eviction --------------------------------------------
+    def _evict_retained_over_cap_locked(self):
+        retained = [n for n, r in self.wts.items() if r["state"] == "retained"]
+        if len(retained) <= self.max_retained_failed:
+            return
+        # Oldest-first by the worktree dir's mtime (survives restarts; no in-memory clock).
+        retained.sort(key=lambda n: _worktree_mtime(worktree_path(n)))
+        for name in retained[:len(retained) - self.max_retained_failed]:
+            self.wts.pop(name, None)
+            self._teardown(name, retain=False)
+
+    # ---- git plumbing (worktree lifecycle) ------------------------------
+    def create_or_rebaseline(self, slot):
+        """Make `slot` a clean worktree at base. Missing -> `git worktree add --detach`; an
+        existing (reclaimed retained) one -> hard reset + clean to base (salvaging dirty edits via
+        stash, per reset_worktree) and clear its retained marker. It is fine to sit DETACHED at
+        base here: the flow's first node (`branch`) runs `git checkout -B {branch} origin/main`,
+        attaching the branch before any commit (the check_branch_attached/reattach exception for
+        "checkout -B" covers it)."""
+        path = worktree_path(slot)
+        if os.path.isdir(path):
+            reset_worktree(path, self.base)
+            _clear_retained_marker(path)
+            return
+        if not git_fetch_with_retry(ROOT):
+            die("git fetch failed while creating a per-card worktree")
+        if not git_worktree_with_retry(["add", "--detach", path, self.base]):
+            die(f"git worktree add failed for {slot}")
+
+    def _teardown(self, slot, retain):
+        """Remove (done/cancelled) or retain (failed) a per-card worktree. Salvages any dirty
+        edits via `git stash` first (preserving today's safety). Retained worktrees stay on disk
+        with RETAINED_MARKER so a restart classifies them; removal routes through the shared-.git
+        retry discipline (RLY-224/§6)."""
+        path = worktree_path(slot)
+        if not os.path.isdir(path):
+            return
+        dirty = subprocess.run(["git", "status", "--porcelain"], cwd=path,
+                               capture_output=True, text=True).stdout.strip()
+        if dirty:
+            subprocess.run(["git", "stash", "push", "-u", "-m", f"auto-salvage {slot}"],
+                           cwd=path, check=False)
+        if retain:
+            _write_retained_marker(path)
+            return
+        git_worktree_with_retry(["remove", "--force", path])
+        git_worktree_with_retry(["prune"])
+
+    def run_prepare_hook(self, slot_path, ref, branch):
+        """Warm a freshly created/re-baselined worktree via the project's prepare hook (§4).
+        Location: `.relay/prepare-worktree.sh` if present+executable, else the `prepare` command
+        from executor.json, else SKIP (no-op — a cold build is correct, not an error). Inputs go
+        as BOTH argv and env. Returns None on success/skip, or captured stderr on nonzero exit —
+        a failing hook FAILS the run (decision 2)."""
+        hook = self.cfg.get("prepare") or os.path.join(".relay", "prepare-worktree.sh")
+        hook_abs = hook if os.path.isabs(hook) else os.path.join(ROOT, hook)
+        if not (os.path.isfile(hook_abs) and os.access(hook_abs, os.X_OK)):
+            return None
+        cache_dir = os.path.expanduser(self.cfg.get("cache_dir") or "")
+        hook_env = dict(os.environ,
+                        RELAY_WORKTREE=slot_path, RELAY_REF=str(ref),
+                        RELAY_BRANCH=str(branch or ""), RELAY_BASE=self.base,
+                        RELAY_CACHE_DIR=cache_dir)
+        proc = subprocess.run([hook_abs, slot_path, str(ref), str(branch or ""),
+                               self.base, cache_dir],
+                              cwd=slot_path, env=hook_env, capture_output=True, text=True)
+        if proc.returncode == 0:
+            return None
+        return (proc.stderr or proc.stdout or f"prepare hook exited {proc.returncode}").strip()
+
+    # ---- startup / recovery --------------------------------------------
+    def ensure(self):
+        """Create the reused shared_clean worktree up front; per-card exclusive worktrees are
+        created on demand in create_or_rebaseline. Then recover any per-card worktrees already on
+        disk from a prior process (restart-safe binding, RLY-231 AC #8)."""
+        ensure_worktree(self.shared_name, self.base)
+        self.recover()
+
+    def recover(self):
+        """Rebuild the registry from `git worktree list` after a restart. A `<ns>-<ref>` worktree
+        with RETAINED_MARKER is retained; otherwise active with an UNKNOWN binding (run_id None) —
+        its resuming job adopts it (assign's reset=False branch) without re-baselining, so commits
+        on its branch survive. Capacity is therefore correct immediately, with no in-memory
+        run_id->slot map to lose.
+
+        A `<ns>-work-N` worktree is NOT a per-card worktree — it is a slot left behind by the
+        RETIRED fixed pool (RLY-231). The forced version-floor bump makes this upgrade in place,
+        so recover() reclaims those stale slots (remove+prune) instead of adopting them; otherwise
+        each would masquerade as a phantom active worktree with run_id None, permanently consuming
+        an exclusive partition that nothing can ever free."""
+        with self.lock:
+            for path in _list_worktree_paths():
+                name = os.path.basename(path)
+                if name == self.shared_name or not name.startswith(self.ns + "-"):
+                    continue
+                if name in self.wts:
+                    continue
+                if self._retired_pool_slot(name):
+                    git_worktree_with_retry(["remove", "--force", path])
+                    git_worktree_with_retry(["prune"])
+                    continue
+                if _is_retained_worktree(path):
+                    self.wts[name] = {"run_id": None, "state": "retained",
+                                      "live": False, "partition": None}
+                else:
+                    self.wts[name] = {"run_id": None, "state": "active", "live": False,
+                                      "partition": self._take_partition()}
+            self._evict_retained_over_cap_locked()
+
+    def refresh_idle_shared(self):
+        with self.lock:
+            if self.shared_used == 0:
+                refresh_worktree(self.shared_name, self.base)
+
+
+def git_worktree_with_retry(args):
+    """`git worktree <args...>` (add/remove/prune) in ROOT, retried on the shared-ref-db race
+    (RLY-224 extended to worktree mutations, §6). Per-card worktrees share one `.git`, so two
+    concurrent creates/teardowns race on the worktree list + ref db. Returns True on success;
+    on final failure prints the captured stderr and returns False."""
+    last_err = ""
+    for attempt in range(1, GIT_FETCH_MAX_ATTEMPTS + 1):
+        proc = subprocess.run(["git", "worktree", *args], cwd=ROOT,
+                              capture_output=True, text=True)
+        if proc.returncode == 0:
+            return True
+        last_err = proc.stderr or proc.stdout or ""
+        if attempt < GIT_FETCH_MAX_ATTEMPTS:
+            _fetch_backoff(attempt)
+    sys.stderr.write(last_err)
+    return False
+
+
+def _list_worktree_paths():
+    """Absolute paths of every registered git worktree (for restart recovery)."""
+    proc = subprocess.run(["git", "worktree", "list", "--porcelain"], cwd=ROOT,
+                          capture_output=True, text=True)
+    if proc.returncode != 0:
+        return []
+    return [line[len("worktree "):] for line in proc.stdout.splitlines()
+            if line.startswith("worktree ")]
+
+
+def _worktree_mtime(path):
+    try:
+        return os.path.getmtime(path)
+    except OSError:
+        return 0.0
+
+
+def _is_retained_worktree(path):
+    """True if `path` is a retained (failed-run) per-card worktree — its root holds the
+    RETAINED_MARKER sentinel. A dedicated seam so recovery tests can stub classification
+    without monkeypatching os.path.exists globally."""
+    return os.path.exists(os.path.join(path, RETAINED_MARKER))
+
+
+def _write_retained_marker(path):
+    try:
+        with open(os.path.join(path, RETAINED_MARKER), "w") as f:
+            f.write("retained by relay executor for post-mortem (RLY-231)\n")
+    except OSError:
+        pass
+
+
+def _clear_retained_marker(path):
+    try:
+        os.remove(os.path.join(path, RETAINED_MARKER))
+    except OSError:
+        pass
+
+
+def render(template, vars):
+    for k, v in vars.items():
+        template = template.replace("{" + k + "}", str(v))
+    return template
+
+
+def _print_claude_event(ev, tag=""):
+    """Render one stream-json event from a headless claude as a readable feed line."""
+    ref = _ref_from_tag(tag)
+    t = ev.get("type")
+    if t == "assistant":
+        for b in ev.get("message", {}).get("content", []):
+            if b.get("type") == "text" and b.get("text", "").strip():
+                text = b["text"].strip()[:600]
+                print(f"    {tag}🤖 " + text, flush=True)
+                forward("claude", f"🤖 {text}", ref)
+            elif b.get("type") == "tool_use":
+                inp = b.get("input", {}) or {}
+                brief = (inp.get("command") or inp.get("file_path") or inp.get("path")
+                         or inp.get("pattern") or inp.get("description") or "")
+                line = f"🔧 {b.get('name')}  {str(brief)[:140]}"
+                print(f"    {tag}{line}", flush=True)
+                forward("claude", line, ref)
+    elif t == "result":
+        turns = ev.get("num_turns")
+        line = (f"{'✗' if ev.get('is_error') else '✓'} claude finished"
+                + (f" ({turns} turns)" if turns else ""))
+        print(f"    {tag}{line}", flush=True)
+        forward("claude", line, ref)
+
+
+def _apply_node_env(child_env, partition, scratch, plan):
+    """Set-or-CLEAR the per-node env on a child (RLY-216).
+
+    `partition`/`scratch`/`plan` are per-job (RLY-213/214/223): a job that has one exports it, a
+    job that does NOT must see it *unset* — never inherit the parent's. Assigning only when
+    non-None was the RLY-213/214 bug: every node runs with MIX_TEST_PARTITION/RELAY_NODE_SCRATCH/
+    RELAY_PLAN exported, so when such a node itself runs `bin/relay` (the precommit gate runs
+    `bin/test_relay.py`, whose own tests spawn env-less child steps) the value leaked in, and the
+    gate failed for every Code run. Pop when None so the child's env reflects the JOB's config,
+    not whatever the executor process happened to carry.
+    """
+    for name, value in (("MIX_TEST_PARTITION", partition), ("RELAY_NODE_SCRATCH", scratch),
+                        ("RELAY_PLAN", plan)):
+        if value is None:
+            child_env.pop(name, None)
+        else:
+            child_env[name] = value
+
+
+def _stream_shell(cmd, cwd, tag="", sink=None, on_proc=None, partition=None, scratch=None, plan=None):
+    """Run a shell step with a live, tag-prefixed feed. Returns True on success.
+
+    On failure the tail of the output is appended to `sink` so the card can carry the
+    actual reason. Streaming it to the console alone was not enough: the console is
+    not what a human reads later, so a stage that died on one line of git output
+    surfaced as a bare "stage did not complete".
+
+    `on_proc`, if given, receives the live Popen so a caller can terminate it (executor
+    revoke). Every caller is an executor node-job, which passes `on_proc` (a
+    JobControl.register) and so gets its own process group (start_new_session), since only
+    a JobControl can kill that group.
+
+    `partition`, if given, is exported as MIX_TEST_PARTITION in the child's env (RLY-213) —
+    the caller supplies `pool.partition_for(slot)` so every gate this job runs, including
+    `precommit`, sees the slot's own test database.
+
+    `scratch`, if given, is exported as RELAY_NODE_SCRATCH (RLY-214) — the caller supplies
+    `scratch_path(slot, ref, node)` so a gate step can write findings there too.
+
+    `plan`, if given, is exported as RELAY_PLAN (RLY-223) — the caller supplies
+    `plan_path(slot, ref)` so the branch node writes/probes the per-ref plan there."""
+    child_env = dict(os.environ)
+    _apply_node_env(child_env, partition, scratch, plan)
+    proc = subprocess.Popen(cmd, shell=True, cwd=cwd, text=True, bufsize=1, env=child_env,
+                            stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
+                            start_new_session=on_proc is not None)
+    if on_proc:
+        on_proc(proc)
+    tail = collections.deque(maxlen=12)
+    for line in proc.stdout:
+        print(f"    {tag}{line.rstrip()}", flush=True)
+        tail.append(line.rstrip())
+    ok = proc.wait() == 0
+    if not ok and sink is not None:
+        sink.extend(tail)
+    return ok
+
+
+class JobControl:
+    """Per-job cancel handle: a threading.Event plus the live subprocess, so a heartbeat-borne
+    revoke (§5) can terminate the running `claude -p`/shell step even if it registers after the
+    revoke arrives."""
+
+    def __init__(self):
+        self._cancelled = threading.Event()
+        self._proc = None
+
+    def register(self, proc):
+        self._proc = proc
+        if self._cancelled.is_set():
+            self._terminate()
+
+    def cancel(self):
+        self._cancelled.set()
+        self._terminate()
+
+    def cancelled(self):
+        return self._cancelled.is_set()
+
+    def _terminate(self):
+        proc = self._proc
+        if proc is None or proc.poll() is not None:
+            return
+        try:
+            # _stream_shell runs its command with shell=True, so the registered proc is
+            # /bin/sh — a plain terminate() only kills the shell wrapper and leaves the
+            # real command running as an orphan that keeps writing into the worktree
+            # (including while the next job's reset_worktree() git-reset/cleans it).
+            # Anything registered here came through on_proc, so both Popen call sites put
+            # it in its own process group (start_new_session=on_proc is not None); killing
+            # that group takes the whole command tree with it.
+            os.killpg(os.getpgid(proc.pid), signal.SIGTERM)
+        except Exception:
+            proc.terminate()   # best-effort fallback (e.g. no real pid/process group)
+
+
+ZERO_CAPACITY = {"shared_clean": 0, "exclusive": 0}
+
+
+def outdated_refusal(required):
+    """What claim_node_job returns on a 409 `executor_outdated` (RLY-184).
+
+    A dict with a key no claim payload has, so the loop tells it apart from a real job by key
+    alone — and it carries `required` so the log can name both numbers."""
+    return {"executor_outdated": True, "required": required}
+
+
+def claim_node_job(executor, capacity, timeout):
+    """Long-poll claim: hold one request open (advertising free `capacity` per isolation class)
+    up to `timeout`s. Returns a job dict, or None on a 204/empty body or a read timeout — both
+    mean 'no work', not an error (§7). Returns outdated_refusal(required) when the server
+    refuses this executor's version (409 executor_outdated, RLY-184)."""
+    try:
+        resp = api("POST", "/api/node-jobs/claim",
+                   {"executor": executor, "capacity": capacity},
+                   soft_conflict=True, timeout=timeout)
+    except socket.timeout:
+        return None
+    error = resp.get("error") if isinstance(resp, dict) else None
+    if isinstance(error, dict) and error.get("code") == "executor_outdated":
+        return outdated_refusal(error.get("required"))
+    return resp or None
+
+
+def outcome_body(outcome, detail, git_sha, session_id=None):
+    """The exact body POSTed to /api/node-jobs/:id/outcome.
+
+    Pure and separate from the POST so bin/test_relay.py can pin its key set against
+    test/fixtures/executor_contract.json's `outcome.request` — the same body the ExUnit
+    generator posts at the real controller (RLY-176)."""
+    return {"outcome": outcome, "detail": detail,
+            "git_sha": git_sha, "session_id": session_id}
+
+
+def heartbeat_body(executor, capacity, running, bound_runs, capabilities=None):
+    """The exact body POSTed to /api/node-jobs/heartbeat (RLY-164 / RLY-218).
+
+    Pure for the same reason as outcome_body: it is pinned against the fixture's
+    `heartbeat.request` (RLY-176). `bound_runs` (RLY-218) is the run-ids of exclusive slots
+    this executor holds with no live job — the server replies with the subset it now considers
+    terminal (`release_runs`), which the executor releases. `capabilities` is OPTIONAL and rides
+    send-on-change (RLY-182): omitted on a beat where nothing changed."""
+    body = {"executor": executor, "capacity": capacity, "running": running,
+            "bound_runs": bound_runs}
+    if capabilities is not None:
+        body["capabilities"] = capabilities
+    return body
+
+
+def report_outcome(job_id, outcome, detail, git_sha, session_id=None):
+    """POST the typed outcome; return the server-assigned run_state
+    (running|parked|done|failed|cancelled) that tells the executor whether to keep or free an
+    exclusive slot (§3). idempotent=True: the endpoint is first-writer-wins per job (RLY-202),
+    so a dropped request/response retries into the server's duplicate-200 rather than die()ing."""
+    resp = api("POST", f"/api/node-jobs/{job_id}/outcome",
+               outcome_body(outcome, detail, git_sha, session_id), idempotent=True)
+    return (resp or {}).get("run_state")
+
+
+def _stream_claude_job(prompt, cwd, tag="", session_id=None, outcome_path=None, on_proc=None,
+                      agent=None, partition=None, scratch=None, plan=None):
+    """Executor variant of _stream_claude. Runs `claude -p` (or `--resume <session_id>` on a
+    needs-input re-entry), streams events, captures the claude session id from the stream-json
+    events (init/result carry `session_id`), and sets $RELAY_NODE_OUTCOME so an agent node can
+    signal `partial`. `agent` selects a `.claude/agents/<name>.md` definition via --agent; an
+    unknown name makes the CLI fail loudly (verified against 2.1.214) rather than silently
+    degrade to the default agent, which is what makes this safe to depend on. `partition`, if
+    given, is exported as MIX_TEST_PARTITION (RLY-213) so a gate this agent runs sees its
+    slot's own test database. `scratch`, if given, is exported as RELAY_NODE_SCRATCH
+    (RLY-214) — the agent's own scratch file for this node, per `scratch_path(slot, ref,
+    node)`. `plan`, if given, is exported as RELAY_PLAN (RLY-223) — the per-ref materialized
+    plan the agent reads. Returns (ok, captured_session_id). `on_proc` receives the live Popen."""
+    cmd = ["claude", "-p", prompt, "--dangerously-skip-permissions",
+           "--verbose", "--output-format", "stream-json"]
+    if session_id:
+        cmd[2:2] = ["--resume", session_id]     # claude -p --resume <session> <prompt>
+    if agent:
+        cmd += ["--agent", agent]
+    child_env = dict(os.environ)
+    # `claude -p` caps how long it waits for a background workflow at 10 minutes
+    # by default (CLAUDE_CODE_PRINT_BG_WAIT_CEILING_MS, v2.1.182+). A long agent
+    # node (implement, final_review) can run past that, and without lifting the cap
+    # -p exits mid-run and the node reports a partial result as if it were done.
+    # "0" = wait until the work finishes on its own. An explicit env override wins,
+    # hence setdefault rather than an unconditional assignment.
+    child_env.setdefault("CLAUDE_CODE_PRINT_BG_WAIT_CEILING_MS", "0")
+    if outcome_path:
+        child_env["RELAY_NODE_OUTCOME"] = outcome_path
+    _apply_node_env(child_env, partition, scratch, plan)
+    # Every caller is an executor node-job, which passes on_proc (a JobControl.register)
+    # and so gets its own process group (start_new_session), since only a JobControl can
+    # kill that group.
+    proc = subprocess.Popen(cmd, cwd=cwd, text=True, bufsize=1, env=child_env,
+                            stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
+                            start_new_session=on_proc is not None)
+    if on_proc:
+        on_proc(proc)
+    captured = None
+    for line in proc.stdout:
+        line = line.strip()
+        if not line:
+            continue
+        try:
+            ev = json.loads(line)
+            captured = ev.get("session_id") or captured
+            _print_claude_event(ev, tag)
+        except Exception:
+            print(f"    {tag}" + line[:200], flush=True)
+    return proc.wait() == 0, captured
+
+
+def determine_agent_outcome(job, ok, outcome_path):
+    """Agent-node outcome contract, evaluated in order (relay.md is the write-up):
+      1. re-fetch the card — status needs_input ⇒ needs_input (exactly as work() detects today);
+      2. else an outcome file at $RELAY_NODE_OUTCOME supplies {outcome, detail} — the only
+         way a node signals `partial`;
+      3. else NO outcome file ⇒ failed. An agent node must DECLARE its verdict: a `claude -p`
+         that exits 0 having written nothing is indistinguishable from one that did the work,
+         so treating it as `succeeded` lets a node route past its own gate having produced
+         nothing (RLY-163 — the RLY-159 dogfood landed a card in Spec:Review with an empty
+         spec exactly this way, and the same hole would let a silent review reach `merge`).
+         Rule 1 still covers the legitimate "I stopped to ask a human" case.
+      4. NOTE (RLY-194): the SERVER may additionally override a declared `succeeded` back to
+         `failed` for a node marked expects_commits that produced no commits (HEAD unchanged).
+         That rule is server-side only — the three rules above are unchanged, and no field is
+         added to the outcome payload — but an agent author reading only this docstring should
+         not be surprised to see a `succeeded` land as `failed` on such a node."""
+    ref = (job.get("vars") or {}).get("ref")
+    if ref:
+        card = get_card(ref)
+        if card.get("status") == "needs_input":
+            return "needs_input", "agent asked the human"
+    if outcome_path and os.path.exists(outcome_path):
+        try:
+            with open(outcome_path) as f:
+                data = json.load(f)
+            return data.get("outcome", "succeeded"), data.get("detail", "")
+        except Exception as e:
+            # The outcome file is the ONLY channel a node has to signal `partial`; if it's
+            # unreadable/malformed (e.g. an LLM-driven step wrote truncated JSON), falling
+            # through to the exit-code check would silently report `succeeded` for a claude
+            # -p process that exited 0 but never actually handed back its real outcome. Treat
+            # it as `failed` instead, and log so a human can see the node tried to report.
+            log(f"  ⚠ {ref}: outcome file at {outcome_path} is unreadable/malformed: {e}",
+                ref=ref, kind="error")
+            return "failed", f"outcome file at {outcome_path} is unreadable/malformed: {e}"
+    if ok:
+        return ("failed",
+                f"agent exited 0 but did not write an outcome to $RELAY_NODE_OUTCOME "
+                f"({outcome_path}) and did not raise needs-input — a node must declare its "
+                f"verdict, so this is not treated as success")
+    return ("failed", "agent exited non-zero")
+
+
+def git_head_sha(path):
+    """The worktree's HEAD sha, or None when rev-parse fails (including a `path` that does not
+    exist yet — e.g. a prepare-hook failure reported before the worktree was ever created)."""
+    try:
+        proc = subprocess.run(["git", "rev-parse", "HEAD"], cwd=path,
+                              capture_output=True, text=True)
+    except OSError:
+        return None
+    return proc.stdout.strip() if proc.returncode == 0 else None
+
+
+def reattach_branch(slot_path, isolation, branch, cmd):
+    """Point a detached exclusive worktree back at its run's branch (RLY-173).
+
+    `reset_worktree()` ends in `git checkout --detach`, so an interruption leaves an exclusive
+    run's worktree detached while the branch ref still holds every commit the run made. RLY-170
+    then requeues the orphaned job and it is re-claimed — but it arrives at a detached worktree
+    and RLY-166's guard refuses it, forever. Recovery restored the job without restoring the
+    place it works.
+
+    Re-attaching is safe precisely because it is not a reset: the branch already points at the
+    run's own commits, so `git checkout <branch>` restores exactly the state the run had. If the
+    branch does NOT exist locally the guard's refusal is still correct (commits here would reach
+    nothing), so this quietly does nothing and lets the guard speak.
+    """
+    if isolation != "exclusive" or not branch or "checkout -B" in cmd:
+        return
+    head = subprocess.run(["git", "symbolic-ref", "-q", "HEAD"], cwd=slot_path,
+                          capture_output=True, text=True)
+    if head.returncode == 0 and head.stdout.strip() == f"refs/heads/{branch}":
+        return
+    exists = subprocess.run(["git", "rev-parse", "--verify", "-q", f"refs/heads/{branch}"],
+                            cwd=slot_path, capture_output=True, text=True)
+    if exists.returncode != 0:
+        return
+    subprocess.run(["git", "checkout", "-q", branch], cwd=slot_path,
+                   capture_output=True, text=True)
+
+
+def check_branch_attached(slot_path, isolation, branch, cmd):
+    """Returns a failure detail when this node must NOT run, else None (RLY-166).
+
+    `reset_worktree()` ends in `git checkout --detach` by design, and it runs mid-run on the
+    revoke/re-assign path. The `branch` node that ATTACHES HEAD only runs once, at the start of
+    a run — so after a mid-run reset every later commit lands on a detached HEAD while the
+    named branch ref stays behind. `merge` then pushes the branch ref, shipping a subset of the
+    run's work while every gate passes (the gates read the worktree, which is complete; only
+    the push reads the ref). The first live Code run merged half its reviewed work that way.
+
+    So: a job that carries a `branch` must run with HEAD actually on that branch. The one
+    exception is the node whose whole job is to create it — it legitimately starts detached.
+    """
+    # Keyed on ISOLATION, not on the branch var: build_payload puts `branch` in vars for every
+    # job whether the flow uses it or not, and the shared_clean worktree (exec-clean) is created
+    # `--detach` ON PURPOSE so it never holds a branch. Guarding on the var refused every
+    # Spec/Plan node the moment this shipped. Only `exclusive` runs commit to a branch and can
+    # therefore strand work.
+    if isolation != "exclusive" or not branch or "checkout -B" in cmd:
+        return None
+    proc = subprocess.run(["git", "symbolic-ref", "-q", "HEAD"], cwd=slot_path,
+                          capture_output=True, text=True)
+    head = proc.stdout.strip() if proc.returncode == 0 else ""
+    if head == f"refs/heads/{branch}":
+        return None
+    where = head or "a detached HEAD"
+    return (f"refusing to run: worktree {slot_path} is on {where}, expected refs/heads/{branch}. "
+            f"Commits made here would not reach the branch and `merge` would ship a subset of "
+            f"this run's work (RLY-166). The run's commits are still in the worktree.")
+
+
+# Appended to EVERY agent node's prompt. The requirement to declare an outcome must not
+# depend on each flow's node prompt or each skill author remembering it — determine_agent_outcome
+# now fails a node that writes nothing, so a node never told about the file would always fail.
+# Shell/gate nodes are exempt: their exit code is already an unambiguous verdict.
+OUTCOME_CONTRACT = """
+
+---
+BEFORE YOU FINISH — declare your outcome (required). $RELAY_NODE_SCRATCH is your scratch
+file for this node — write findings/logs there, not to an invented /tmp path. Run:
+
+    {relay} outcome succeeded --detail "one line on what you did"
+    {relay} outcome failed    --detail @$RELAY_NODE_SCRATCH
+
+Valid outcomes: succeeded | failed. Use `--detail @file` for anything long or
+containing quotes or newlines — do NOT hand-write the JSON yourself; this command writes it.
+
+`detail` is handed to the next node as {prior.detail}, so make it useful: for a review, the
+actual findings; for a failure, why. If you need a human instead, run
+`{relay} needs-input {ref} --questions @<file>` and stop — that parks the run and you need not
+declare an outcome. Exiting without either is reported as `failed`, because a node that
+declares nothing cannot be distinguished from one that did nothing."""
+
+
+def run_node_job(job, slot_path, control, partition=None):
+    """Run one claimed node-job in `slot_path`; return (outcome, detail, git_sha, session_id).
+    Reuses the streaming primitives, tagged per job. Does NOT report — the caller POSTs the
+    outcome (§6) and acts on the run_state (§3).
+
+    `partition` (the caller's `pool.partition_for(slot)`, RLY-213) rides straight through to
+    whichever streaming primitive runs the step — computed once by the caller, never
+    re-derived here.
+
+    The scratch path (RLY-214) IS derived here, once, from `(ref, job["node_id"])` via
+    `scratch_path` — unlike `partition`, both halves are already in scope on every call,
+    so there is no caller left to compute it instead. The directory is created before
+    either branch runs so a node never has to `mkdir -p` its own scratch file.
+
+    Placeholder expansion ({ref}/{branch}/{relay}/... ) stays executor-side per
+    Schemas.Flow.Node/build_payload's contract: the server stores `run` raw and only
+    resolves `vars`. `relay`/`url` are not server-sent vars at all — supply them here.
+    `is not None` matters: build_payload puts prior_detail/findings in vars as `nil`
+    (-> None) when absent, and a naive str(v) would splice the literal string "None"
+    into the command."""
+    ref = (job.get("vars") or {}).get("ref") or job["id"]
+    tag = f"[{ref}] "
+    raw_vars = dict(job.get("vars") or {})
+    raw_vars.setdefault("ref", ref)
+    raw_vars.setdefault("relay", HERE)
+    raw_vars.setdefault("url", os.environ.get("RELAY_URL", ""))
+    vars = {k: v for k, v in raw_vars.items() if v is not None}
+    cmd = render(job["run"], vars)
+
+    scratch = scratch_path(slot_path, ref, job["node_id"])
+    plan = plan_path(slot_path, ref)
+    os.makedirs(os.path.dirname(scratch), exist_ok=True)
+
+    # Restore the worktree before judging it: an interrupted run's branch still holds its
+    # commits, so re-attach first and let the guard refuse only what is genuinely unrecoverable.
+    reattach_branch(slot_path, job.get("isolation"), vars.get("branch"), cmd)
+    detached = check_branch_attached(slot_path, job.get("isolation"), vars.get("branch"), cmd)
+    if detached:
+        log(f"  ⚠ {ref}: {detached}", ref=ref, kind="error")
+        return "failed", detached, git_head_sha(slot_path), None
+
+    session_id = None
+    if job.get("node_type") == "agent":
+        # The outcome file must live OUTSIDE the checkout: reset_worktree() salvages any
+        # non-empty `git status --porcelain`, so a file inside slot_path would make every
+        # agent job leave a spurious "salvaging leftovers" stash for the next job on this
+        # slot. A fresh tempdir per job also means there is never a stale file to read.
+        outcome_dir = tempfile.mkdtemp(prefix="relay-node-outcome-")
+        outcome_path = os.path.join(outcome_dir, "outcome.json")
+        try:
+            ok, session_id = _stream_claude_job(
+                cmd + render(OUTCOME_CONTRACT, vars), cwd=slot_path, tag=tag,
+                session_id=job.get("resume_session"),
+                outcome_path=outcome_path, on_proc=control.register, agent=job.get("agent"),
+                partition=partition, scratch=scratch, plan=plan)
+            outcome, detail = determine_agent_outcome(job, ok, outcome_path)
+        finally:
+            shutil.rmtree(outcome_dir, ignore_errors=True)
+    else:  # shell | gate
+        tail = []
+        ok = _stream_shell(cmd, slot_path, tag, sink=tail, on_proc=control.register,
+                           partition=partition, scratch=scratch, plan=plan)
+        outcome = "succeeded" if ok else "failed"
+        detail = "" if ok else "\n".join(tail).strip()
+    sha_proc = subprocess.run(["git", "rev-parse", "HEAD"], cwd=slot_path,
+                              capture_output=True, text=True)
+    git_sha = sha_proc.stdout.strip() if sha_proc.returncode == 0 else None
+    return outcome, detail, git_sha, session_id
+
+
+def execute_one(job, slot, reset, control, pool):
+    """Worker body for one node-job: reset the slot if it is the run's first exclusive job,
+    run the step, and — unless a revoke landed mid-run — report the outcome and return the
+    server's run_state. On revoke of an EXCLUSIVE job, reset the worktree (salvaging via
+    stash) since it is bound to this job/run alone; a revoked shared_clean job must NOT reset
+    exec-clean — capacity.shared_clean lets several jobs run there concurrently, and
+    resetting would blow away the others still in flight (the shared worktree is only ever
+    fast-forwarded when fully idle, by refresh_idle_shared()). Either way, no outcome is
+    reported for a revoke (§5). Always frees/keeps the slot per run_state in a finally (never
+    leak a slot)."""
+    slot_path = worktree_path(slot)
+    partition = pool.partition_for(slot)
+    run_state = None
+    revoked = False
+    completed_outcome = None
+    unreported_crash = False   # crash whose own failure-report also failed (§ finally, below)
+    try:
+        if reset and not DRY:
+            # First job of a run (or reclaim of a retained worktree): create/re-baseline the
+            # per-card worktree, then warm it via the project's prepare hook. A nonzero hook
+            # FAILS the run fail-fast (RLY-231 decision 2) — report failed and skip the node so
+            # the run's worktree is retained for inspection (the finally releases with `failed`).
+            pool.create_or_rebaseline(slot)
+            ref = (job.get("vars") or {}).get("ref")
+            hook_err = pool.run_prepare_hook(slot_path, ref, (job.get("vars") or {}).get("branch"))
+            if hook_err:
+                detail = f"prepare hook failed: {hook_err}"
+                log(f"  ⚠ {ref}: {detail}", ref=ref, kind="error")
+                completed_outcome = "failed"
+                run_state = report_outcome(job["id"], "failed", detail,
+                                           git_head_sha(slot_path), None)
+                return run_state
+        outcome, detail, git_sha, session_id = run_node_job(
+            job, slot_path, control, partition=partition)
+        if control.cancelled():
+            revoked = True
+            # RLY-231 never-detach: a revoked exclusive job's worktree belongs to exactly one
+            # card/run and is left on its branch to resume — NO reset/detach here anymore.
+            return None
+        completed_outcome = outcome
+        run_state = report_outcome(job["id"], outcome, detail, git_sha, session_id)
+        return run_state
+    except (Exception, SystemExit) as e:
+        # run_node_job (or the report_outcome call above) can raise SystemExit via api()'s
+        # die() — e.g. an agent node's determine_agent_outcome calling get_card() when the
+        # server is unreachable. SystemExit is a BaseException, not an Exception, so plain
+        # `except Exception` would miss it: it would escape this worker thread, and Python's
+        # threading module discards uncaught exceptions on non-main threads silently — the
+        # job would be lost with no outcome and nothing printed. Catch it here explicitly so
+        # this remains the one place that always reports (never leak a slot on crash).
+        #
+        # A failure AFTER the node produced its outcome is a *transport* failure, not a
+        # work/judgment crash (RLY-202): the outcome POST is now idempotent-retryable, so this
+        # only fires once retries are exhausted. Label it distinctly so RLY-194's environmental
+        # split and the failure_signature breaker bucket don't count finished work as a crash.
+        if completed_outcome is not None:
+            fallback_detail = f"transport: outcome '{completed_outcome}' not reported after retries: {e}"
+        else:
+            fallback_detail = f"worker crashed: {e}"
+        try:
+            run_state = report_outcome(job["id"], "failed", fallback_detail, "", None)
+        except (Exception, SystemExit) as report_err:
+            # a second die() while reporting the crash (server still down) — log rather than
+            # let this vanish too.
+            log(f"failed to report crash outcome for {job['id']}: {report_err}", kind="error")
+            run_state = None
+            unreported_crash = True
+        return run_state
+    finally:
+        # None here means two DIFFERENT things and the pool must not conflate them: a genuine
+        # revoke (never-detach — keep the worktree active+bound for the pinned resume) vs. a
+        # crash whose own failure-report also failed (`unreported_crash` — the server was never
+        # told, so treat it like `failed` locally: retain the worktree for post-mortem rather
+        # than leaving it bound forever as if it were still live).
+        if revoked or control.cancelled():
+            release_state = None
+        elif unreported_crash:
+            release_state = "failed"
+        else:
+            release_state = run_state
+        pool.release(job, slot, release_state)
+
+
+# ---- Single-executor startup lock (RLY-193) --------------------------------
+# Two `relay execute` processes on one machine default to the same hostname, so the server
+# keys them to ONE Executor row — the exact state RLY-170 orphan recovery corrupts (each
+# process beats a partial `running` list and requeues the other's live jobs). We make that
+# state unreachable with two exclusive flocks taken at startup and held for the process's
+# life: an IDENTITY lock (server + name, machine-wide and checkout-independent so two clones
+# on one host still collide) and a WORKTREE-NAMESPACE lock (catches two processes sharing
+# worktrees even under different identities). flock is released by the kernel on process
+# death, so a crash never leaves a stale lock — which is why a flock and not a pidfile.
+_EXECUTOR_LOCKS = []   # held lock fds, kept open (and un-GC'd) for the process's life
+
+
+def _lock_dir():
+    d = os.environ.get("RELAY_EXECUTOR_LOCK_DIR") or os.path.expanduser("~/.relay/locks")
+    os.makedirs(d, exist_ok=True)
+    return d
+
+
+def identity_lock_path(cfg):
+    key = (env("RELAY_URL") + "\0" + cfg["name"]).encode("utf-8")
+    return os.path.join(_lock_dir(), f"exec-{hashlib.sha256(key).hexdigest()[:16]}.lock")
+
+
+def namespace_lock_path(cfg):
+    return os.path.join(WORKTREES_DIR, f".{cfg['namespace']}.lock")
+
+
+def _read_holder(fd):
+    try:
+        os.lseek(fd, 0, os.SEEK_SET)
+        raw = os.read(fd, 4096).decode("utf-8", "replace").strip()
+        return json.loads(raw) if raw else None
+    except (OSError, ValueError):
+        return None
+
+
+def _already_running_message(held, path):
+    if held and held.get("pid"):
+        started = held.get("started")
+        try:
+            when = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(started)) if started else "unknown time"
+        except (TypeError, ValueError, OSError):
+            when = "unknown time"
+        return (f'already running: executor "{held.get("name", "?")}" is held by pid '
+                f'{held["pid"]} (started {when}, namespace "{held.get("namespace", "?")}", '
+                f'root {held.get("root", "?")}). Stop that process, or set a different '
+                '"name"/"namespace" in .relay/executor.json.')
+    return (f'already running: another executor holds {path} (holder info unreadable). '
+            'Stop that process, or set a different "name"/"namespace" in .relay/executor.json.')
+
+
+def acquire_singleton_lock(path, holder):
+    """Take an exclusive, non-blocking flock at `path`, held for the process's life.
+
+    On success the holder JSON line is (re)written and the fd stashed in _EXECUTOR_LOCKS. On
+    contention the existing holder line is read back and we die() with an actionable message.
+    """
+    os.makedirs(os.path.dirname(path), exist_ok=True)
+    fd = os.open(path, os.O_RDWR | os.O_CREAT, 0o644)
+    try:
+        fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+    except OSError:
+        held = _read_holder(fd)
+        os.close(fd)
+        die(_already_running_message(held, path))
+    _EXECUTOR_LOCKS.append(fd)
+    os.ftruncate(fd, 0)
+    os.write(fd, (json.dumps(holder) + "\n").encode("utf-8"))
+    os.fsync(fd)
+    return fd
+
+
+def acquire_executor_locks(cfg):
+    """Refuse a colliding second executor before any worktree or network work (RLY-193)."""
+    holder = {"pid": os.getpid(), "started": int(time.time()),
+              "namespace": cfg["namespace"], "name": cfg["name"], "root": ROOT}
+    acquire_singleton_lock(identity_lock_path(cfg), holder)
+    acquire_singleton_lock(namespace_lock_path(cfg), holder)
+
+
+def release_executor_locks():
+    """Best-effort unlock on normal shutdown; correctness does not depend on it (the kernel
+    releases every flock on process death)."""
+    for fd in _EXECUTOR_LOCKS:
+        try:
+            os.close(fd)
+        except OSError:
+            pass
+    _EXECUTOR_LOCKS.clear()
+
+
+def cmd_execute(args):
+    """The runner mode (ADR 0006): claim node-jobs from the server, run each in an executor
+    worktree, and report a typed outcome."""
+    global DRY, FORWARDER
+    DRY = args.dry_run
+    cfg = load_executor_config()
+    poll_timeout = args.interval or cfg["poll_timeout"]
+    env("RELAY_URL"), env("RELAY_API_KEY")
+    acquire_executor_locks(cfg)   # RLY-193: refuse a colliding second executor before any work
+    executor = executor_ident(cfg)
+    pool = ExecutorPool(cfg)
+    if not DRY:
+        FORWARDER = LogForwarder()
+        FORWARDER.start()
+        pool.ensure()
+
+    lock = threading.Lock()
+    wake = threading.Event()
+    stop = threading.Event()
+    in_flight = {}   # job-id -> {"thread", "control"}
+
+    def running_ids():
+        with lock:
+            return list(in_flight)
+
+    def revoke(job_id):
+        with lock:
+            entry = in_flight.get(job_id)
+        if entry:
+            entry["control"].cancel()
+
+    def reject(job, detail):
+        """A claimed job this executor cannot run — malformed (missing `isolation` or
+        `run_id` key, so ExecutorPool.assign raises KeyError before it can even place it;
+        an unrecognized-but-present `isolation` value is NOT caught here — assign() treats
+        anything other than the literal "shared_clean" as exclusive) or unplaceable (the
+        server handed back a job whose isolation class has no free slot here). Untrusted
+        server input must not crash the daemon or be dropped silently: report it failed so
+        the server's claim lease doesn't sit held-and-running forever, and log it either
+        way."""
+        job_id = job.get("id") if isinstance(job, dict) else None
+        log(f"rejecting claimed job {job_id or job!r}: {detail}", kind="error")
+        if job_id is None:
+            return
+        try:
+            report_outcome(job_id, "failed", detail, "", None)
+        except (Exception, SystemExit) as e:
+            log(f"failed to report rejection for {job_id}: {e}", kind="error")
+
+    outdated = False        # RLY-184: one-way — nothing in-process can pick up new code
+    required_version = None
+
+    hb = None
+    if not DRY:
+        hb = ExecutorHeartbeat(executor, running_ids, revoke,
+                               interval=cfg["heartbeat_interval"],
+                               capacity=cfg["capacity"],
+                               bound_fn=pool.idle_bound_run_ids,
+                               on_release_run=pool.release_run)
+        # Beat once up front: Relay.Runs.Capacity is empty on a fresh server (it is lost on
+        # every restart by design), and until it is fed the scheduler plans zero dispatches.
+        # Waiting a full interval here would make "start the executor" look broken.
+        hb._beat()
+        hb.start()
+
+    def worker(job, slot, reset, control):
+        ref = (job.get("vars") or {}).get("ref") or job["id"]
+        NODE_JOB_IDS[ref] = job["id"]
+        RUN_IDS[ref] = job.get("run_id")
+        try:
+            execute_one(job, slot, reset, control, pool)
+        finally:
+            with lock:
+                in_flight.pop(job["id"], None)
+            NODE_JOB_IDS.pop(ref, None)
+            RUN_IDS.pop(ref, None)
+            wake.set()
+
+    def _shutdown(*_):
+        log("shutting down — no new claims; waiting for in-flight jobs")
+        stop.set()
+        wake.set()
+    signal.signal(signal.SIGINT, _shutdown)
+
+    log(f"executing on {os.environ['RELAY_URL']} as {cfg['name']}"
+        + (" (dry-run)" if DRY else "") + (" — one job" if args.once else ""))
+
+    while not stop.is_set():
+        if outdated:
+            # Refused by the server: stop claiming, but keep beating (zero capacity) so the
+            # process stays on the roster wearing its OUTDATED badge instead of vanishing.
+            wake.wait(poll_timeout)
+            wake.clear()
+            continue
+        cap = pool.capacity()
+        # No free slots → idle, UNLESS an exclusive slot is bound to a run: that
+        # run's pinned resume/next job is claimable regardless of advertised
+        # capacity (affinity), so we must keep polling or the run never resumes.
+        if not DRY and sum(cap.values()) <= 0 and not pool.has_bound_slots():
+            wake.wait(poll_timeout)
+            wake.clear()
+            continue
+        if DRY:
+            log(f"  (dry) would claim advertising {cap}")
+            break
+        pool.refresh_idle_shared()
+        try:
+            job = claim_node_job(executor, cap, poll_timeout)
+        except SystemExit as e:                     # exhausted api() retries → die()
+            log(f"claim failed, will retry: {e}", kind="error")
+            if args.once:
+                break
+            wake.wait(1)
+            wake.clear()
+            continue
+        if isinstance(job, dict) and job.get("executor_outdated"):
+            outdated = True
+            required_version = job.get("required")
+            if hb:
+                hb.capacity = dict(ZERO_CAPACITY)
+                hb._beat()          # stop advertising room now, not one interval from now
+            log(f"OUTDATED: this executor is running version {EXECUTOR_VERSION} but the "
+                f"server requires {required_version} — restart `relay execute` to pick up "
+                "current code. No further jobs will be claimed; in-flight work will finish.",
+                kind="error")
+            if args.once:
+                break
+            continue
+        if job is None:                             # long-poll timeout / 204 → re-poll
+            if args.once:
+                break
+            continue
+        try:
+            assigned = pool.assign(job)
+        except (KeyError, TypeError) as e:          # malformed job: assign can't even read it
+            reject(job, f"malformed job: {e}")
+            if args.once:
+                break
+            wake.wait(1)                            # back off — don't hot-loop re-polling
+            wake.clear()
+            continue
+        if assigned is None:                        # no free slot for this job's isolation
+            reject(job, f"no free {job.get('isolation')!r} slot advertised {cap}")
+            if args.once:
+                break
+            wake.wait(1)                            # back off — don't hot-loop re-polling
+            wake.clear()
+            continue
+        slot, reset = assigned
+        control = JobControl()
+        t = threading.Thread(target=worker, args=(job, slot, reset, control), daemon=True)
+        with lock:
+            in_flight[job["id"]] = {"thread": t, "control": control}
+        t.start()
+        if args.once:
+            t.join()
+            break
+
+    for e in list(in_flight.values()):              # join outstanding workers
+        e["thread"].join()
+    if hb:
+        hb.stop()
+    if FORWARDER and not DRY:
+        FORWARDER.stop()
+    release_executor_locks()                        # RLY-193: best-effort; kernel frees on death
+
+    if outdated and args.once:
+        # No state to sit in for a single-job invocation — a non-zero exit is the right
+        # signal to whatever called it.
+        die(f"executor version {EXECUTOR_VERSION} is below the server's required "
+            f"{required_version} — restart to pick up current code")
+
+
+NODE_OUTCOMES = ("succeeded", "failed", "partial", "needs_input")
+
+
+def cmd_outcome(args):
+    """Declare this node's outcome by writing $RELAY_NODE_OUTCOME (RLY-175).
+
+    RLY-163 requires every agent node to declare an outcome — a node that writes nothing is
+    reported `failed`, because a `claude -p` that exits 0 having done nothing is
+    indistinguishable from one that did the work. But that made every agent hand-write JSON
+    through a shell heredoc, and a long `detail` containing a quote or a newline produces
+    invalid JSON. That is precisely how a drill run died: final_review's outcome file failed to
+    parse, the executor correctly reported `failed`, and the PARSE ERROR was handed to
+    final_fix as its findings list.
+
+    So the JSON is written by json.dump here, and the agent only has to name an outcome and
+    hand over text. `detail` accepts TEXT, "-" (stdin) or "@path", like every other text arg.
+    """
+    if args.outcome not in NODE_OUTCOMES:
+        die(f"outcome must be one of {', '.join(NODE_OUTCOMES)} (got {args.outcome!r})")
+    path = os.environ.get("RELAY_NODE_OUTCOME")
+    if not path:
+        die("RELAY_NODE_OUTCOME is not set — `relay outcome` only runs inside an agent node")
+    detail = read_arg(args.detail) if args.detail else ""
+    with open(path, "w", encoding="utf-8") as f:
+        json.dump({"outcome": args.outcome, "detail": detail}, f)
+    return {"outcome": args.outcome}
+
+
+# ============================ relay init ============================
+
+def _fetch(url, timeout=30):
+    """GET a URL with NO credentials, returning raw bytes. `init` runs before a board
+    key exists, so it deliberately bypasses api()'s bearer token — relay-config is a
+    public, unauthenticated repo by design (RLY-181/RLY-208)."""
+    req = urllib.request.Request(url, method="GET")
+    with urllib.request.urlopen(req, timeout=timeout) as resp:
+        return resp.read()
+
+
+# relay init pulls scaffolding from the relay-config repo over plain HTTPS (RLY-208), not from
+# the board server. Overridable via --config-url / RELAY_CONFIG_URL (forks; test fixtures).
+RELAY_CONFIG_URL = "https://raw.githubusercontent.com/jeremylightsmith/relay-config/main"
+
+
+def _config_url(args):
+    url = getattr(args, "config_url", None) or os.environ.get("RELAY_CONFIG_URL") or RELAY_CONFIG_URL
+    return url.rstrip("/")
+
+
+def _safe_path(rel):
+    """Absolute path for a manifest entry, refusing anything that escapes ROOT. The
+    payload comes from our own server, but a scaffold that could write outside the
+    project is not a thing to leave to trust."""
+    path = os.path.normpath(os.path.join(ROOT, rel))
+    if path != ROOT and not path.startswith(ROOT + os.sep):
+        die(f"scaffold path escapes the project root: {rel!r}")
+    return path
+
+
+def _classify(path, content, force):
+    """One file against disk → (bucket, diff to print). No hash manifest: a file that
+    differs is shown as a unified diff and left alone unless --force (RLY-181)."""
+    if not os.path.exists(path):
+        return "created", ""
+    try:
+        with open(path, encoding="utf-8") as f:
+            existing = f.read()
+    except UnicodeDecodeError:
+        # A binary/latin-1 file where a template goes. It cannot equal the template and
+        # cannot be diffed, so treat it like any other differing file: left alone unless
+        # --force. Uniform with every other handled failure path in cmd_init.
+        if force:
+            return "overwritten", ""
+        return "skipped", f"  (not valid UTF-8; cannot diff — {path})\n"
+    if existing == content:
+        return "unchanged", ""
+    if force:
+        return "overwritten", ""
+    diff = "".join(difflib.unified_diff(
+        existing.splitlines(keepends=True),
+        content.splitlines(keepends=True),
+        fromfile=f"{path} (yours)",
+        tofile=f"{path} (template)",
+    ))
+    return "skipped", diff
+
+
+def _write_file(path, content, mode):
+    os.makedirs(os.path.dirname(path) or ".", exist_ok=True)
+    with open(path, "w", encoding="utf-8") as f:
+        f.write(content)
+    os.chmod(path, int(mode, 8))
+
+
+def _self_update(config_url, target_version):
+    """Re-download bin/relay in place when relay-config advertises a NEWER one; returns the new
+    version, or None if it did not fire.
+
+    Only ever UPGRADES: pointing a checkout at an older config must not clobber that checkout's
+    CLI. An unwritable target is reported, never fatal — a read-only install can still scaffold."""
+    if target_version <= EXECUTOR_VERSION:
+        return None
+    try:
+        body = _fetch(config_url + "/bin/relay")
+        fd, tmp = tempfile.mkstemp(dir=os.path.dirname(HERE))
+        with os.fdopen(fd, "wb") as f:
+            f.write(body)
+        os.chmod(tmp, 0o755)
+        os.replace(tmp, HERE)
+    except OSError as e:
+        print(f"  ! could not update {HERE}: {e}")
+        return None
+    return target_version
+
+
+def _env_report():
+    """The things `init` can check but must never install (ADR 0006 / RLY-181 scope)."""
+    return [
+        ("this is a git repository", os.path.isdir(os.path.join(ROOT, ".git"))),
+        ("`claude` is on PATH", shutil.which("claude") is not None),
+        ("RELAY_URL is set", bool(os.environ.get("RELAY_URL"))),
+        ("RELAY_API_KEY is set", bool(os.environ.get("RELAY_API_KEY"))),
+    ]
+
+
+def _ask(prompt):
+    """One lowercased, stripped line from the user. Isolated so tests can stub `relay.input`."""
+    return input(prompt).strip().lower()
+
+
+def _prompt_optional(item):
+    """Ask install / skip / more-info for one optional item. Returns True to install."""
+    print(f"\n  {item['title']} — {item['description']}")
+    while True:
+        ans = _ask("  install? [Y]es / [s]kip / [m]ore info: ")
+        if ans in ("", "y", "yes"):
+            return True
+        if ans in ("s", "skip", "n", "no"):
+            print("  ! skipped. The default flows expect this; skip it and you'll need to edit "
+                  "your board's flow so it doesn't use it, or remove that step.")
+            return False
+        if ans in ("m", "more", "more info"):
+            print(f"    {item.get('details') or item['description']}")
+        # anything else: re-ask
+
+
+def _ensure_include(path, include_line, starter):
+    """Guarantee `include_line` is present in `path`, preserving existing content.
+
+    Absent file -> write the starter (which already includes the line). Existing file -> append
+    the line only if missing. Idempotent: a second run is a no-op."""
+    if not os.path.exists(path):
+        _write_file(path, starter, "644")
+        return "created"
+    with open(path, encoding="utf-8") as f:
+        content = f.read()
+    if include_line in content:
+        return "unchanged"
+    sep = "" if content.endswith("\n") else "\n"
+    with open(path, "a", encoding="utf-8") as f:
+        f.write(f"{sep}{include_line}\n")
+    return "updated"
+
+
+def _install_item(config_url, item, announce, results):
+    """Fetch one manifest item and place it. `starter` items wire the @relay.md include
+    (preserving user content); every other kind is written via _classify (diff/overwrite)."""
+    dest = _safe_path(item["dest"])
+    content = _fetch(config_url + "/" + item["src"].lstrip("/")).decode("utf-8")
+
+    if item.get("kind") == "starter":
+        status = _ensure_include(dest, "@relay.md", content)
+        print(f"  {item['dest']}: {status}")
+        results["unchanged" if status == "unchanged" else "installed"].append(item["dest"])
+        return
+
+    if announce:
+        print(f"  {item['title']} → {item['dest']}")
+    bucket, diff = _classify(dest, content, force=False)
+    if bucket == "unchanged":
+        print(f"  {item['dest']}: unchanged")
+        results["unchanged"].append(item["dest"])
+        return
+    if bucket == "skipped" and diff:
+        print(diff, end="")
+        if _ask(f"  {item['dest']} differs from the template. overwrite? [y]es / [N]o: ") not in ("y", "yes"):
+            print(f"  {item['dest']}: left as-is")
+            results["skipped"].append(item["dest"])
+            return
+    _write_file(dest, content, item.get("mode", "644"))
+    print(f"  {item['dest']}: installed")
+    results["installed"].append(item["dest"])
+
+
+def cmd_init(args):
+    """Interactive, friendly project scaffolding from the relay-config repo (RLY-208).
+
+    Announces each step before it acts, does one thing at a time, and lets the user opt out of
+    optional skills/agents. Requires a TTY — a piped/CI run is told to re-run in a terminal and
+    writes nothing. Files come from relay-config (RELAY_CONFIG_URL), not the board server."""
+    if not sys.stdin.isatty():
+        print("relay init is interactive and needs a terminal.")
+        print("It won't guess for you when piped or in CI, so it has written nothing.")
+        print("Re-run it directly in your shell:")
+        print("    bin/relay init")
+        return {"installed": [], "skipped": [], "unchanged": []}
+
+    config_url = _config_url(args)
+    board_url = (args.url or os.environ.get("RELAY_URL") or "").rstrip("/")
+
+    print("relay init will set this project up to work with Relay. Here's the plan:")
+    print(f"  - pull configuration from {config_url}")
+    print("  - make sure bin/relay is up to date")
+    print("  - install relay.md (how your agent drives Relay) and wire it into CLAUDE.md/AGENTS.md")
+    print("  - offer each skill and agent one at a time — install or skip as you like")
+
+    try:
+        manifest = json.loads(_fetch(config_url + "/manifest.json"))
+    except urllib.error.HTTPError as e:
+        die(f"GET {config_url}/manifest.json failed: HTTP {e.code}")
+    except urllib.error.URLError as e:
+        die(f"GET {config_url}/manifest.json failed: {e.reason}")
+    except (json.JSONDecodeError, UnicodeDecodeError) as e:
+        die(f"GET {config_url}/manifest.json returned something that is not JSON: {e}")
+
+    if not args.no_self_update:
+        version = manifest.get("executor", {}).get("version", 0)
+        print("\nChecking the executor is up to date…")
+        updated = _self_update(config_url, version)
+        if updated:
+            print(f"  bin/relay updated: version {EXECUTOR_VERSION} → {updated} (re-run to use it)")
+        else:
+            print("  bin/relay is current.")
+
+    items = manifest.get("items", [])
+    required = [i for i in items if i.get("required")]
+    optional = [i for i in items if not i.get("required")]
+    results = {"installed": [], "skipped": [], "unchanged": []}
+
+    print("\nInstalling the required pieces:")
+    for item in required:
+        _install_item(config_url, item, announce=True, results=results)
+
+    if optional:
+        print("\nNow the optional skills and agents — one at a time:")
+        for item in optional:
+            if _prompt_optional(item):
+                _install_item(config_url, item, announce=False, results=results)
+            else:
+                results["skipped"].append(item["dest"])
+
+    print("\nStill needed (relay init can't do these for you):")
+    board = board_url or "https://<your-board>"
+    for label, ok in _env_report():
+        print(f"  [{'x' if ok else ' '}] {label}")
+    print(f"  [ ] mint a board API key: {board} → Settings → API keys")
+    print(f"  [ ] export RELAY_URL={board} and RELAY_API_KEY=<that key>")
+    print(f"  [ ] enable flows: {board} → Settings → Flows")
+    print("  then: bin/relay execute")
+    return results
+
+
+# ============================ argparse ============================
+
+def build_parser():
+    p = argparse.ArgumentParser(prog="relay", description=__doc__.splitlines()[1])
+    sub = p.add_subparsers(dest="cmd")
+
+    def add(name, fn, *pos, json_flag=False):
+        sp = sub.add_parser(name)
+        for a in pos:
+            sp.add_argument(a)
+        if json_flag:
+            sp.add_argument("--json", action="store_true")
+            # --field rides alongside --json on every JSON-returning command: a selector
+            # available on only some of them is the inconsistency this card exists to kill.
+            sp.add_argument("--field", metavar="PATH",
+                            help="print one dotted-path value (e.g. status, owners.0.name)")
+        sp.set_defaults(func=fn)
+        return sp
+
+    bd = add("board", cmd_board, json_flag=True)
+    bd.add_argument("--include-done", action="store_true")
+    add("card", cmd_card, "ref", json_flag=True)
+    add("why", cmd_why, "ref", json_flag=True)
+    rt = add("retry", cmd_retry, "ref", json_flag=True)
+    rt.add_argument("--at")
+    add("runs", cmd_runs, "ref", json_flag=True)
+    add("executors", cmd_executors, json_flag=True)
+    fs = add("flow-stats", cmd_flow_stats, "key", json_flag=True)
+    fs.add_argument("--window")
+    add("version", cmd_version, json_flag=True)
+    add("git-fetch", cmd_git_fetch)
+    oc = add("outcome", cmd_outcome, "outcome")
+    oc.add_argument("--detail")
+    c = add("create", cmd_create, "title", json_flag=True)
+    c.add_argument("--stage")
+    c.add_argument("--description")
+    c.add_argument("--tag")
+    add("move", _simple(lambda a: move(a.ref, a.stage)), "ref", "stage", json_flag=True)
+    add("status", _simple(lambda a: set_status(a.ref, a.status)), "ref", "status", json_flag=True)
+    add("describe", _simple(lambda a: set_description(a.ref, read_arg(a.text))), "ref", "text", json_flag=True)
+    add("criteria", _simple(lambda a: set_acceptance_criteria(a.ref, read_arg(a.text))), "ref", "text", json_flag=True)
+    add("spec", _simple(lambda a: set_spec(a.ref, read_arg(a.text))), "ref", "text", json_flag=True)
+    add("plan", _simple(lambda a: set_plan(a.ref, read_arg(a.text))), "ref", "text", json_flag=True)
+    add("branch", _simple(lambda a: set_branch(a.ref, a.name)), "ref", "name", json_flag=True)
+    add("pr", _simple(lambda a: set_pr_url(a.ref, a.url)), "ref", "url", json_flag=True)
+    tg = add("tag", _simple(lambda a: set_tag(a.ref, a.value)), "ref", json_flag=True)
+    tg.add_argument("value", nargs="?")
+    add("sub-tasks", _simple(lambda a: set_sub_tasks(a.ref, read_arg(a.text))), "ref", "text", json_flag=True)
+    add("check", _simple(lambda a: set_sub_task_done(a.ref, a.id, True)), "ref", "id", json_flag=True)
+    add("uncheck", _simple(lambda a: set_sub_task_done(a.ref, a.id, False)), "ref", "id", json_flag=True)
+    add("result", _simple(lambda a: set_result(a.ref, read_arg(a.text))), "ref", "text", json_flag=True)
+    ni = add("needs-input", cmd_needs_input, "ref", json_flag=True)
+    ni.add_argument("question", nargs="?")
+    ni.add_argument("--questions")
+    add("own", _simple(lambda a: own(a.ref)), "ref", json_flag=True)
+    add("release", _simple(lambda a: release(a.ref)), "ref", json_flag=True)
+    add("approve", _simple(lambda a: api("POST", f"/api/cards/{a.ref}/approve", {})["data"]), "ref", json_flag=True)
+    add("reject", cmd_reject, "ref", "note", json_flag=True)
+    add("comment", cmd_comment, "ref", "text")
+    at = add("attach", cmd_attach, "ref", "file", json_flag=True)
+    at.add_argument("--caption")
+    ex = add("execute", cmd_execute)
+    ex.add_argument("--once", action="store_true")
+    ex.add_argument("--dry-run", action="store_true")
+    ex.add_argument("--interval", type=int)
+    ini = add("init", cmd_init)
+    ini.add_argument("--config-url", help="relay-config base URL (default: RELAY_CONFIG_URL / the public repo)")
+    ini.add_argument("--url", help="board URL for the closing checklist (default: RELAY_URL)")
+    ini.add_argument("--no-self-update", action="store_true")
+    return p
+
+
+def main():
+    parser = build_parser()
+    args = parser.parse_args()
+    if not getattr(args, "cmd", None):
+        # The board runner is gone (RLY-139): dispatch is server-side now, and this
+        # binary's runner mode is `relay execute`.
+        parser.print_help()
+        return
+    args.func(args)
+
+
+if __name__ == "__main__":
+    main()

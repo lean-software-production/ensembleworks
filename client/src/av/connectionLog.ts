@@ -9,7 +9,7 @@ export interface ClientConnEvent {
 	ts: number
 	roomId: string
 	userId: string
-	plane: 'livekit' | 'sync'
+	plane: 'livekit' | 'sync' | 'lock'
 	event: string
 	detail?: unknown
 }
@@ -74,7 +74,7 @@ const singleton = createConnectionLog({
 	},
 })
 
-export function logConnectionEvent(plane: 'livekit' | 'sync', event: string, detail?: unknown) {
+export function logConnectionEvent(plane: 'livekit' | 'sync' | 'lock', event: string, detail?: unknown) {
 	if (!ctxRoomId) return
 	console.debug(`[conn] ${plane} ${event}`, detail ?? '')
 	singleton.log({ roomId: ctxRoomId, userId: ctxUserId, plane, event, detail })

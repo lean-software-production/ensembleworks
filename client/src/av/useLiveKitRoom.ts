@@ -60,6 +60,11 @@ export interface LiveKitState {
 	// True while LiveKit reports *you* as an active speaker, so your own rail
 	// face can pop the same way a teammate's does.
 	localSpeaking: boolean
+	// Which physical input each kind is using (null = browser default) and
+	// the switcher the panel's device pickers call. Only reflects explicit
+	// switches made through setAvDevice, not OS-level default changes.
+	activeDevices: { audioinput: string | null; videoinput: string | null }
+	setAvDevice: (kind: 'audioinput' | 'videoinput', deviceId: string) => void
 }
 
 export function useLiveKitRoom(roomId: string, identity: string, name: string): LiveKitState {
@@ -69,6 +74,10 @@ export function useLiveKitRoom(roomId: string, identity: string, name: string): 
 	const [micEnabled, setMicState] = useState(false)
 	const [camEnabled, setCamState] = useState(false)
 	const [localVideoTrack, setLocalVideoTrack] = useState<LocalTrack | null>(null)
+	const [activeDevices, setActiveDevices] = useState<LiveKitState['activeDevices']>({
+		audioinput: null,
+		videoinput: null,
+	})
 	// Identities LiveKit currently reports as speaking (includes the local
 	// participant when you talk). Kept separate from `peers` so a speaker change
 	// doesn't churn the video tracks.
@@ -307,6 +316,15 @@ export function useLiveKitRoom(roomId: string, identity: string, name: string): 
 		setCamState(on)
 	}
 
+	// switchActiveDevice republishes the live track on the new device; state
+	// updates only on success so the pickers never show a device that failed.
+	const setAvDevice = (kind: 'audioinput' | 'videoinput', deviceId: string) => {
+		room
+			?.switchActiveDevice(kind, deviceId)
+			.then(() => setActiveDevices((prev) => ({ ...prev, [kind]: deviceId })))
+			.catch(console.error)
+	}
+
 	const localIdentity = room?.localParticipant.identity
 	return {
 		status,
@@ -320,5 +338,7 @@ export function useLiveKitRoom(roomId: string, identity: string, name: string): 
 		audioContext: audioCtxRef.current,
 		localVideoTrack,
 		localSpeaking: localIdentity ? speakingIds.has(localIdentity) : false,
+		activeDevices,
+		setAvDevice,
 	}
 }

@@ -27,6 +27,7 @@ import {
 } from '@ensembleworks/contracts'
 import { canvasTmuxSpawnSpec, openTmuxSession, type TmuxSession } from '@ensembleworks/contracts/session-manager'
 import { WebSocketServer, type WebSocket } from 'ws'
+import { stripTerminalReports } from './terminal-input-filter.ts'
 
 const PORT = Number(process.env.PORT ?? 8789)
 const SCROLLBACK_LIMIT = 256 * 1024 // bytes replayed to newly attached clients
@@ -45,7 +46,7 @@ const TMUX_CONF =
 // the leaf pty drops privilege. A fixed host-provisioned launcher (allowed by a
 // narrow NOPASSWD sudoers rule) does the `cd $HOME` + `exec tmux …` with a box-wide
 // tmux.conf the sandbox user can read — keeping the privileged surface to one
-// binary. Unset (legacy -ash box, local dev) → shells run as the gateway user,
+// binary. Unset (local dev) → shells run as the gateway user,
 // exactly as before. See deploy/systemd/prod/ensembleworks-term.service.
 const RUN_AS = process.env.TERM_RUN_AS?.trim() ?? ''
 const TERM_LAUNCHER = process.env.TERM_LAUNCHER ?? '/usr/local/bin/ensembleworks-term-launch'
@@ -57,7 +58,10 @@ const execFileP = promisify(execFile)
 // readable. When dropping, sudo's env_reset strips the gateway's environment and
 // -H points HOME at the sandbox user; the launcher owns the conf + `cd`, so we
 // pass a deliberately bare env and a neutral cwd (the gateway user may not be able
-// to chdir into the sandbox user's home).
+// to chdir into the sandbox user's home). LANG must be in that bare env: without
+// a UTF-8 LC_CTYPE the tmux client mangles every non-Latin-1 glyph to "_" per
+// cell, and sudo's env_reset keeps LANG (built-in env_check list), so it reaches
+// the launcher's tmux.
 function tmuxSpawnSpec(id: string): {
 	file: string
 	args: string[]
@@ -70,7 +74,7 @@ function tmuxSpawnSpec(id: string): {
 			file: 'sudo',
 			args: ['-n', '-H', '-u', RUN_AS, '--', TERM_LAUNCHER, sessionName],
 			cwd: '/',
-			env: { TERM: 'xterm-256color' },
+			env: { TERM: 'xterm-256color', LANG: 'C.UTF-8' },
 		}
 	}
 	return canvasTmuxSpawnSpec({ sessionId: id, tmuxConf: TMUX_CONF, home: process.env.HOME })
@@ -289,7 +293,7 @@ server.on('upgrade', (req, socket, head) => {
 			if (!result.success) return
 			const msg = result.data
 			if (msg.type === 'input') {
-				session.pty.write(msg.data)
+				session.pty.write(stripTerminalReports(msg.data))
 			} else if (msg.type === 'resize') {
 				resizeSession(session, msg.cols, msg.rows)
 			}

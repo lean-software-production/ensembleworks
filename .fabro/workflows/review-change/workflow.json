@@ -1,0 +1,98 @@
+{
+  "version": 1,
+  "name": "Review a committed change",
+  "workflow": "workflow.fabro",
+  "files": [
+    "workflow.fabro",
+    "runner.mjs"
+  ],
+  "environment": "local",
+  "autoApprove": true,
+  "inputSchema": {
+    "type": "object",
+    "additionalProperties": false,
+    "required": [
+      "validationCommands",
+      "qualityCommand",
+      "reviewBaseSha"
+    ],
+    "properties": {
+      "setupCommands": {
+        "type": "array",
+        "items": {
+          "type": "string",
+          "minLength": 1
+        },
+        "maxItems": 8
+      },
+      "validationCommands": {
+        "type": "array",
+        "minItems": 1,
+        "maxItems": 12,
+        "items": {
+          "type": "string",
+          "minLength": 1
+        }
+      },
+      "qualityCommand": {
+        "type": "string",
+        "minLength": 1
+      },
+      "qualityMode": {
+        "type": "string",
+        "enum": [
+          "gate",
+          "report"
+        ],
+        "description": "Default gate requires exit zero. Report allows findings but still rejects execution errors."
+      },
+      "reviewBaseSha": {
+        "type": "string",
+        "pattern": "^[a-f0-9]{40}$"
+      }
+    }
+  },
+  "outputSchema": {
+    "type": "object",
+    "required": [
+      "baseSha",
+      "resultSha",
+      "changedFiles",
+      "before",
+      "after",
+      "review",
+      "outcome"
+    ],
+    "properties": {
+      "baseSha": {
+        "type": "string",
+        "pattern": "^[a-f0-9]{40}$"
+      },
+      "resultSha": {
+        "type": "string",
+        "pattern": "^[a-f0-9]{40}$"
+      },
+      "changedFiles": {
+        "type": "array",
+        "items": {
+          "type": "string"
+        },
+        "maxItems": 0
+      },
+      "before": {
+        "type": "object"
+      },
+      "after": {
+        "type": "object"
+      },
+      "review": {
+        "type": "string",
+        "minLength": 1
+      },
+      "outcome": {
+        "const": "reviewed"
+      }
+    }
+  },
+  "acceptanceInstructions": "Inspect review.md and target.patch against the requested reviewBaseSha..baseSha and scoped paths. Findings must cite evidence and distinguish findings from uncertainty. Verify reviewed means a completed review, not approval of the code. Source and HEAD must remain unchanged. No fixes, commits, external comments or publication. For canvas-editor tools, canvas-react, or client canvas-v2 input/tool changes, declare or extend an interaction contract (or justify ux-contract: none), record verbatim RED before fixing and stop if unreachable, implement Obs additions in both FSM and browser adapters, and independently verify RED/GREEN during review."
+}

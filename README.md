@@ -125,13 +125,31 @@ and `bin/dev doctor` tells you what's missing (Bun 1.3.14 and tmux required;
 caddy, livekit-server, whisper-server, docker each light up more services).
 Inside the container `bin/dev` is that same engine.
 
-State lives at `~/.local/share/ensembleworks` (canvas SQLite, uploads,
-transcripts); optional config at `~/.config/ensembleworks/dev.env`
+State lives under `~/.local/share/ensembleworks` as the required storage
+triple: `data/` (uploads, transcripts — `DATA_DIR`), `databases/` (live canvas
+SQLite — `DATABASE_DIR`), `database-backups/` (`DATABASE_BACKUPS_DIR`). All
+three are required by the sync server, which validates them at startup and
+refuses collision shapes (existing dev state from before the split sits at the
+root level and is disposable — or `mv` uploads/transcripts into `data/` to
+keep it). Optional config at `~/.config/ensembleworks/dev.env`
 (`STT_API_KEY` for hosted STT, `LIVEKIT_*` + `livekit-dev.yaml` for a real
 SFU setup, `ENSEMBLEWORKS_PUBLIC_ORIGIN` when serving on a remote origin).
 In the devcontainer both paths are symlinks into the git-ignored `.local/`
 workspace folder, so they survive container rebuilds; `rm -rf .local` is a
 factory reset.
+
+**Multiple stacks on one host.** Every dev port shifts by
+`ENSEMBLEWORKS_PORT_OFFSET`, persisted per-checkout in `.local/port-offset` so
+it survives across `up`/`down`. `bin/dev up` auto-picks 100, 200, … when the
+default ports are busy and narrates the resulting edge URL; at a nonzero
+offset LiveKit runs from a generated config (`<dataDir>/livekit-dev.generated.yaml`)
+since `--dev` mode has fixed ports. To change the offset, `bin/dev down`,
+then `ENSEMBLEWORKS_PORT_OFFSET=<n> bin/dev up` (or edit
+`.local/port-offset`) — bin/dev detects the offset change and recreates the
+container (published ports are fixed at create).
+Offset stacks use tmux session `workspace-<offset>` and data dir
+`~/.local/share/ensembleworks-<offset>`; use separate clones rather than
+linked worktrees (the controller always targets the main checkout).
 
 **Developing on a remote box (LAN).** Run the devcontainer on another machine
 and reach it — canvas, terminals, transcription **and voice** — from your
@@ -341,27 +359,54 @@ tracked as separate internal-service-auth work — see issue #24.)
 
 ## Terminals & tmux
 
-Canvas terminals run an Omarchy-derived tmux config
-([deploy/tmux-ensembleworks.conf](deploy/tmux-ensembleworks.conf), adapted from
-[basecamp/omarchy](https://github.com/basecamp/omarchy), MIT — local edits
-are marked `ENSEMBLEWORKS` in the file):
+There are **two** Omarchy-derived tmux configs
+([basecamp/omarchy](https://github.com/basecamp/omarchy), MIT — local edits are
+marked `ENSEMBLEWORKS` in each file). They share no base, and must not be
+merged: tmux options set with `set -g` are *server*-global, so a single file
+could not give canvas terminals one look and the dev stack another.
 
-- Prefix is **Ctrl-Space** (Ctrl-b still works). `prefix h`/`v` split,
-  `prefix c` new window, `prefix q` reloads the config, `prefix ?` lists keys.
-- **Vi copy-mode**: `prefix [`, then `v` to select, `y` to yank — the yank
-  lands in your *browser* clipboard (OSC52 via tmux `set-clipboard` + the
-  xterm.js clipboard addon).
-- Mouse is on: wheel-scroll in a terminal scrolls tmux history.
-- The Alt-key bindings (`M-1..9`, `C-M-arrows`) work over plain `ssh` +
-  `tmux attach`, but the browser/OS eats some of them on the canvas — the
-  prefix-based bindings always work.
-- The status bar sits at the top of the terminal (Omarchy's default).
-- Apps that auto-detect light/dark (Claude Code's "Auto Terminal", vim, bat)
-  can't query the background through tmux < 3.4 (it drops OSC 11), so the
-  config exports `COLORFGBG=0;15` — the standard "light background" hint.
-  Open a fresh tmux window (or restart the app) after changing it.
-- The config applies when the tmux server starts; to restyle a running
-  server: `tmux source-file deploy/tmux-ensembleworks.conf`.
+| File | Serves | Multiplexer visible? |
+| --- | --- | --- |
+| [deploy/tmux-ensembleworks.conf](deploy/tmux-ensembleworks.conf) | canvas terminals (`canvas-<id>` sessions, spawned by the terminal gateway) | **no** — "invisible tmux" |
+| [deploy/tmux-dev.conf](deploy/tmux-dev.conf) | the `bin/dev` stack (the `workspace` session) | yes |
+
+They stay independent because they run on **different tmux servers**: in prod
+canvas terminals run as the sandbox user (its own default socket), and `bin/dev`
+always passes `tmux -L <session>` so the devcontainer — where both live under
+one user — keeps them apart too.
+
+**Canvas terminals — "invisible tmux".** A canvas terminal should read as a
+terminal, not as a multiplexer. Session persistence, scrollback and clipboard
+are kept; every affordance that reveals tmux is removed:
+
+- **No status bar, and no prefix** (`prefix`/`prefix2` are `None`), so `C-Space`
+  and `C-b` pass through to the app you're running.
+- No splits, windows or session switching, and **no right-click menu** — tmux's
+  own context menu (Horizontal Split / Kill / Respawn / Zoom) is reachable with
+  no prefix at all, so it is unbound explicitly; right-click falls through to
+  the browser's menu.
+- **Kept:** mouse on (wheel-scroll scrolls tmux history), vi copy-mode,
+  drag/double/triple-click copy landing in your *browser* clipboard (OSC52 via
+  tmux `set-clipboard` + the xterm.js clipboard addon), 50k scrollback.
+- Removals are written as explicit `unbind` lines, never omissions — the canvas
+  tmux server is long-lived and survives deploys, so the file lands via
+  `source-file`, which can only remove what it *names*.
+- Known gap: the `Esc Esc to exit focus` hint lived in the status bar and is
+  gone. It wants to be a transient overlay in the canvas client.
+
+**The dev stack** keeps the full multiplexer — prefix **Ctrl-Space** (Ctrl-b
+too), `prefix h`/`v` split, `prefix c` new window, `prefix q` reload, `prefix ?`
+lists keys, `M-1..9` window switching, status bar at the top. Attach with
+`bin/dev attach`.
+
+Both configs export `COLORFGBG=0;15` — the standard "light background" hint —
+because apps that auto-detect light/dark (Claude Code's "Auto Terminal", vim,
+bat) can't query the background through tmux < 3.4, which drops OSC 11. Open a
+fresh window (or restart the app) after changing it.
+
+A config applies when its tmux server starts; to restyle a running server:
+`tmux source-file <the conf>` (for canvas terminals the prefix is `None`, so the
+`prefix q` reload binding is unreachable — use the CLI form).
 
 The look is the **Wellmaintained paper theme**: tokens live in
 `client/src/theme.ts` (shape chrome, xterm palette) and `client/src/theme.css`
@@ -379,11 +424,11 @@ return dofile("<repo>/ensembleworks/deploy/theme/neovim.lua")
 
 ## Releasing & deploying (production)
 
-Production client boxes (e.g. ew-donkeyred-001) run non-watch systemd units; the
-sync server serves the static client (Caddy proxies to it). The host (Bun, Caddy,
-cloudflared, LiveKit, the resource envelope, secret placeholders) is provisioned by
-the **laingville** repo (`servers/<host>/bootstrap.sh`); this repo owns the app + its
-rollout.
+Production client boxes (currently `ew-lsp-001`) run non-watch systemd units;
+the sync server serves the static client (Caddy proxies to it). The
+[infrastructure repo](https://github.com/lean-software-production/infrastructure)
+owns the hosts and rollout order. This repo owns the app, release artifacts,
+and the deploy script invoked by infrastructure.
 
 > **Prerequisite — tldraw license.** On a real production domain tldraw enforces a
 > per-domain license; without one the editor blanks. `VITE_TLDRAW_LICENSE_KEY` is a
@@ -401,9 +446,14 @@ rollout.
    `ensembleworks-transcriber`) and the client bundle, and attaches them + a
    checksums file to the GitHub release.
 
-2. **Deploy a version** to a server (SSH over its tailnet name):
+2. **Deploy a version.** When automatic deployment is enabled, the successful
+   release workflow dispatches the published stable tag to the
+   [infrastructure deployment workflow](https://github.com/lean-software-production/infrastructure/blob/main/docs/ensembleworks-release-deploy.md),
+   which deploys to staging and then production. The dispatcher holds no box
+   credentials. Until the one-time credentials and `EW_INFRA_DEPLOY_ENABLED`
+   variable are configured, deploy manually over SSH:
 
-       deploy/deploy.sh mrdavidlaing@ew-donkeyred-001-tailnet 0.2.0
+       deploy/deploy.sh ew-admin@ew-lsp-001-tailnet 0.30.2
 
    deploy.sh is **fetch-verify-swap**: it preflights the host against
    `deploy/runtime-requirements`, downloads the tag's CI-compiled binaries +
@@ -416,7 +466,7 @@ rollout.
 3. **Roll back**: deploy an older version — its fetched dir is still present, so it
    swaps the symlink instantly (within the same posture era; see `EW_ALLOW_ERA_CROSS`):
 
-       deploy/deploy.sh mrdavidlaing@ew-donkeyred-001-tailnet 0.1.0
+       deploy/deploy.sh ew-admin@ew-lsp-001-tailnet 0.30.1
 
 4. **(Optional) shared browser** — a neko container (real Firefox streamed to the
    canvas, the whole mob driving one browser). It's an opt-in extra service, off
@@ -427,7 +477,7 @@ rollout.
    deploy.sh then installs/enables `ensembleworks-shared-browser` (its own unit +
    resource slice) and adds the `/shared-browser` Caddy route. Being a container,
    not release code, it's never restarted on a routine deploy (so the live shared
-   session survives). Prerequisites are **host**-owned by the laingville bootstrap
+   session survives). Prerequisites are **host**-owned by the infrastructure repo
    (like LiveKit): `docker` installed, the media UDP port opened in ufw + the cloud
    firewall, and `~<app-user>/.config/ensembleworks/shared-browser.env` filled in
    from [deploy/shared-browser.env.example](deploy/shared-browser.env.example).
@@ -436,7 +486,7 @@ rollout.
 5. **Terminal sandbox user.** On prod boxes the terminal gateway runs as the app
    user but drops each shell to a less-privileged **`ensembleworks-agent`** user
    (`TERM_RUN_AS` in the term unit), so canvas terminals can't read the app user's
-   home — releases, `build.env`, the neko/LiveKit secrets. The gateway calls a
+   home — releases, `sync.env`/`storage.env`, the neko/LiveKit secrets. The gateway calls a
    fixed launcher via sudo; when the sandbox user is present, `deploy.sh` also puts
    the `ensembleworks` CLI (and its `ew` symlink) on its PATH and seeds
    `~ensembleworks-agent/AGENTS.md` +

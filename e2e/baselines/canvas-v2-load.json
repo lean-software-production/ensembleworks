@@ -1,0 +1,247 @@
+{
+  "_provenance": {
+    "host": "zeus-arch",
+    "date": "2026-07-19",
+    "note": "dev-box capture, production client build via vite preview, cold HTTP cache per rep. Gated statistic is the MEDIAN (p50) of REPS=5; max and cv% are advisory, because at n=5 the house p95 formula returns the max. CI runners are more contended, hence the 2x margin. Branch point: fix/v2-boot-sync-ready (no fixed boot settle sleep)."
+  },
+  "v2-100-bulk-warm": {
+    "firstShapeMs": {
+      "n": 5,
+      "minms": 500.9,
+      "p50ms": 506.8,
+      "maxms": 530.5,
+      "spreadMs": 29.6,
+      "cvPct": 2.01
+    },
+    "wsOpenMs": {
+      "n": 5,
+      "minms": 477.8,
+      "p50ms": 485.9,
+      "maxms": 508.8,
+      "spreadMs": 31,
+      "cvPct": 2.14
+    },
+    "chunkResponseEndMs": {
+      "n": 5,
+      "minms": 175.5,
+      "p50ms": 183.5,
+      "maxms": 200.3,
+      "spreadMs": 24.8,
+      "cvPct": 4.41
+    },
+    "toolbarMs": {
+      "n": 5,
+      "minms": 500.9,
+      "p50ms": 506.8,
+      "maxms": 530.5,
+      "spreadMs": 29.6,
+      "cvPct": 2.01
+    },
+    "chunkToToolbarMs": {
+      "n": 5,
+      "minms": 323.3,
+      "p50ms": 325.4,
+      "maxms": 330.2,
+      "spreadMs": 6.9,
+      "cvPct": 0.77
+    },
+    "toolbarToFirstShapeMs": {
+      "n": 5,
+      "minms": 0,
+      "p50ms": 0,
+      "maxms": 0,
+      "spreadMs": 0,
+      "cvPct": 0
+    },
+    "_meta": {
+      "engine": "canvas-editor@0.1.0+canvas-react@0.1.0",
+      "capturedAt": "2026-07-19T23:58:52.714Z",
+      "host": "zeus-arch"
+    }
+  },
+  "v2-1000-bulk-warm": {
+    "firstShapeMs": {
+      "n": 5,
+      "minms": 533.7,
+      "p50ms": 550.5,
+      "maxms": 570.9,
+      "spreadMs": 37.2,
+      "cvPct": 2.89
+    },
+    "wsOpenMs": {
+      "n": 5,
+      "minms": 475.4,
+      "p50ms": 494.1,
+      "maxms": 511,
+      "spreadMs": 35.6,
+      "cvPct": 3.09
+    },
+    "chunkResponseEndMs": {
+      "n": 5,
+      "minms": 172.4,
+      "p50ms": 191.6,
+      "maxms": 208.1,
+      "spreadMs": 35.7,
+      "cvPct": 8.13
+    },
+    "toolbarMs": {
+      "n": 5,
+      "minms": 533.7,
+      "p50ms": 550.5,
+      "maxms": 570.9,
+      "spreadMs": 37.2,
+      "cvPct": 2.89
+    },
+    "chunkToToolbarMs": {
+      "n": 5,
+      "minms": 358.9,
+      "p50ms": 360.2,
+      "maxms": 362.9,
+      "spreadMs": 4,
+      "cvPct": 0.38
+    },
+    "toolbarToFirstShapeMs": {
+      "n": 5,
+      "minms": 0,
+      "p50ms": 0,
+      "maxms": 0,
+      "spreadMs": 0,
+      "cvPct": 0
+    },
+    "_meta": {
+      "engine": "canvas-editor@0.1.0+canvas-react@0.1.0",
+      "capturedAt": "2026-07-19T23:58:56.737Z",
+      "host": "zeus-arch"
+    }
+  },
+  "v2-1000-bulk-cold": {
+    "firstShapeMs": {
+      "n": 5,
+      "minms": 557.1,
+      "p50ms": 579.2,
+      "maxms": 604.5,
+      "spreadMs": 47.4,
+      "cvPct": 2.99
+    },
+    "wsOpenMs": {
+      "n": 5,
+      "minms": 499,
+      "p50ms": 520.1,
+      "maxms": 547.1,
+      "spreadMs": 48.1,
+      "cvPct": 3.54
+    },
+    "chunkResponseEndMs": {
+      "n": 5,
+      "minms": 175.4,
+      "p50ms": 196.4,
+      "maxms": 223.8,
+      "spreadMs": 48.4,
+      "cvPct": 9.36
+    },
+    "toolbarMs": {
+      "n": 5,
+      "minms": 557.1,
+      "p50ms": 579.2,
+      "maxms": 604.5,
+      "spreadMs": 47.4,
+      "cvPct": 2.99
+    },
+    "chunkToToolbarMs": {
+      "n": 5,
+      "minms": 380.7,
+      "p50ms": 382.8,
+      "maxms": 392.6,
+      "spreadMs": 11.9,
+      "cvPct": 1.21
+    },
+    "toolbarToFirstShapeMs": {
+      "n": 5,
+      "minms": 0,
+      "p50ms": 0,
+      "maxms": 0,
+      "spreadMs": 0,
+      "cvPct": 0
+    },
+    "_meta": {
+      "engine": "canvas-editor@0.1.0+canvas-react@0.1.0",
+      "capturedAt": "2026-07-19T23:59:01.032Z",
+      "host": "zeus-arch"
+    }
+  },
+  "v2-1000-percommit-warm": {
+    "firstShapeMs": {
+      "n": 5,
+      "minms": 540.9,
+      "p50ms": 550.7,
+      "maxms": 565.8,
+      "spreadMs": 24.9,
+      "cvPct": 1.98
+    },
+    "wsOpenMs": {
+      "n": 5,
+      "minms": 479.8,
+      "p50ms": 495.7,
+      "maxms": 510.5,
+      "spreadMs": 30.7,
+      "cvPct": 2.52
+    },
+    "chunkResponseEndMs": {
+      "n": 5,
+      "minms": 177.6,
+      "p50ms": 192.8,
+      "maxms": 208,
+      "spreadMs": 30.4,
+      "cvPct": 6.49
+    },
+    "toolbarMs": {
+      "n": 5,
+      "minms": 540.9,
+      "p50ms": 550.7,
+      "maxms": 565.8,
+      "spreadMs": 24.9,
+      "cvPct": 1.98
+    },
+    "chunkToToolbarMs": {
+      "n": 5,
+      "minms": 357.8,
+      "p50ms": 359.6,
+      "maxms": 363.6,
+      "spreadMs": 5.8,
+      "cvPct": 0.59
+    },
+    "toolbarToFirstShapeMs": {
+      "n": 5,
+      "minms": 0,
+      "p50ms": 0,
+      "maxms": 0,
+      "spreadMs": 0,
+      "cvPct": 0
+    },
+    "_meta": {
+      "engine": "canvas-editor@0.1.0+canvas-react@0.1.0",
+      "capturedAt": "2026-07-19T23:59:26.980Z",
+      "host": "zeus-arch"
+    }
+  },
+  "v1-100": {
+    "firstShapeMs": {
+      "n": 5,
+      "minms": 419.7,
+      "p50ms": 428.7,
+      "maxms": 464.4,
+      "spreadMs": 44.7,
+      "cvPct": 3.87
+    },
+    "wsOpenMs": null,
+    "chunkResponseEndMs": null,
+    "toolbarMs": null,
+    "chunkToToolbarMs": null,
+    "toolbarToFirstShapeMs": null,
+    "_meta": {
+      "engine": "canvas-editor@0.1.0+canvas-react@0.1.0",
+      "capturedAt": "2026-07-19T23:59:30.572Z",
+      "host": "zeus-arch"
+    }
+  }
+}

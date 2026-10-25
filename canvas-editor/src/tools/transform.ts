@@ -1,0 +1,603 @@
+// The transform tool: idle -> pointing(handle) -> resizing | rotating, back
+// to idle on pointerup. Operates on the EXISTING selection only (it never
+// changes `editor.get().selection` itself — that's the select tool's job);
+// a pointerdown that misses every handle is a no-op here, by design.
+//
+// HANDLE MODEL (exported, single source of truth — D4's renderer draws
+// FROM `selectionHandles`, never recomputing its own layout): 4 corners + 4
+// edge midpoints + 1 rotate handle, offset above the top edge by
+// ROTATE_HANDLE_OFFSET. `selectionHandles` is coordinate-space AGNOSTIC —
+// it just lays out 9 points relative to whatever Bounds it's given, in
+// THAT bounds' own space. This tool always calls it with a WORLD-space
+// Bounds (the selection's axis-aligned worldBounds union — see
+// selectionWorldBounds below), so a single ROTATED shape's handles come out
+// axis-aligned to the WORLD, not rotated with the shape itself — an
+// explicit SCOPE LIMIT (OURS): tldraw aligns a lone selected shape's
+// handles to ITS OWN rotation; matching that is Phase 4/5 tldraw-parity
+// polish, out of scope for the C8 task this file closes (which is about
+// FRAME-CONVERSION correctness in editor.ts's Resize/RotateShapes, not
+// this tool's handle-rendering fidelity for a rotated single shape — see
+// worldToParentFrame's doc comment there for what IS now correct
+// regardless of this handle-rendering simplification: a shape nested under
+// a rotated PARENT still resizes/rotates world-correctly even though the
+// handles this tool shows for it are axis-aligned).
+import {
+  centroid, isFixedSizeSelection, resolveArrowAnchor, routeArrow, worldBounds, type Bounds, type CanvasDocument, type Point, type Shape,
+} from '@ensembleworks/canvas-model'
+import type { ArrowBinding, Intent } from '../intents.js'
+import { crossedThreshold, screenToWorld, worldToScreen, type Camera, type InputEvent, type PointerInputEvent, type Tool } from '../input.js'
+import { arrowHandles, bendFromPoint, hitArrowHandle, type ArrowHandleId } from './arrow-handles.js'
+import type { ToolContext } from './tool-context.js'
+
+export type HandleId = 'nw' | 'n' | 'ne' | 'e' | 'se' | 's' | 'sw' | 'w' | 'rotate'
+export type HandleKind = 'corner' | 'edge' | 'rotate'
+
+export interface Handle {
+  readonly id: HandleId
+  readonly kind: HandleKind
+  readonly point: Point
+}
+
+// Fixed offset (OURS, undocumented tldraw parity — tldraw's shipped product
+// actually uses per-CORNER rotate handles, not a single top handle; see
+// canvas-model/src/arrow-route.ts's citation-style precedent for how this
+// package cites tldraw source, N/A here since there is no single-matching
+// tldraw constant to cite against our deliberately simpler one-handle
+// design) above the selection's top edge, in the SAME units as the `Bounds`
+// passed to `selectionHandles` — i.e. if a caller passes WORLD-space bounds
+// (as this file's tool does), the offset is 32 world units; a caller that
+// instead wants a SCREEN-space-constant offset (so it doesn't visually
+// shrink at high zoom) can pass SCREEN-space bounds instead — the function
+// is coordinate-space agnostic by design (see the module header).
+const ROTATE_HANDLE_OFFSET = 32
+
+/**
+ * Lay out the 9 selection handles (4 corners, 4 edge midpoints, 1 rotate)
+ * for `bounds`, in `bounds`' OWN coordinate space (world, local, or screen —
+ * this function does not care; see the module header). Corner/edge order is
+ * clockwise from top-left, matching worldCorners' own TL/TR/BR/BL
+ * convention for the 4 corners.
+ */
+export function selectionHandles(bounds: Bounds): Handle[] {
+  const { minX, minY, maxX, maxY } = bounds
+  const { x: midX, y: midY } = centroid(bounds)
+  return [
+    { id: 'nw', kind: 'corner', point: { x: minX, y: minY } },
+    { id: 'n', kind: 'edge', point: { x: midX, y: minY } },
+    { id: 'ne', kind: 'corner', point: { x: maxX, y: minY } },
+    { id: 'e', kind: 'edge', point: { x: maxX, y: midY } },
+    { id: 'se', kind: 'corner', point: { x: maxX, y: maxY } },
+    { id: 's', kind: 'edge', point: { x: midX, y: maxY } },
+    { id: 'sw', kind: 'corner', point: { x: minX, y: maxY } },
+    { id: 'w', kind: 'edge', point: { x: minX, y: midY } },
+    { id: 'rotate', kind: 'rotate', point: { x: midX, y: minY - ROTATE_HANDLE_OFFSET } },
+  ]
+}
+
+/**
+ * Which handle (if any) is under `screenPoint`, within `tolerancePx` SCREEN
+ * pixels? Every handle's WORLD point (per selectionHandles' contract, this
+ * tool always calls it that way — see the module header) is projected to
+ * screen via `camera` (worldToScreen — the same NORMATIVE conversion every
+ * other tool uses), so the tolerance is naturally zoom-correct: a 4px
+ * screen tolerance is 4 screen pixels whether the camera is zoomed in or
+ * out, exactly like input.ts's DRAG_THRESHOLD. Picks the CLOSEST handle
+ * (not just the first within tolerance — handles can legitimately be close
+ * together on a tiny selection), so overlapping handles resolve
+ * deterministically rather than by array-iteration order. Returns null if
+ * the closest handle is still farther than `tolerancePx`.
+ */
+export function hitHandle(handles: readonly Handle[], screenPoint: Point, camera: Camera, tolerancePx: number): Handle | null {
+  let best: { handle: Handle; distSq: number } | null = null
+  for (const h of handles) {
+    const s = worldToScreen(camera, h.point)
+    const dx = s.x - screenPoint.x, dy = s.y - screenPoint.y
+    const distSq = dx * dx + dy * dy
+    if (best === null || distSq < best.distSq) best = { handle: h, distSq }
+  }
+  if (best === null) return null
+  return best.distSq <= tolerancePx * tolerancePx ? best.handle : null
+}
+
+/** Hit tolerance in SCREEN pixels (OURS — a comfortable click target,
+ * slightly larger than DRAG_THRESHOLD's 4px drag-start distance since a
+ * handle is a small fixed target a user must land ON, not a "did you move"
+ * gesture threshold). EXPORTED so the renderer's handle glyphs (canvas-react,
+ * overlay/Handles.tsx) size themselves FROM this constant rather than
+ * mirroring the value by citation — one number, two consumers (this tool's
+ * hitHandle call below and the rendered square's side length), so the visual
+ * target and the hit target can't silently drift apart. */
+export const HIT_TOLERANCE_PX = 8
+
+/** The same tolerance for a FINGERTIP (mobile-touch task, scope 3): 22 screen
+ * px of radius is the ~44px square target the platform guidance asks for
+ * (Apple HIG 44pt, Material 48dp, WCAG 2.5.5). At the fine-pointer 8, touching
+ * near a corner handle MISSES it and falls through to select.ts's ordinary
+ * body-drag — so on a phone a shape can be moved but never resized, and the
+ * failure is silent (something happens, just the wrong thing).
+ *
+ * THE RENDERED GLYPH IS NOT RESIZED TO MATCH, and this is a deliberate,
+ * declared divergence from the "one number, two consumers" rule stated on
+ * HIT_TOLERANCE_PX above. The glyph is drawn per SELECTION (canvas-react's
+ * overlay/Handles.tsx renders off the camera and the selection, and has no
+ * pointer event in hand), while the tolerance is chosen per POINTER EVENT — a
+ * touchscreen laptop delivers both kinds to the same selection, so there is no
+ * single correct glyph size to mirror. Growing the invisible target beyond the
+ * visible mark is standard touch practice, but it does mean a coarse-pointer
+ * user sees an 8px square and grabs a 44px one. Making the glyph itself
+ * finger-sized (on a coarse-primary device) is a follow-up the PR body records
+ * rather than something this change smuggles in. */
+export const COARSE_HIT_TOLERANCE_PX = 22
+
+/** Which of the two tolerances THIS pointer event gets. Read off the event's
+ * own pointerType rather than a device-level `(pointer: coarse)` media query,
+ * for the reason canvas-editor's `bbthreadDividerMargin` states at length: a
+ * device answer is wrong for half the events a hybrid device delivers. No
+ * pointerType (a hand-built script, a synthetic event) means fine — the
+ * pre-mobile behaviour, so nothing that existed before this change moves.
+ *
+ * No zoom term, unlike the divider margin: `hitHandle` already compares in
+ * SCREEN space (it projects each handle through the camera first), so this
+ * number is screen pixels all the way down and needs no correction. */
+export function hitTolerancePx(pointerType?: PointerInputEvent['pointerType']): number {
+  return pointerType === 'touch' ? COARSE_HIT_TOLERANCE_PX : HIT_TOLERANCE_PX
+}
+
+const OPPOSITE: Partial<Record<HandleId, HandleId>> = {
+  nw: 'se', ne: 'sw', se: 'nw', sw: 'ne', n: 's', s: 'n', e: 'w', w: 'e',
+}
+
+function unionBounds(list: readonly Bounds[]): Bounds | null {
+  if (list.length === 0) return null
+  let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity
+  for (const b of list) {
+    minX = Math.min(minX, b.minX); minY = Math.min(minY, b.minY)
+    maxX = Math.max(maxX, b.maxX); maxY = Math.max(maxY, b.maxY)
+  }
+  return { minX, minY, maxX, maxY }
+}
+
+// The current selection's combined WORLD bounds — the union of each
+// selected shape's own worldBounds (rotation already baked in per-shape via
+// worldCorners' AABB) — or null if the selection is empty or every id has
+// since vanished (tolerant: a selection referencing a deleted shape id
+// just drops it from the union, same "skip, never throw" discipline as
+// editor.ts's TOLERANCE CONTRACT, even though this tool never mutates the
+// doc itself).
+function selectionWorldBounds(snapshot: CanvasDocument, ids: readonly string[]): Bounds | null {
+  const list: Bounds[] = []
+  for (const id of ids) {
+    const s = snapshot.byId.get(id)
+    if (s) list.push(worldBounds(snapshot, s))
+  }
+  return unionBounds(list)
+}
+
+// GESTURE-START SNAPSHOT (Task B5, cancel-revert): the verbatim Shape
+// objects for every id in `ids`, read from `snapshot` at the exact moment a
+// resize/rotate gesture BEGINS mutating the doc (onPointing's first
+// threshold-crossing move, called BEFORE that same move computes its own
+// first ResizeShapes/RotateShapes intent below). Carried on Resizing/
+// Rotating's own state as `startShapes` so a caller who later abandons the
+// gesture (tool-loop.ts's cancelActiveTool) can restore each shape exactly
+// as it was pre-gesture — via CreateShape's "upsert full shape verbatim"
+// contract (editor.ts's applyOne: CreateShape's putShape is a full-field
+// overwrite) — in ONE intent per shape, regardless of how many incremental
+// commits happened in between (this tool's own COMMIT CADENCE note explains
+// why a gesture accumulates more than one). TOLERANT, same "skip, never
+// throw" philosophy as selectionWorldBounds just above: an id with no
+// CURRENT shape (should not happen — `ids` comes from the live selection at
+// pointerdown — but guarded the same way regardless) is simply dropped, not
+// carried as undefined.
+function captureStartShapes(snapshot: CanvasDocument, ids: readonly string[]): Shape[] {
+  const shapes: Shape[] = []
+  for (const id of ids) {
+    const s = snapshot.byId.get(id)
+    if (s) shapes.push(s)
+  }
+  return shapes
+}
+
+function angleTo(center: Point, pt: Point): number {
+  return Math.atan2(pt.y - center.y, pt.x - center.x)
+}
+
+// scaleFactor along one axis: how far `current` has moved from `anchor`
+// relative to how far the handle's ORIGINAL position was from `anchor`, at
+// gesture start. Degenerate span (original coincides with anchor — a
+// zero-width/height selection being resized along THAT axis) returns 1 (no
+// scale) rather than dividing by zero: TOLERANT, matching this package's
+// house style of "skip/no-op the unrecoverable case, never throw or emit
+// NaN/Infinity into an intent".
+function axisScale(anchor: number, original: number, current: number): number {
+  const span = original - anchor
+  return span === 0 ? 1 : (current - anchor) / span
+}
+
+interface TargetScale { readonly scaleX: number; readonly scaleY: number }
+
+// The ABSOLUTE (from-gesture-start) scale factor this handle+pointer
+// position implies right now. `axisScaled` says which axes this handle
+// even touches (edge handles: one axis, held at 1 on the other — see
+// onEvent's handle.kind branch); `uniform` (shift held at gesture start, a
+// CORNER-only concept) forces BOTH axes to follow the X ratio — OURS,
+// documented decision: the horizontal axis "wins" and drives the other
+// rather than e.g. averaging or picking whichever moved more, for the
+// simplest possible deterministic rule.
+function computeTargetScale(anchor: Point, originalHandle: Point, axisScaled: { readonly x: boolean; readonly y: boolean }, uniform: boolean, current: Point): TargetScale {
+  const rawX = axisScaled.x ? axisScale(anchor.x, originalHandle.x, current.x) : 1
+  const rawY = axisScaled.y ? axisScale(anchor.y, originalHandle.y, current.y) : 1
+  return uniform ? { scaleX: rawX, scaleY: rawX } : { scaleX: rawX, scaleY: rawY }
+}
+
+// Resize gestures emit ABSOLUTE target factors plus their existing start
+// pre-images. The editor applies its per-kind floors against that basis,
+// not against the last already-clamped frame. No requested/applied ratio
+// can drift at the floor, at zero, or while returning from the anchor.
+
+interface Idle {
+  readonly mode: 'idle'
+}
+interface Pointing {
+  readonly mode: 'pointing'
+  readonly downScreen: Point
+  readonly handle: Handle
+  readonly ids: readonly string[]
+  readonly handlesAtStart: readonly Handle[]
+  readonly shiftDown: boolean
+}
+interface Resizing {
+  readonly mode: 'resizing'
+  readonly ids: readonly string[]
+  readonly anchorWorld: Point
+  readonly originalHandleWorld: Point
+  readonly axisScaled: { readonly x: boolean; readonly y: boolean }
+  readonly uniform: boolean
+  /** Gesture-start pre-images (Task B5) — see captureStartShapes above. */
+  readonly startShapes: readonly Shape[]
+}
+interface Rotating {
+  readonly mode: 'rotating'
+  readonly ids: readonly string[]
+  readonly centerWorld: Point
+  readonly angleAtDown: number
+  readonly lastAngle: number
+  /** Gesture-start pre-images (Task B5) — see captureStartShapes above. */
+  readonly startShapes: readonly Shape[]
+}
+
+// ============================================================================
+// ARROW HANDLES (arrow-handles task) — a LONE selected 'arrow' shape shows
+// three handles (start/end/mid, arrow-handles.ts) INSTEAD OF the 8
+// resize + rotate handles above: an arrow has no meaningful box-resize
+// concept (its geometry is its two terminals + bend, not a w/h rect), so
+// `onIdle` branches to this model whenever `ids` is exactly one arrow —
+// see the branch there for the exact condition. Multi-select (even one
+// containing an arrow) still falls through to the ordinary box-handle path,
+// same "OURS, undocumented scope limit" posture as the module header's
+// rotated-handle note: tldraw's own real multi-select-with-an-arrow chrome
+// is not attempted here.
+interface PointingArrow {
+  readonly mode: 'pointingArrow'
+  readonly downScreen: Point
+  readonly arrowId: string
+  readonly handle: ArrowHandleId
+}
+interface DraggingArrowTerminal {
+  readonly mode: 'draggingArrowTerminal'
+  readonly arrowId: string
+  readonly terminal: 'start' | 'end'
+  /** Gesture-start pre-image (cancellation parity with Resizing/Rotating's
+   * `startShapes` above) — the terminal's own ROUTED world point and
+   * whatever binding currently occupies it, both captured in
+   * onPointingArrow BEFORE this gesture's own first MoveArrowTerminal
+   * intent. That first intent unconditionally clears the binding (the
+   * LIVE-PREVIEW, NO-SPECULATIVE-BINDING behavior documented below), so an
+   * abandoned gesture needs its own record of what to put back.
+   * cancelActiveTool (tool-loop.ts) replays these straight through one
+   * MoveArrowTerminal(point: startPoint, binding: startBinding) — the same
+   * intent this drag already emits every move, which already knows how to
+   * both re-land a point and delete-then-optionally-restore a binding in
+   * one write; no new intent type needed. */
+  readonly startPoint: Point
+  readonly startBinding?: ArrowBinding
+}
+interface DraggingArrowBend {
+  readonly mode: 'draggingArrowBend'
+  readonly arrowId: string
+  /** Gesture-start pre-image, same cancellation-parity purpose as above:
+   * the whole arrow shape as it stood before this gesture's first
+   * UpdateProps(bend). cancelActiveTool restores it via one CreateShape,
+   * the same whole-shape revert convention Resizing/Rotating's startShapes
+   * already established. */
+  readonly startShape: Shape
+}
+
+export type TransformState = Idle | Pointing | Resizing | Rotating | PointingArrow | DraggingArrowTerminal | DraggingArrowBend
+
+const IDLE: TransformState = { mode: 'idle' }
+
+export function createTransformTool(ctx: ToolContext): Tool<TransformState> {
+  const editor = ctx.editor
+
+  function worldOf(screen: { readonly x: number; readonly y: number }) {
+    return screenToWorld(editor.get().camera, screen)
+  }
+
+  return {
+    initialState: IDLE,
+    onEvent(state: TransformState, event: InputEvent): { state: TransformState; intents: Intent[] } {
+      switch (state.mode) {
+        case 'idle': return onIdle(state, event)
+        case 'pointing': return onPointing(state, event)
+        case 'resizing': return onResizing(state, event)
+        case 'rotating': return onRotating(state, event)
+        case 'pointingArrow': return onPointingArrow(state, event)
+        case 'draggingArrowTerminal': return onDraggingArrowTerminal(state, event)
+        case 'draggingArrowBend': return onDraggingArrowBend(state, event)
+      }
+    },
+  }
+
+  // Resolve a binding candidate at `worldPt`, if the pointer is over a shape
+  // OTHER than `excludeId` (the dragged arrow itself) — SAME composition as
+  // arrow.ts's own module-private `bindingAt` (not imported from there: the
+  // two tool FSMs are otherwise independent, and this is five lines — see
+  // arrow.ts's own precedent for not coupling two tool files over a small
+  // shared helper).
+  function arrowBindingCandidate(worldPt: Point, excludeId: string): ArrowBinding | undefined {
+    const hit = ctx.hitTestTopmost(worldPt, new Set([excludeId]))
+    if (!hit) return undefined
+    const anchor = resolveArrowAnchor(ctx.snapshot(), hit, worldPt)
+    return { targetId: hit, anchor }
+  }
+
+  function onIdle(state: Idle, event: InputEvent): { state: TransformState; intents: Intent[] } {
+    if (event.type !== 'pointerdown') return { state, intents: [] }
+    const ids = [...editor.get().selection]
+    // MODALITY (pilot 4 extension — interaction-contracts'
+    // 'no-transform-while-typing'): never grab a resize/rotate handle while
+    // the shape being text-edited is part of this selection. The handles
+    // represent the selection's combined bounds, so transforming would move/
+    // resize the edited shape out from under the caret — the same modality
+    // rule select.ts enforces for translate. FSM-level (not a render-only
+    // hide) so it holds at the cheapest, contract-observable level; returning
+    // idle lets the composite fall the pointerdown through to select.ts, whose
+    // own editing guard then refuses any translate too. LIVE read of editingId
+    // at this single grab pointerdown — one read at one event, so (unlike
+    // select.ts's Pointing->Dragging read) there is no mid-gesture window to
+    // reason about.
+    const editingId = editor.get().editingId
+    if (editingId !== null && ids.includes(editingId)) return { state, intents: [] }
+
+    // ARROW HANDLES (arrow-handles task): a LONE selected arrow shows its
+    // own start/end/mid handles INSTEAD of the box model below — see the
+    // TransformState module comment. Checked BEFORE selectionWorldBounds:
+    // an arrow's worldBounds-derived box handles would be meaningless (a
+    // thin/degenerate rect for a mostly-horizontal or -vertical arrow).
+    if (ids.length === 1) {
+      const soleShape = ctx.snapshot().byId.get(ids[0]!)
+      if (soleShape && soleShape.kind === 'arrow') {
+        const handles = arrowHandles(ctx.snapshot(), soleShape)
+        const hit = hitArrowHandle(handles, { x: event.x, y: event.y }, editor.get().camera, hitTolerancePx(event.pointerType))
+        if (!hit) return { state, intents: [] } // miss: falls through to select.ts's ordinary body-drag
+        return {
+          state: { mode: 'pointingArrow', downScreen: { x: event.x, y: event.y }, arrowId: soleShape.id, handle: hit },
+          intents: [],
+        }
+      }
+    }
+
+    const bounds = selectionWorldBounds(ctx.snapshot(), ids)
+    if (!bounds) return { state, intents: [] } // empty/all-vanished selection: nothing to grab a handle on
+    const handlesAtStart = selectionHandles(bounds)
+    // note-fixed-size task (tldraw parity: NoteShapeUtil.hideResizeHandles()
+    // returns true, onResize() is a no-op): when EVERY selected shape is a
+    // fixed-size kind (canvas-model's isFixedSizeSelection — currently just
+    // 'note'), only the ROTATE handle may ever be grabbed — corner/edge
+    // handles must never ARM, not merely "resize to no visible effect".
+    // Filtering the HITTABLE set (not `handlesAtStart` itself) is deliberate:
+    // onPointing's rotate branch still needs the full 9-handle list to
+    // reconstruct the union bounds for its rotation center (see
+    // unionBoundsOfHandles below), so the corner/edge geometry must survive
+    // even when those handles can never be the one actually grabbed.
+    const hittable = isFixedSizeSelection(ctx.snapshot(), ids)
+      ? handlesAtStart.filter((h) => h.kind === 'rotate')
+      : handlesAtStart
+    const hit = hitHandle(hittable, { x: event.x, y: event.y }, editor.get().camera, hitTolerancePx(event.pointerType))
+    if (!hit) return { state, intents: [] } // miss: this tool never changes selection itself
+    return {
+      state: { mode: 'pointing', downScreen: { x: event.x, y: event.y }, handle: hit, ids, handlesAtStart, shiftDown: event.modifiers.shift },
+      intents: [],
+    }
+  }
+
+  function onPointing(state: Pointing, event: InputEvent): { state: TransformState; intents: Intent[] } {
+    if (event.type === 'pointerup') return { state: IDLE, intents: [] } // click on a handle, no drag: no-op
+    if (event.type !== 'pointermove') return { state, intents: [] }
+    const here = crossedThreshold(state.downScreen, event)
+    if (!here) return { state, intents: [] }
+
+    // Gesture-start snapshot (Task B5): captured HERE, before this same
+    // move's own first Resize/RotateShapes intent below — that first intent
+    // is already the ABSOLUTE (from-gesture-start) scale/angle, not an
+    // incremental step from identity (see computeTargetScale/onRotating's
+    // angleAtDown), so the pre-mutation read must happen before it, not
+    // after. See captureStartShapes' doc comment above.
+    const startShapes = captureStartShapes(ctx.snapshot(), state.ids)
+
+    if (state.handle.kind === 'rotate') {
+      const centerWorld = centroid(unionBoundsOfHandles(state.handlesAtStart))
+      const angleAtDown = angleTo(centerWorld, worldOf(state.downScreen))
+      const totalNow = angleTo(centerWorld, worldOf(here)) - angleAtDown
+      const intents: Intent[] = totalNow !== 0 ? [{ type: 'RotateShapes', ids: state.ids, center: centerWorld, dRadians: totalNow }] : []
+      return { state: { mode: 'rotating', ids: state.ids, centerWorld, angleAtDown, lastAngle: totalNow, startShapes }, intents }
+    }
+
+    // Corner or edge handle: resolve the OPPOSITE handle (fixed anchor) from
+    // the SAME handlesAtStart list captured at pointerdown.
+    const anchorId = OPPOSITE[state.handle.id]!
+    const anchorWorld = state.handlesAtStart.find((h) => h.id === anchorId)!.point
+    const originalHandleWorld = state.handle.point
+    const axisScaled = state.handle.kind === 'corner'
+      ? { x: true, y: true }
+      : state.handle.id === 'n' || state.handle.id === 's'
+        ? { x: false, y: true }
+        : { x: true, y: false }
+    const uniform = state.handle.kind === 'corner' && state.shiftDown
+
+    const target = computeTargetScale(anchorWorld, originalHandleWorld, axisScaled, uniform, worldOf(here))
+    const intents: Intent[] = [{ type: 'ResizeShapes', ids: state.ids, anchor: anchorWorld, scaleX: target.scaleX, scaleY: target.scaleY, basis: startShapes, uniform }]
+    return {
+      state: { mode: 'resizing', ids: state.ids, anchorWorld, originalHandleWorld, axisScaled, uniform, startShapes },
+      intents,
+    }
+  }
+
+  // COMMIT CADENCE WATCH-ITEM (same note as select.ts's onDragging/create.ts's
+  // dragging): each pointermove here becomes its own ResizeShapes/
+  // RotateShapes intent, i.e. one doc.commit() per mouse move for the whole
+  // gesture — the wire/undo-granularity cost is unmeasured until H3 profiles
+  // it, same as every other drag-capable tool in this package.
+  function onResizing(state: Resizing, event: InputEvent): { state: TransformState; intents: Intent[] } {
+    if (event.type === 'pointermove' || event.type === 'pointerup') {
+      const current = worldOf({ x: event.x, y: event.y })
+      const target = computeTargetScale(state.anchorWorld, state.originalHandleWorld, state.axisScaled, state.uniform, current)
+      const intents: Intent[] = [{
+        type: 'ResizeShapes', ids: state.ids, anchor: state.anchorWorld,
+        scaleX: target.scaleX, scaleY: target.scaleY, basis: state.startShapes, uniform: state.uniform,
+      }]
+      const next: TransformState = event.type === 'pointerup' ? IDLE : state
+      return { state: next, intents }
+    }
+    return { state, intents: [] }
+  }
+
+  function onRotating(state: Rotating, event: InputEvent): { state: TransformState; intents: Intent[] } {
+    if (event.type === 'pointermove' || event.type === 'pointerup') {
+      const totalNow = angleTo(state.centerWorld, worldOf({ x: event.x, y: event.y })) - state.angleAtDown
+      const dRadians = totalNow - state.lastAngle
+      const intents: Intent[] = dRadians !== 0 ? [{ type: 'RotateShapes', ids: state.ids, center: state.centerWorld, dRadians }] : []
+      const next: TransformState = event.type === 'pointerup' ? IDLE : { ...state, lastAngle: totalNow }
+      return { state: next, intents }
+    }
+    return { state, intents: [] }
+  }
+
+  // THRESHOLD GATE (same discipline as arrow.ts's own drawing gesture, and
+  // this file's own box-handle onPointing above): a click on a handle with
+  // no drag is a no-op — back to idle, zero intents.
+  function onPointingArrow(state: PointingArrow, event: InputEvent): { state: TransformState; intents: Intent[] } {
+    if (event.type === 'pointerup') return { state: IDLE, intents: [] }
+    if (event.type !== 'pointermove') return { state, intents: [] }
+    const here = crossedThreshold(state.downScreen, event)
+    if (!here) return { state, intents: [] }
+
+    if (state.handle === 'mid') {
+      const shape = ctx.snapshot().byId.get(state.arrowId)
+      if (!shape) return { state: IDLE, intents: [] } // vanished mid-gesture — nothing to bend
+      const routed = routeArrow(ctx.snapshot(), shape, ctx.snapshot().bindings)
+      const bend = bendFromPoint(routed.start, routed.end, worldOf(here))
+      // startShape captured HERE, before this same move's own first
+      // UpdateProps below — same pre-mutation-read discipline as onPointing's
+      // captureStartShapes (see its doc comment).
+      return { state: { mode: 'draggingArrowBend', arrowId: state.arrowId, startShape: shape }, intents: [{ type: 'UpdateProps', id: state.arrowId, props: { bend } }] }
+    }
+
+    // start/end: LIVE PREVIEW, NO SPECULATIVE BINDING (arrow.ts's own
+    // documented posture, reused here): every intermediate move clears this
+    // terminal's binding and writes its raw point — a bound terminal's
+    // rendered position otherwise ignores `point` entirely (routeArrow
+    // resolves it from the LIVE binding anchor, not stored x/y or props.end
+    // — see arrow-route.ts's `resolveEndpoint`), so leaving the OLD binding
+    // in place mid-drag would make the drag visually inert. The REAL
+    // binding is resolved and written exactly once, at pointerup (below) —
+    // same "one binding-writing moment" reasoning as arrow.ts's own module
+    // header. SetHover previews the prospective target while dragging
+    // (Hover.tsx already renders whatever `editorState.hover` holds).
+    const shape = ctx.snapshot().byId.get(state.arrowId)
+    if (!shape) return { state: IDLE, intents: [] } // vanished mid-gesture — nothing to drag
+    // Gesture-start pre-image (see DraggingArrowTerminal's own doc comment):
+    // the terminal's CURRENT routed point (matches arrowHandles' own
+    // world-space, routed — not raw props — convention) and whatever
+    // binding presently occupies it, both read BEFORE this move's own
+    // first MoveArrowTerminal clears the binding below.
+    const routedAtStart = routeArrow(ctx.snapshot(), shape, ctx.snapshot().bindings)
+    const startPoint = state.handle === 'start' ? routedAtStart.start : routedAtStart.end
+    const bindingId = `binding:${state.arrowId}-${state.handle}`
+    const existingBinding = ctx.snapshot().bindings.find((b) => b.id === bindingId)
+    const startBinding: ArrowBinding | undefined = existingBinding
+      ? { targetId: existingBinding.toId, anchor: (existingBinding.props as { anchor: { nx: number; ny: number } }).anchor }
+      : undefined
+
+    const worldPt = worldOf(here)
+    const candidate = arrowBindingCandidate(worldPt, state.arrowId)
+    return {
+      state: { mode: 'draggingArrowTerminal', arrowId: state.arrowId, terminal: state.handle, startPoint, startBinding },
+      intents: [
+        { type: 'SetHover', id: candidate?.targetId ?? null },
+        { type: 'MoveArrowTerminal', id: state.arrowId, terminal: state.handle, point: worldPt },
+      ],
+    }
+  }
+
+  // COMMIT CADENCE WATCH-ITEM (same note as select.ts's onDragging/
+  // transform.ts's own onResizing/onRotating above): one MoveArrowTerminal
+  // per pointermove, one doc.commit() per mouse move for the whole gesture.
+  function onDraggingArrowTerminal(state: DraggingArrowTerminal, event: InputEvent): { state: TransformState; intents: Intent[] } {
+    if (event.type !== 'pointermove' && event.type !== 'pointerup') return { state, intents: [] }
+    const worldPt = worldOf({ x: event.x, y: event.y })
+    const candidate = arrowBindingCandidate(worldPt, state.arrowId)
+    if (event.type === 'pointerup') {
+      // Resolve and write the REAL binding exactly once, here — see the
+      // LIVE PREVIEW note in onPointingArrow above. Clear hover: the
+      // gesture is over, and select.ts's own onIdle will re-set it (or
+      // not) from the very next pointermove regardless.
+      return {
+        state: IDLE,
+        intents: [
+          { type: 'SetHover', id: null },
+          { type: 'MoveArrowTerminal', id: state.arrowId, terminal: state.terminal, point: worldPt, binding: candidate },
+        ],
+      }
+    }
+    return {
+      state,
+      intents: [
+        { type: 'SetHover', id: candidate?.targetId ?? null },
+        { type: 'MoveArrowTerminal', id: state.arrowId, terminal: state.terminal, point: worldPt },
+      ],
+    }
+  }
+
+  function onDraggingArrowBend(state: DraggingArrowBend, event: InputEvent): { state: TransformState; intents: Intent[] } {
+    if (event.type !== 'pointermove' && event.type !== 'pointerup') return { state, intents: [] }
+    const shape = ctx.snapshot().byId.get(state.arrowId)
+    const next: TransformState = event.type === 'pointerup' ? IDLE : state
+    if (!shape) return { state: next, intents: [] } // vanished mid-gesture — nothing to bend
+    // Chord (start/end) is bend-INVARIANT (clipEndpoint never reads bend —
+    // see arrow-route.ts's routeArrow doc comment on CURVE + CLIPPING
+    // ORDERING), so re-reading it fresh every move (rather than caching it
+    // at gesture start) is both correct and simplest.
+    const routed = routeArrow(ctx.snapshot(), shape, ctx.snapshot().bindings)
+    const bend = bendFromPoint(routed.start, routed.end, worldOf({ x: event.x, y: event.y }))
+    return { state: next, intents: [{ type: 'UpdateProps', id: state.arrowId, props: { bend } }] }
+  }
+}
+
+// The rotate handle's own point sits OFFSET from the selection's bounds
+// (ROTATE_HANDLE_OFFSET above the top edge — see selectionHandles), so the
+// rotation center must come from the 8 corner/edge handles' own bounds, not
+// from re-deriving a Bounds that would incorrectly include the offset
+// rotate handle's point. Reconstructing a Bounds from handlesAtStart (8
+// corner/edge points, excluding 'rotate') rather than threading the
+// original Bounds through Pointing's state keeps Pointing's own shape to
+// exactly "the 9 handles" with no redundant second copy of the same
+// information.
+function unionBoundsOfHandles(handles: readonly Handle[]): Bounds {
+  const pts = handles.filter((h) => h.kind !== 'rotate').map((h) => h.point)
+  return {
+    minX: Math.min(...pts.map((p) => p.x)), minY: Math.min(...pts.map((p) => p.y)),
+    maxX: Math.max(...pts.map((p) => p.x)), maxY: Math.max(...pts.map((p) => p.y)),
+  }
+}

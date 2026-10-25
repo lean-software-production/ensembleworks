@@ -8,6 +8,7 @@
 import { getRoomId } from '../identity'
 import type { ClientPlugin } from '../kernel/plugin'
 import { BindingsPanel } from './BindingsPanel'
+import { useDiscordAvailable } from './discordAvailable'
 import { buildFrameLinkPost, postToDiscord } from './postAction'
 
 export const discordPlugin: ClientPlugin = {
@@ -18,6 +19,8 @@ export const discordPlugin: ClientPlugin = {
 			label: 'discord bindings',
 			icon: 'external-link',
 			placement: 'overflow',
+			// Hidden when the Discord bridge bot isn't running on this host.
+			useAvailable: useDiscordAvailable,
 			onSelect: (_editor, helpers) =>
 				helpers.addDialog({ id: 'discord-bindings', component: BindingsPanel }),
 		},
@@ -28,6 +31,8 @@ export const discordPlugin: ClientPlugin = {
 			label: 'post frame link to Discord',
 			icon: 'share-1',
 			placement: 'overflow',
+			// Same gate: posting can't deliver anywhere without the bot.
+			useAvailable: useDiscordAvailable,
 			onSelect: (editor) => {
 				const ids = editor.getSelectedShapeIds()
 				if (ids.length !== 1) return

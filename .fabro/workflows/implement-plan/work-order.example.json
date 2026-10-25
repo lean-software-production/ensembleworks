@@ -1,0 +1,39 @@
+{
+  "requestKey": "implement-plan-1",
+  "workOrder": {
+    "title": "Implement approved plan",
+    "displayTitle": "Implement approved plan",
+    "objective": "REPLACE_WITH_CONCRETE_OBJECTIVE",
+    "baseSha": "REPLACE_WITH_FULL_COMMIT_SHA",
+    "workflow": ".fabro/workflows/implement-plan/workflow.json",
+    "inputs": {
+      "setupCommands": [
+        "npm --prefix plugins/bb-plugin-fabro ci --include=dev --cache /tmp/fabro-plugin-npm-cache"
+      ],
+      "validationCommands": [
+        "npm --prefix plugins/bb-plugin-fabro run typecheck",
+        "npm --prefix plugins/bb-plugin-fabro test",
+        "npm --prefix plugins/bb-plugin-fabro run build"
+      ],
+      "qualityCommand": "git diff --check",
+      "qualityMode": "gate",
+      "planPath": "docs/plans/REPLACE_WITH_APPROVED_PLAN.md"
+    },
+    "scope": [
+      "plugins/bb-plugin-fabro"
+    ],
+    "constraints": [
+      "Preserve repository instructions and unrelated behavior; do not weaken checks or edit workflow definitions.",
+      "No merge, push, deployment or external comments.",
+      "For canvas-editor tools, canvas-react, or client canvas-v2 input/tool changes, declare or extend an interaction contract (or justify ux-contract: none), record verbatim RED before fixing and stop if unreachable, implement Obs additions in both FSM and browser adapters, and independently verify RED/GREEN during review.",
+      "Do not weaken tests or change package scripts, lockfiles, compiler/test configuration or workflow definitions to pass checks. Narrow scope to the agreed files before submission."
+    ],
+    "acceptanceCriteria": [
+      "REPLACE_WITH_TASK_SPECIFIC_CRITERIA",
+      "Pass configured checks and satisfy the workflow delivery contract."
+    ],
+    "maxAttempts": 3,
+    "maxMinutes": 60,
+    "maxChangedFiles": 10
+  }
+}

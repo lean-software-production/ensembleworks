@@ -11,10 +11,10 @@ import {
 } from './index.js'
 
 const METHODS: HttpMethod[] = ['GET', 'POST', 'PUT', 'DELETE']
-const PLUGINS = ['kernel', 'av', 'canvas', 'scribe', 'roadmap', 'terminal', 'file']
+const PLUGINS = ['kernel', 'av', 'canvas', 'canvas-v2', 'scribe', 'roadmap', 'terminal', 'file', 'discord']
 
-// 1. Exactly 17 declared verbs.
-assert.equal(allTools.length, 17, 'expected 17 tool defs')
+// 1. Exactly 28 declared verbs (18 base + 5 canvas-v2 + 5 discord).
+assert.equal(allTools.length, 28, 'expected 28 tool defs (18 base + 5 canvas-v2 + 5 discord)')
 
 // 2. Every def is well-formed.
 for (const t of allTools) {
@@ -23,15 +23,20 @@ for (const t of allTools) {
 	assert.ok(typeof t.help === 'string' && t.help.length > 0, `no help on ${t.plugin}.${t.id}`)
 	assert.ok(METHODS.includes(t.http.method), `bad method on ${t.plugin}.${t.id}`)
 	assert.ok(t.http.path.startsWith('/api/'), `path must start /api/ on ${t.plugin}.${t.id}`)
+	// No `:param` path segments: the CLI's generic renderer (cli/src/render/args.ts)
+	// emits entry.path verbatim and never substitutes them, so a path-param tool
+	// would silently ship a literal `:id` to the server. Keep key fields in
+	// query/body — this keeps every declared tool CLI-renderable.
+	assert.ok(!/\/:/.test(t.http.path), `path param not renderable by the CLI on ${t.plugin}.${t.id}: ${t.http.path}`)
 }
 
 // 3. (plugin, id) pairs unique; (method, path) pairs unique (GET+POST may share
 //    a path across methods — scribe/roadmap overloads — but never collide),
 //    EXCEPT deliberately op-discriminated same-method routes (file open/refresh
-//    both POST /api/canvas/file-viewer, disambiguated by body `op`).
+//    both POST /api/canvas/web-viewer, disambiguated by body `op`).
 const pluginIds = new Set(allTools.map((t) => `${t.plugin}.${t.id}`))
 assert.equal(pluginIds.size, allTools.length, 'duplicate (plugin, id)')
-const OP_DISCRIMINATED = new Set(['POST /api/canvas/file-viewer'])
+const OP_DISCRIMINATED = new Set(['POST /api/canvas/web-viewer'])
 const methodPathList = allTools.map((t) => `${t.http.method} ${t.http.path}`)
 const nonExemptMethodPaths = methodPathList.filter((mp) => !OP_DISCRIMINATED.has(mp))
 assert.equal(
@@ -49,6 +54,6 @@ for (const t of allTools) {
 // 5. buildManifest wraps them in the envelope.
 const manifest = buildManifest(allTools, '0.0.0')
 assert.equal(manifest.version, MANIFEST_VERSION, 'manifest.version')
-assert.equal(manifest.tools.length, 17, 'manifest.tools length')
+assert.equal(manifest.tools.length, 28, 'manifest.tools length')
 
-console.log('ok: tool registry — 17 defs, unique ids/paths, all schemas serialise')
+console.log('ok: tool registry — 28 defs, unique ids/paths, all schemas serialise')

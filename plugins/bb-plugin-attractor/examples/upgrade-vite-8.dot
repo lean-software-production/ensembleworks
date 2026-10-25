@@ -1,0 +1,79 @@
+// A major-version upgrade — Vite 7 -> 8 and @vitejs/plugin-react 5 -> 6 in
+// the client workspace — as a migration pipeline: research the change,
+// approve the plan, bump deterministically, let an agent migrate config and
+// code in a bounded fix loop against the real verification, have a second
+// model review the diff and bundle-size delta, approve the diff, update the
+// upgrade notes, open the PR. If the loop runs out or the reviewer gives up,
+// an abandon stage writes up the blockers and opens a *draft* PR so partial
+// work survives.
+//
+// Exercises (beyond examples/dependency-updates.dot): the routing cascade's
+// step 7 — `verify` has only a success edge, so a failure falls through to
+// its `retry_target` (migrate, bounded by max_visits) and then its
+// `fallback_retry_target` (abandon); three-way label routing from an agent
+// with output_schema="routing"; a `fallback_retry_target` on that reviewer
+// so a "Repair" that can't re-enter an exhausted migrate still lands on
+// abandon; two human gates, the second with a freeform "Revise" edge; and
+// Sonnet for the migration with Codex for research/review/notes.
+//
+// Working state lives in .local/upgrade/ (gitignored): packages.json (what
+// to bump), plan.md, baseline-bundle.txt / after-bundle.txt, verify.log
+// (present only after a failed verify), review.md.
+digraph UpgradeVite8 {
+  graph [goal="Upgrade the client to Vite 8 and @vitejs/plugin-react 6 with the build, typecheck and tests green",
+         default_permission_mode="full",
+         model_stylesheet="* { provider: claude-code; model: claude-sonnet-5; } #research { provider: codex; model: gpt-5.6-luna; reasoning_effort: medium; } #review { provider: codex; model: gpt-5.6-luna; reasoning_effort: high; } #notes { provider: codex; model: gpt-5.6-luna; } #abandon { provider: codex; model: gpt-5.6-luna; }"]
+  start [shape=Mdiamond]
+  exit  [shape=Msquare]
+
+  baseline [shape=parallelogram, label="Baseline", goal_gate=true, timeout="20m",
+            script="bun install --frozen-lockfile && bun run typecheck && bun run test && bun run --filter '@ensembleworks/client' build && mkdir -p .local/upgrade && (cd client/dist && find . -type f -printf '%s %p\\n' | sort -k2) > .local/upgrade/baseline-bundle.txt && du -sb client/dist >> .local/upgrade/baseline-bundle.txt && tail -3 .local/upgrade/baseline-bundle.txt"]
+
+  research [label="Research", max_visits=3, timeout="30m",
+            prompt="You are preparing the upgrade of vite 7.3.6 -> 8.3.0 and @vitejs/plugin-react 5.2.0 -> 6.1.1 in the client workspace (client/) of this Bun-workspaces monorepo. Change no source file and no package.json in this stage.\n\n1. Read the migration material: `curl -sL https://vite.dev/guide/migration` (the Vite 8 migration guide; Vite 8 is Rolldown-based), `gh api 'repos/vitejs/vite/releases?per_page=60' --jq '.[] | select(.tag_name | startswith(\"v8\")) | \"## \" + .tag_name + \"\\n\" + (.body // \"\")'`, and `gh api 'repos/vitejs/vite-plugin-react/releases?per_page=60' --jq '.[] | select(.tag_name | test(\"plugin-react@6\")) | \"## \" + .tag_name + \"\\n\" + (.body // \"\")'`.\n2. Inventory this repo's Vite surface: client/vite.config.ts (custom server.allowedHosts, hmr and proxy settings for running behind Caddy and Codespaces, plus vite-plugin-wasm), client/package.json scripts, bin/dev-lib.mjs and bin/dev-net.mjs (how the dev server is launched), e2e/playwright.config.ts (how the e2e suite starts the client), and every `import.meta.env` or `define` use under client/src. Check whether the installed vite-plugin-wasm supports Vite 8 (`npm view vite-plugin-wasm version peerDependencies`) and, if a newer version is needed, include it in the bump.\n3. Write .local/upgrade/packages.json: a JSON array of {\"name\": \"<pkg>\", \"version\": \"<exact version>\", \"workspace\": \"client\"} for every package to bump (at least vite and @vitejs/plugin-react).\n4. Write .local/upgrade/plan.md: the expected config and code changes file by file; the risks (Rolldown output differences, plugin API changes, renamed server/hmr/proxy options, chunking and bundle size); and the verification steps — the workflow itself runs `bun run typecheck && bun run test && bun run --filter '@ensembleworks/client' build` and compares per-file bundle sizes against the baseline, so list anything that additionally needs a manual check, such as HMR behind the Caddy origin.\n\nReply with a five-line summary of the plan."]
+
+  approve_plan [shape=hexagon, label="Approve migration plan?", review_target=".local/upgrade/plan.md"]
+
+  bump [shape=parallelogram, label="Bump versions", timeout="10m",
+        script="bun plugins/bb-plugin-attractor/examples/upgrade.bump.mjs .local/upgrade/packages.json && bun install && git add -A && git commit -q -m 'chore(deps): vite 8 and @vitejs/plugin-react 6' && git log --oneline -1"]
+
+  migrate [label="Migrate", max_visits=4, timeout="45m",
+           prompt="You are migrating the client workspace of this Bun-workspaces monorepo to Vite 8 and @vitejs/plugin-react 6. The packages are already bumped and installed (see `git log --oneline -3`). Read .local/upgrade/plan.md first. If .local/upgrade/verify.log exists it is the output of the last failed verification — start from its errors. If .local/upgrade/review.md exists and has a `## Repairs requested` section, address every item in it.\n\nMake the necessary changes (client/vite.config.ts, client code, e2e or dev-stack launch scripts), running `bun run --filter '@ensembleworks/client' build`, `bun run typecheck` and `bun run test` yourself until all three pass.\n\nRules: do not change any dependency version; do not disable, skip or weaken any check, test or type; keep the custom server, hmr and proxy behaviour in client/vite.config.ts working (its comments explain why each part exists); prefer the smallest change that follows the migration guide; do not touch the tldraw packages. Commit your work with a descriptive message (`git add -A && git commit`) — leave nothing uncommitted.\n\nReply with three short sections: what changed, what you verified, and what a human should still check by hand."]
+
+  verify [shape=parallelogram, label="Verify", goal_gate=true, timeout="30m",
+          retry_target="migrate", fallback_retry_target="abandon",
+          script="(bun install --frozen-lockfile && bun run typecheck && bun run test && bun run --filter '@ensembleworks/client' build) > .local/upgrade/verify.log 2>&1; rc=$?; if [ $rc -eq 0 ]; then rm -f .local/upgrade/verify.log; (cd client/dist && find . -type f -printf '%s %p\\n' | sort -k2) > .local/upgrade/after-bundle.txt; du -sb client/dist >> .local/upgrade/after-bundle.txt; echo verified; tail -3 .local/upgrade/after-bundle.txt; else tail -c 20000 .local/upgrade/verify.log; fi; exit $rc"]
+
+  review [label="Review", max_visits=3, timeout="30m", output_schema="routing",
+          fallback_retry_target="abandon",
+          prompt="Review the Vite 8 migration on this branch. Read .local/upgrade/plan.md, `git log --oneline origin/main..HEAD`, `git diff origin/main...HEAD -- . ':!bun.lock'`, and compare .local/upgrade/baseline-bundle.txt with .local/upgrade/after-bundle.txt (per-file sizes plus the `du` total on the last line of each).\n\nWrite .local/upgrade/review.md with: a summary of what changed; a bundle-size table (baseline total, after total, delta, and every output file that grew by more than 10% or is new); deviations from the plan; and concerns. Decide: Accept if the migration is complete, minimal and the bundle is reasonable; Repair if specific, fixable problems remain — list them under a `## Repairs requested` heading in review.md; Abandon if the upgrade cannot be completed safely.\n\nCall the attractor_result tool exactly once with {\"outcome\": \"succeeded\", \"preferred_next_label\": \"Accept\"} (or \"Repair\" or \"Abandon\"). Reply with your decision and one paragraph explaining it."]
+
+  approve_diff [shape=hexagon, label="Approve the migration?", review_target=".local/upgrade/review.md"]
+
+  notes [label="Upgrade notes", timeout="15m",
+         prompt="Update docs/dependency-upgrades/2026-09-14.md. Move `vite` and `@vitejs/plugin-react` out of 'Needs manual work' into a new section 'Applied in follow-up' that lists their from/to versions and this branch's commits (`git log --oneline origin/main..HEAD`). Change the `tldraw` family entry's 'Suggested approach' to say that the tldraw dependency is being phased out in favour of the canvas v2 engine, so its 5.4 upgrade is deliberately deferred rather than waiting on a fix. Change nothing else. Commit with `git add docs && git commit -m \"docs: vite 8 upgrade notes\"`. Reply with the file path."]
+
+  pr [shape=parallelogram, label="Open PR", timeout="5m",
+      script="set -e\nbranch=$(git branch --show-current)\ngit push origin \"HEAD:$branch\"\n{\n  echo '## Summary'\n  echo\n  echo 'Vite 7 -> 8 and @vitejs/plugin-react 5 -> 6 in the client workspace, migrated by the Attractor upgrade workflow (plugins/bb-plugin-attractor/examples/upgrade-vite-8.dot): Codex researched and reviewed, Sonnet migrated, every step verified with `bun run typecheck && bun run test` and the client build.'\n  echo\n  echo '## Review'\n  echo\n  cat .local/upgrade/review.md\n  echo\n  echo 'ux-contract: none — build tooling and configuration only, no interaction-bearing code changed.'\n} > .local/upgrade/pr-body.md\nenv -u GH_TOKEN -u GITHUB_TOKEN gh pr create --base main --head \"$branch\" --title 'build(client): upgrade to Vite 8 and @vitejs/plugin-react 6' --body-file .local/upgrade/pr-body.md"]
+
+  abandon [label="Write up blockers", timeout="20m",
+           prompt="The Vite 8 migration on this branch could not be completed automatically. Read .local/upgrade/plan.md, .local/upgrade/verify.log if it exists (the last failed verification), .local/upgrade/review.md if it exists, and `git log --oneline origin/main..HEAD`. Write docs/dependency-upgrades/vite-8-blocked.md: what was attempted (commit by commit), the exact blocking errors, and a recommended manual approach. Commit it (`git add docs && git commit -m \"docs: vite 8 upgrade blocked\"`), push the branch (`git push origin HEAD:$(git branch --show-current)`), and open a draft PR: `env -u GH_TOKEN -u GITHUB_TOKEN gh pr create --draft --base main --head \"$(git branch --show-current)\" --title 'WIP: Vite 8 upgrade (blocked)' --body-file docs/dependency-upgrades/vite-8-blocked.md`. Reply with the PR URL and a two-line summary of the blocker."]
+
+  start -> baseline
+  baseline -> research [condition="outcome=succeeded"]
+  baseline -> exit     [condition="outcome=failed"]
+  research -> approve_plan
+  approve_plan -> bump     [label="[A] Approve"]
+  approve_plan -> research [label="[R] Revise", freeform=true]
+  bump -> migrate [condition="outcome=succeeded"]
+  bump -> abandon [condition="outcome=failed"]
+  migrate -> verify
+  verify -> review [condition="outcome=succeeded"]
+  review -> approve_diff [label="Accept"]
+  review -> migrate      [label="Repair"]
+  review -> abandon      [label="Abandon"]
+  approve_diff -> notes   [label="[A] Approve"]
+  approve_diff -> migrate [label="[R] Revise", freeform=true]
+  notes -> pr -> exit
+  abandon -> exit
+}

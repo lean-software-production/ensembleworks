@@ -1,0 +1,28 @@
+// Plan -> approve (human gate) -> implement -> test (command, goal-gated,
+// looped on failure) -> review (structured routing output) -> exit.
+//
+// Exercises: model_stylesheet, a hexagon human gate with accelerator-labeled
+// edges, max_visits loop caps, a parallelogram command node with goal_gate,
+// and output_schema="routing" on the final review stage. Copied verbatim
+// from docs/plans/2026-09-13-attractor-runner-plan.md's Appendix (see
+// tests/fixtures/appendix-graphs.ts / tests/e2e.test.ts for the parsed and
+// executed forms of this exact text).
+digraph PlanImplementReview {
+  graph [goal="Implement the requested change safely", rankdir=LR,
+         model_stylesheet="* { model: claude-sonnet-5; } #review { model: claude-opus-5; reasoning_effort: high; }"]
+  start [shape=Mdiamond]
+  exit  [shape=Msquare]
+  plan      [label="Plan", prompt="Read the task in context and write a short plan to PLAN.md. Do not edit source."]
+  approve   [shape=hexagon, label="Approve plan?"]
+  implement [label="Implement", prompt="Implement PLAN.md with tests. Do not commit.", max_visits=3]
+  test      [shape=parallelogram, label="Test", script="npm test", goal_gate=true, max_visits=3]
+  review    [label="Review", prompt="Review the diff. Return routing JSON: Accept or Repair.", output_schema="routing"]
+  start -> plan -> approve
+  approve -> implement [label="[A] Approve"]
+  approve -> plan      [label="[R] Revise"]
+  implement -> test
+  test -> review    [condition="outcome=succeeded"]
+  test -> implement [condition="outcome=failed"]
+  review -> exit      [label="Accept", condition="preferred_label=Accept"]
+  review -> implement [label="Repair"]
+}

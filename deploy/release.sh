@@ -95,7 +95,13 @@ cleanup() {
 }
 trap cleanup EXIT
 git worktree add --detach "$worktree" HEAD
-(cd "$worktree" && bun install && bun run typecheck && bun run build)
+# The Canvas plugin keeps its own npm lockfile outside the Bun workspaces, but
+# the root typecheck reaches its sources (the e2e workspace's
+# scripts/render-github-issue-card.ts imports the issue-card shape), so install
+# its dependencies first — the same order CI's unit-tests workflow uses. A fresh
+# worktree has no plugins/canvas/node_modules, so without this every release
+# fails with TS2307 on @get-bb/plugin-sdk / better-sqlite3.
+(cd "$worktree" && bun install && (cd plugins/canvas && npm ci) && bun run typecheck && bun run build)
 
 if [ -n "${RELEASE_DRY_RUN:-}" ]; then
 	echo "==> dry run: validation passed; skipping version bump + push"

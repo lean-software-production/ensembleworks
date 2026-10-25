@@ -12,7 +12,8 @@ import { rawUserId } from '@ensembleworks/contracts'
 import { useEffect, useState } from 'react'
 import { useEditor, useValue } from 'tldraw'
 import { getRoomId } from '../identity'
-import { avSnapshotsEqual, getAvSnapshot, getFaceEl, publishAvSnapshot, useHoveredFace, type AvPanelSnapshot } from './bridge'
+import { avSnapshotsEqual, getAvSnapshot, getFaceEl, publishAvSnapshot, publishPeerGains, useHoveredFace, type AvPanelSnapshot } from './bridge'
+import { clampCrosstalk, DEFAULT_CROSSTALK_LEVEL } from './crosstalk'
 import { LeashOverlay, useLeashes } from './leashes'
 import { useLiveKitRoom } from './useLiveKitRoom'
 import { useSessionPulse } from './useSessionPulse'
@@ -24,7 +25,10 @@ export function AvOverlay() {
 	const name = useValue('userName', () => editor.user.getName() ?? 'teammate', [editor])
 	const lk = useLiveKitRoom(getRoomId(), identity, name)
 	const pulse = useSessionPulse(getRoomId(), identity)
-	const [standupMode, setStandupMode] = useState(true)
+	// The crosstalk level: the one dial for how loudly you hear people outside
+	// your viewport (av/crosstalk.ts). Defaults to full — hear everyone — so
+	// dialling down is an explicit act of focus.
+	const [crosstalkLevel, setCrosstalkLevel] = useState(DEFAULT_CROSSTALK_LEVEL)
 	const [kickError, setKickError] = useState<string | null>(null)
 	const [kickingId, setKickingId] = useState<string | null>(null)
 
@@ -37,22 +41,22 @@ export function AvOverlay() {
 	// recording row).
 	const scribeInfos = scribes.map((scribe) => ({ id: scribe.identity, name: scribe.name }))
 
-	// Hovering a panel tile leashes it to its cursor on demand (speakers leash
-	// unconditionally). Both the hovered id and the tile's live DOM element
-	// come from the bridge now — the panel tiles (chrome/PanelTile.tsx) are
-	// the ones registering/hovering; this component only reads them.
+	// Hovering a panel tile leashes it to its cursor on demand — the only thing
+	// that draws a leash now (speaking no longer does; see av/leashes.tsx).
+	// Both the hovered id and the tile's live DOM element come from the bridge
+	// — the panel tiles (chrome/PanelTile.tsx) are the ones
+	// registering/hovering; this component only reads them.
 	const hoveredId = useHoveredFace()
 
-	// Leashes from panel tiles to their teammate's live cursor — drawn only for
-	// the active speaker or the tile you're hovering, and only when that
-	// cursor is on the page you're viewing (useLeashes' own
-	// getCollaboratorsOnCurrentPage() scoping — unchanged — enforces the
-	// "only leash faces on my current page" rule; no page-scoped face list
-	// needs deriving here). Recomputes on camera pans and cursor moves.
-	const leashes = useLeashes(editor, lk.peers, hoveredId, getFaceEl)
+	// The leash from the hovered panel tile to that teammate's live cursor,
+	// drawn only when their cursor is on the page you're viewing (useLeashes'
+	// own getCollaboratorsOnCurrentPage() scoping enforces the "only leash
+	// faces on my current page" rule; no page-scoped face list needs deriving
+	// here). Recomputes on camera pans and cursor moves.
+	const leashes = useLeashes(editor, hoveredId, getFaceEl)
 
-	// Spatial audio loop.
-	useSpatialGainLoop(editor, lk, standupMode)
+	// Spatial audio loop (the crosstalk level is the fade floor + off-page step).
+	useSpatialGainLoop(editor, lk, crosstalkLevel)
 
 	// Takes (id, name) rather than a full participant object: those are the
 	// only two fields it uses, and it doubles as the bridge's `actions.kick` —
@@ -98,9 +102,11 @@ export function AvOverlay() {
 			status: lk.status,
 			micEnabled: lk.micEnabled,
 			camEnabled: lk.camEnabled,
-			standupMode,
+			crosstalkLevel,
 			localVideoTrack: lk.localVideoTrack,
 			localSpeaking: lk.localSpeaking,
+			micDeviceId: lk.activeDevices.audioinput,
+			camDeviceId: lk.activeDevices.videoinput,
 			peers: lk.peers
 				.filter((peer) => !peer.readOnly)
 				.map((peer) => ({
@@ -118,7 +124,8 @@ export function AvOverlay() {
 			actions: {
 				onMic: () => lk.setMicEnabled(!lk.micEnabled),
 				onCam: () => lk.setCamEnabled(!lk.camEnabled),
-				onStandup: () => setStandupMode((s) => !s),
+				setCrosstalk: (level: number) => setCrosstalkLevel(clampCrosstalk(level)),
+				setAvDevice: lk.setAvDevice,
 				kick: kickParticipant,
 			},
 		}
@@ -131,7 +138,10 @@ export function AvOverlay() {
 	// (the effect above fires often) don't flash the panel back to null
 	// between an old snapshot and the next one.
 	useEffect(() => {
-		return () => publishAvSnapshot(null)
+		return () => {
+			publishAvSnapshot(null)
+			publishPeerGains({})
+		}
 	}, [])
 
 	return <LeashOverlay leashes={leashes} />

@@ -14,8 +14,22 @@
 	--wm-rule: rgba(15, 23, 42, 0.1);
 	--wm-rule-strong: rgba(15, 23, 42, 0.22);
 	--wm-seal-blue: #004990;
-	--wm-mono: 'JetBrains Mono', ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+	--wm-mono: 'JetBrains Mono', 'Symbols Nerd Font Mono', ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
 	--wm-sans: 'PT Sans', -apple-system, BlinkMacSystemFont, system-ui, sans-serif;
+}
+
+/* Symbols-only Nerd Font fallback for terminal glyphs (powerline, devicons —
+   ryanoasis/nerd-fonts NerdFontsSymbolsOnly release, MIT — see
+   /fonts/LICENSE-SymbolsNerdFont.txt). Listed AFTER
+   JetBrains Mono in --wm-mono so the primary font's metrics — and therefore
+   the terminal's measured cell and deterministic grid — are untouched.
+   unicode-range limits the download to sessions that actually hit the
+   private-use symbol codepoints. */
+@font-face {
+	font-family: 'Symbols Nerd Font Mono';
+	src: url('/fonts/SymbolsNerdFontMono-Regular.ttf') format('truetype');
+	font-display: swap;
+	unicode-range: U+E000-F8FF, U+F0000-FFFFD;
 }
 
 /* The canvas is a sheet of paper, not a void. The warmer surface goes to

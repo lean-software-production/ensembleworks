@@ -12,23 +12,26 @@
 # the boundary. Installed to /usr/local/bin by deploy/deploy.sh (alongside the
 # canvas CLI), when the sandbox user exists. See deploy/github-app-runbook.md.
 #
-# Usage (from a canvas terminal, i.e. as ensembleworks-agent):
-#   TOKEN=$(sudo -u ensembleworks ensembleworks-gh-token)            # all org repos
-#   TOKEN=$(sudo -u ensembleworks ensembleworks-gh-token myrepo)     # scope to one/some
-#   git push "https://x-access-token:${TOKEN}@github.com/lean-software-production/myrepo.git" HEAD:my-branch
+#   TOKEN=$(sudo -n -u ensembleworks ensembleworks-gh-token)   # org-wide, no arguments
+#
+# Agents do NOT call this directly any more: /usr/local/bin/git-credential-ensembleworks
+# and the /usr/local/bin/gh shim call it for them, so plain `git push` and `gh`
+# authenticate as the bot in any shell. This wrapper is the one mint point they
+# share.
 #
 # We deliberately do NOT forward arbitrary gh-app-token.bash flags: its --env would
 # let a caller redirect the sourced env file to an attacker path = code-exec as the
-# app user. Only an optional comma-separated repo-name allowlist is accepted, and
-# the env path is resolved from OUR OWN passwd entry — never from $HOME or an arg.
+# app user. It now takes no arguments at all, and the env path is resolved from
+# OUR OWN passwd entry — never from $HOME or an arg.
 set -euo pipefail
 
-repos="${1:-}"
-if [ -n "$repos" ]; then
-	case "$repos" in
-	-*) echo "ensembleworks-gh-token: repos must not start with '-'" >&2; exit 2 ;;
-	*[!A-Za-z0-9._,-]*) echo "ensembleworks-gh-token: invalid repos '$repos' (allowed: A-Za-z0-9 . _ , -)" >&2; exit 2 ;;
-	esac
+# EW25: repo scoping is gone. A repo-scoped token cached by git's credential
+# cache gets replayed against a different repo and 403s, and the org-wide token
+# is valid for every repo the App is installed on — so there is exactly one kind
+# of token now. Refuse an argument loudly rather than silently ignoring it.
+if [ "$#" -gt 0 ]; then
+	echo "ensembleworks-gh-token: repo scoping removed — org-wide tokens only (EW25)" >&2
+	exit 2
 fi
 
 home="$(getent passwd "$(id -u)" | cut -d: -f6)"
@@ -38,6 +41,4 @@ env_file="${home}/.config/ensembleworks/github-app.env"
 	exit 1
 }
 
-args=(--env "$env_file")
-[ -n "$repos" ] && args+=(--repos "$repos")
-exec /usr/local/bin/gh-app-token.bash "${args[@]}"
+exec /usr/local/bin/gh-app-token.bash --env "$env_file"

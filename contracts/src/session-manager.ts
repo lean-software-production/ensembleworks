@@ -116,6 +116,10 @@ export function canvasTmuxSpawnSpec(opts: CanvasTmuxSpawnOptions): SpawnSpec {
 		COLORFGBG: '0;15', // light-bg hint for tmux < 3.4 (drops OSC 11 queries)
 	}
 	if (opts.tmuxConf) env.ENSEMBLEWORKS_TMUX_CONF = opts.tmuxConf // the `q` reload binding reads this
+	// A tmux client with no LC_CTYPE-affecting var comes up non-UTF-8 and mangles
+	// every non-Latin-1 glyph to "_" per cell. systemd units don't inherit the
+	// host locale, so guarantee one here — without overriding an operator's choice.
+	if (!env.LANG && !env.LC_ALL && !env.LC_CTYPE) env.LANG = 'C.UTF-8'
 	return {
 		file: 'tmux',
 		args: [...baseArgs, 'new-session', '-A', '-s', sessionName],

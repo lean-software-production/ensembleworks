@@ -1,0 +1,25 @@
+/*
+ * Bridges canvas-react's `--canvas-*` custom properties (its ONLY styling
+ * vocabulary — see canvas-react/src/overlay/Selection.tsx / Handles.tsx /
+ * Hover.tsx / Grid.tsx / Arrows.tsx, each of which falls back to a plain
+ * hardcoded hex when a given `--canvas-*` var is undefined) to this app's
+ * `--wm-*` brand tokens (theme.css). canvas-react is a logic-free, brand-
+ * agnostic renderer (CLAUDE.md's "clean-room boundary" / package-charter
+ * rules) — it must never import or hardcode a Wellmaintained-specific value
+ * itself, so this file is where the two vocabularies meet, entirely from the
+ * consuming app's side.
+ *
+ * Visual chrome fidelity task (polish/visual-chrome): before this file
+ * existed none of these custom properties were ever defined anywhere in
+ * client/src, so every canvas-react overlay silently fell back to its own
+ * generic blue (#4b8bf4) instead of this app's seal-blue accent
+ * (--wm-seal-blue, already what v1's tldraw theme uses for
+ * --tl-color-selected in theme.css).
+ */
+:root {
+	--canvas-selection: var(--wm-seal-blue);
+	--canvas-selection-bounds: var(--wm-seal-blue);
+	--canvas-hover: var(--wm-seal-blue);
+	--canvas-handle: var(--wm-bg);
+	--canvas-handle-stroke: var(--wm-seal-blue);
+}

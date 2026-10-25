@@ -12,6 +12,7 @@ nohup.out
 gateway-go/termgw-feature/dist/
 gateway-go/termgw-feature/tmux.conf
 gateway-go/devcontainer/.devcontainer/termgw-feature/
+.claude/worktrees
 
 # git worktrees (superpowers convention)
 .worktrees/
@@ -19,3 +20,15 @@ spikes/phase0/dist/
 
 # pi coding agent project configuration
 .pi/
+
+# Playwright MCP walkthrough artifacts (evidence, not source)
+.playwright-mcp/
+bossman-*.png
+.worktrees/
+.worktrees/
+
+# Local planning state
+.yaks/
+
+# Playwright output committed at repo root by mistake before (see e2e/.gitignore)
+test-results/

@@ -1,0 +1,537 @@
+// Arrow rendering: every VIEWPORT-RELEVANT arrow-kind shape's routed
+// WORLD-space path (canvas-model's `routeArrow`, arrow-route.ts) converted
+// point-by-point to SCREEN space and drawn as an SVG path, plus a small
+// arrowhead triangle at the end.
+//
+// WHY ARROWS LIVE IN THE OVERLAY, NOT AS SHAPE BODIES (ShapeBody.tsx/
+// ShapeLayer.tsx): `routeArrow` reads a bound terminal's CURRENT anchor
+// position off whatever shape it's bound to — "arrows are re-routed on every
+// call, not cached from bind time" (arrow-route.ts's routeArrow doc comment).
+// That is a CROSS-SHAPE read (an arrow shape's rendered geometry depends on
+// some OTHER shape's current position/rotation, not just its own props), which
+// ShapeBody's per-shape, `snapshot`-optional-by-convention memo model
+// (ShapeBody.tsx's MEMO STRATEGY note) is not built for — a bound arrow would
+// need to re-render on every OTHER shape's move, defeating exactly the
+// content-memo win that model exists for. The overlay already re-renders
+// wholesale on every doc commit (it reads the whole `snapshot`), so routing
+// the RELEVANT arrows fresh here, on every render, is the natural place: no
+// extra subscription wiring, and a moved target's next commit re-renders the
+// overlay (and therefore re-routes every surviving arrow) for free.
+//
+// ============================================================================
+// VIEWPORT CULLING (review round 2 — measured before this existed: routing
+// was O(all arrows) per render regardless of camera, ~1.07ms at 100 arrows
+// and ~17.4ms at 2000, past the frame budget on its own): an arrow is routed
+// AND rendered iff at least one of three cheap checks passes, each strictly
+// cheaper than routeArrow (no anchorToWorld/worldCorners/clipping):
+//   (a) the arrow's OWN shape id is in queryViewport(index, viewport) — the
+//       same index/queryViewport culling ShapeLayer already does for bodies
+//       (an arrow's own worldBounds covers its x/y box, NOT its routed
+//       path, so this alone is insufficient — hence (b)/(c));
+//   (b) EITHER bound target's id is in that same queryViewport set (one
+//       O(bindings) pass over snapshot.bindings builds the arrowId ->
+//       {start/end target} map per render — binding rows carry fromId +
+//       props.terminal, see arrow-route.ts's ARROW PROPS SCHEMA). Since (c)
+//       now unions each bound target's WHOLE worldBounds into its bbox (see
+//       below), (b) is logically REDUNDANT — a visible target's bounds
+//       intersect the viewport, so (c) would catch it too — but it is kept
+//       as a cheap early-out: a Set.has beats (c)'s worldBounds/toWorldPoint
+//       parent-chain walks;
+//   (c) the CONSERVATIVE segment bbox intersects the viewport: the UNION of
+//       each terminal's contribution — an unbound terminal contributes the
+//       arrow's own stored point exactly (toWorldPoint of {0,0}/props.end,
+//       resolveEndpoint's unbound arm); a BOUND terminal contributes the
+//       target's ENTIRE worldBounds (already computed — same cost as its
+//       center was) — inflated by |bend| for the curve bulge. SOUNDNESS
+//       (why this union never drops a visible arrow, per the review-round-3
+//       counterexample that killed the earlier centroid version): the bound
+//       anchor lies in the target's quad ⊆ the target's worldBounds, and
+//       the unbound endpoint is exact — so the union bbox contains BOTH raw
+//       endpoints; a bbox is convex, so it contains the whole raw segment,
+//       hence every clipped point on it (clipToBoundary only returns points
+//       ON that segment); the quadratic's control point sits ≤ |bend|
+//       perpendicular off the clipped chord and the curve stays inside the
+//       {start, mid, end} hull, so the |bend| inflation covers it. The
+//       CENTROID version violated exactly this: an anchor near a large
+//       target's corner can be a half-extent away from the center, shifting
+//       the bbox off a genuinely visible segment — UNDER-inclusion, the one
+//       failure mode this cull is not allowed to have (pinned by
+//       overlay.test.ts's counterexample regression). This is also what
+//       saves the long-arrow-spanning-the-screen case (both endpoints
+//       off-viewport, segment crossing it) WITHOUT routing it.
+//
+// OVER-INCLUSION SEMANTICS (deliberate, one-sided): every check errs toward
+// RENDERING — a few extra near-edge/near-miss arrows get routed and drawn
+// (harmless: the SVG clips them; cost is a handful of spare routeArrow
+// calls; a bound target's whole-bounds union adds a little more slack for
+// large targets, same one-sided direction), but an arrow whose visible path
+// could touch the viewport is never dropped. Same posture as
+// spatial-index.ts's culling tradeoff ("drawing a shape that would have
+// been culled is correct, just unclipped") and ShapeLayer's AABB body
+// culling. Staleness: (a)/(b) read the index's build-time buckets
+// (queryViewport can omit a target that moved INTO view since the last
+// commit — the same staleness window as every other index consumer, healed
+// at the next commit's rebuild), while (c) reads the CURRENT snapshot, so a
+// moved endpoint is caught by (c) even before the index rebuilds. Routing
+// cost is now bounded by (visible + spanning) arrows, not doc-total —
+// pinned by overlay.test.ts's routeFn-counter case via the test seam below.
+// ============================================================================
+//
+// CURVE RENDERING: `kind === 'straight'` -> `M start L end`; `kind ===
+// 'curved'` (bend != 0) -> a quadratic Bézier `M start Q mid end`, using
+// routeArrow's `mid` as the SVG `Q` command's single control point verbatim
+// (arrow-route.ts documents `mid` as exactly a quadratic control point, in
+// WORLD space — converted to screen here like every other point).
+//
+// ARROWHEAD ORIENTATION: a small triangle at the visible `end` point, aimed
+// along the path's incoming tangent — for a straight path that's `end -
+// start`; for a quadratic Bézier, the tangent at t=1 (the curve's END) is
+// proportional to `end - mid` (the standard quadratic-Bézier derivative
+// B'(1) = 2(P2 - P1) for control points P0=start, P1=mid, P2=end — the
+// constant 2 doesn't matter, only the DIRECTION does here). Both cases
+// therefore reduce to "the last segment's direction", computed directly from
+// the already screen-converted points (worldToScreen is a translate+uniform
+// scale, so direction angles survive the conversion unchanged in sign, only
+// scaled in magnitude, which normalizing away here loses nothing).
+//
+// Ink (freehand drawing) is OUT of scope per the ratified Open Q3 answer —
+// this file renders arrow-kind shapes ONLY; a hypothetical Ink.tsx is
+// deferred, not stubbed.
+import type { Binding, Bounds, CanvasDocument, Point, Shape, SpatialIndex } from '@ensembleworks/canvas-model'
+import { ARROW_HIT_MARGIN, pageIdOf, queryViewport, routeArrow, STYLE_VALUE_SETS, toWorldPoint, worldBounds } from '@ensembleworks/canvas-model'
+import { worldToScreen, type Camera } from '@ensembleworks/canvas-editor'
+import { viewportWorldBounds, type ViewportSize } from '../ShapeLayer.js'
+import { DASH_VALUES, dashArray, GEO_COLORS, STROKE_WIDTH_PX } from '../shapes/GeoShape.js'
+
+export interface ArrowsProps {
+  readonly snapshot: CanvasDocument
+  readonly camera: Camera
+  readonly viewportSize: ViewportSize
+  /** The shared spatial index — G3 passes toolContext.index(), the same
+   * consumption pattern (and coherence guarantee) as ShapeLayer:
+   * tool-context.ts pins that index() and snapshot() from one post-commit
+   * read cycle always describe the same doc state. Used ONLY for the
+   * culling broad phase; routing always reads the live `snapshot`. */
+  readonly index: SpatialIndex
+  /** Test seam: replaces routeArrow so a test can count routing calls
+   * (pinning that culled arrows are never routed — overlay.test.ts's
+   * counter case). Production callers omit it. */
+  readonly routeFn?: typeof routeArrow
+  /** The page being viewed. When set, only arrows whose parent chain resolves
+   * to this page are drawn (same rule as ShapeLayer). Unset draws every arrow,
+   * for callers that render a single-page document. */
+  readonly currentPageId?: string
+}
+
+const ARROW_STROKE = 'var(--canvas-arrow, #1a1a1a)'
+const ARROWHEAD_LENGTH_PX = 10
+const ARROWHEAD_HALF_WIDTH_PX = 4
+
+// ============================================================================
+// ARROW STYLE PROPS: `color`/`dash`/`size`/`arrowheadStart`/`arrowheadEnd`
+// are typed on the arrow kind (canvas-model's shape.ts:
+// `arrow: withText.extend(styleProps('color','fill','dash','size','font',
+// 'arrowheadStart','arrowheadEnd').shape)`) but were, before this change,
+// entirely ignored by this overlay — every arrow rendered with the
+// hardcoded ARROW_STROKE/1.5px/single-fixed-arrowhead above regardless of
+// what its props actually said.
+//
+// REUSE, NOT A SECOND TABLE: `color` and `size` are shared style axes, not
+// geo-specific ones — GeoShape.tsx typed GEO_COLORS/STROKE_WIDTH_PX/
+// dashArray/DASH_VALUES first (for the geo body), but they are exported
+// from there specifically so this file can reuse them rather than hand-copy
+// a parallel color/size/dash table (see GeoShape.tsx's export comment on
+// GEO_COLORS). Values are therefore IDENTICAL to what a geo/note/text shape
+// of the same color/size/dash renders.
+//
+// ABSENT-PROP FALLBACK: every resolution below is a `typeof x === 'string'
+// && x in TABLE` guard, never a bare `x || default` (0/''-unsafe) or an
+// unguarded lookup — and, per this task's explicit ground truth, an
+// absent/invalid prop falls back to THIS FILE's own pre-existing defaults
+// (ARROW_STROKE / DEFAULT_STROKE_WIDTH_PX / no dasharray / end-only
+// arrowhead), NOT GeoShape's own defaults (e.g. GEO's default color is
+// 'black' -> '#1d1d1d', a different hex than ARROW_STROKE's '#1a1a1a') — so
+// an older/unstyled arrow predating the styling work keeps rendering
+// EXACTLY as it did before this change.
+const DEFAULT_STROKE_WIDTH_PX = 1.5 // the old hardcoded constant, kept as the absent-size fallback
+// shape.ts's ARROWHEAD enum documents tldraw's real per-prop defaults:
+// arrowheadStart default 'none', arrowheadEnd default 'arrow' — which is
+// exactly the OLD hardcoded behavior here (one triangle, at the end only),
+// so using them as the absent-prop fallback is a no-op for existing arrows.
+const DEFAULT_ARROWHEAD_START = 'none'
+const DEFAULT_ARROWHEAD_END = 'arrow'
+// STYLE_VALUE_SETS.arrowheadStart/arrowheadEnd are the SAME zod-enum-derived
+// value list (canvas-model shape.ts's ARROWHEAD, one set shared by both
+// props) — read once here rather than importing the raw zod enum, mirroring
+// how client/src/canvas-v2's styling panel already consumes this export.
+const ARROWHEAD_VALUES = new Set(STYLE_VALUE_SETS.arrowheadStart)
+
+interface ArrowStyle {
+  /** 'none' -> no stroke element for the connecting line at all (mirrors
+   * GeoShape's dash:'none' -> strokeColor:null posture); otherwise the
+   * resolved hex. */
+  readonly stroke: string | 'none'
+  readonly strokeWidth: number
+  readonly strokeDasharray: string | undefined
+  readonly headStart: string
+  readonly headEnd: string
+  /** arrowheadGlyph's scale multiplier — see arrowStyle's doc comment. */
+  readonly headScale: number
+}
+
+/** Resolves an arrow shape's props into concrete visual values, reusing
+ * GeoShape.tsx's color/size/dash tables. Absent/unrecognized props fall
+ * back to this file's OWN pre-existing defaults (see module comment above),
+ * not GeoShape's.
+ *
+ * ZOOM-STABLE SIZING (gap 5, checked against v1 source: ArrowShapeUtil.tsx's
+ * SVG lives inside tldraw's own world-space-transformed shape container, so
+ * its stroke-width/arrowhead — both defined in the shape's own LOCAL units —
+ * scale with the camera for free, the same way GeoShape.tsx's stroke does
+ * here via WorldLayer's CSS transform). This overlay is SCREEN-space (module
+ * header: "no zoom division is needed" for HANDLE/SELECTION chrome — but an
+ * ARROW's stroke is DOCUMENT CONTENT, not UI chrome, so that constant-
+ * screen-size posture is wrong for it specifically) — `zoom` (camera.z) is
+ * applied here explicitly so a `strokeWidth` resolved from STROKE_WIDTH_PX
+ * (or the absent-prop default) grows/shrinks with the camera exactly like a
+ * geo/note shape's own stroke does, and `strokeDasharray` is computed from
+ * that SAME zoomed width so the dash pattern scales proportionally too, not
+ * just the line thickness. */
+function arrowStyle(shape: Shape, zoom: number): ArrowStyle {
+  const props = shape.props as Record<string, unknown>
+
+  const stroke = typeof props.color === 'string' && props.color in GEO_COLORS
+    ? GEO_COLORS[props.color].solid
+    : ARROW_STROKE
+
+  const size = typeof props.size === 'string' && props.size in STROKE_WIDTH_PX ? props.size : undefined
+  const baseStrokeWidth = size ? STROKE_WIDTH_PX[size] : DEFAULT_STROKE_WIDTH_PX
+  const strokeWidth = baseStrokeWidth * zoom
+
+  const dash = typeof props.dash === 'string' && DASH_VALUES.has(props.dash) ? props.dash : undefined
+  // dash:'none' -> no stroke element (see ArrowStyle.stroke doc); otherwise
+  // reuse dashArray() for dashed/dotted, undefined (a plain solid line) for
+  // draw/solid/absent — the exact old rendering when dash is unset. Computed
+  // from the ALREADY-ZOOMED strokeWidth (not baseStrokeWidth) so the dash
+  // pattern scales with the camera exactly like the line itself.
+  const strokeDasharray = dash ? dashArray(dash, strokeWidth) : undefined
+
+  const headStart = typeof props.arrowheadStart === 'string' && ARROWHEAD_VALUES.has(props.arrowheadStart)
+    ? props.arrowheadStart
+    : DEFAULT_ARROWHEAD_START
+  const headEnd = typeof props.arrowheadEnd === 'string' && ARROWHEAD_VALUES.has(props.arrowheadEnd)
+    ? props.arrowheadEnd
+    : DEFAULT_ARROWHEAD_END
+
+  // Glyph scale factor for arrowheadGlyph's ARROWHEAD_LENGTH_PX/HALF_WIDTH_PX
+  // baselines — proportional to the (already-zoomed) strokeWidth, matching
+  // v1's own "arrowhead sized by stroke width and scale" contract (arrow-
+  // route.ts... no, arrowheads.ts's getArrowheadPathForType(info, side,
+  // strokeWidth) signature — the arrowhead genuinely takes strokeWidth as an
+  // input up there too). 1 at the default size+z=1 (baseStrokeWidth ===
+  // DEFAULT_STROKE_WIDTH_PX, zoom === 1), so every pre-existing default-style
+  // arrow renders at EXACTLY the old fixed 10px/4px glyph size.
+  const headScale = strokeWidth / DEFAULT_STROKE_WIDTH_PX
+
+  return { stroke: dash === 'none' ? 'none' : stroke, strokeWidth, strokeDasharray, headStart, headEnd, headScale }
+}
+
+/** The SVG path `d` string for a routed arrow's screen-space segment —
+ * `M start L end` (straight) or `M start Q mid end` (curved, `mid` is
+ * routeArrow's quadratic control point already converted to screen space).
+ * Exported (Task arrow-body) so Selection.tsx's arrow indicator can trace
+ * the EXACT same path this component draws, rather than reimplementing the
+ * two-branch `M .. L/Q ..` composition a second time. */
+export function pathString(start: Point, end: Point, mid?: Point): string {
+  if (!mid) return `M ${start.x} ${start.y} L ${end.x} ${end.y}`
+  return `M ${start.x} ${start.y} Q ${mid.x} ${mid.y} ${end.x} ${end.y}`
+}
+
+/** The triangle's 3 screen points for an arrowhead pointing FROM `tail`
+ * TOWARD `tip` (i.e. oriented along `tip - tail`). Exported so overlay.test.ts
+ * can hand-compute the same geometry independently rather than re-deriving
+ * trig locally. Degenerate `tip === tail` (zero-length last segment — e.g. a
+ * self-bound arrow whose two anchors coincide, arrow-route.test.ts's own
+ * documented degenerate case): `Math.atan2(0, 0)` is well-defined (0, not
+ * NaN), so this still returns a finite (if visually meaningless) triangle,
+ * never throws or emits NaN into the SVG. */
+export function arrowheadPoints(tail: Point, tip: Point, scale = 1): [Point, Point, Point] {
+  const angle = Math.atan2(tip.y - tail.y, tip.x - tail.x)
+  const cos = Math.cos(angle)
+  const sin = Math.sin(angle)
+  const backX = tip.x - ARROWHEAD_LENGTH_PX * scale * cos
+  const backY = tip.y - ARROWHEAD_LENGTH_PX * scale * sin
+  // Perpendicular to the tangent, same 90°-rotation convention geometry.ts
+  // documents ((x,y) -> (-y,x)) — screen space, not world space, since these
+  // points are already converted; the convention is the same rotation either
+  // way, just applied to a different vector.
+  const perpX = -sin
+  const perpY = cos
+  const left: Point = { x: backX + ARROWHEAD_HALF_WIDTH_PX * scale * perpX, y: backY + ARROWHEAD_HALF_WIDTH_PX * scale * perpY }
+  const right: Point = { x: backX - ARROWHEAD_HALF_WIDTH_PX * scale * perpX, y: backY - ARROWHEAD_HALF_WIDTH_PX * scale * perpY }
+  return [tip, left, right]
+}
+
+// ============================================================================
+// ARROWHEAD GLYPH VARIANTS (arrow-handles task, gap 4): canvas-model's
+// ARROWHEAD enum (shape.ts) types 9 values — 'arrow', 'triangle', 'square',
+// 'dot', 'pipe', 'diamond', 'inverted', 'bar', 'none' — but until this task
+// every non-'none' value rendered the SAME plain filled triangle
+// (arrowheadPoints above). This ports tldraw's real per-type geometry
+// (node_modules/tldraw/src/lib/shapes/arrow/arrowheads.ts —
+// getArrowhead/getTriangleHead/getInvertedTriangleHead/getDotHead/
+// getDiamondHead/getSquareHead/getBarHead), adapted from that file's WORLD-
+// space {point, int} (a terminal + a second point pulled back toward the
+// other terminal) to this file's existing SCREEN-space {tail, tip}
+// convention — `int` here is a point pulled back from `tip` TOWARD `tail`
+// by a `len` derived from `scale` (see `arrowheadBase` below), rather than
+// tldraw's own `clamp(compareLength / 5, strokeWidth, strokeWidth * 3)`
+// (OURS, documented simplification: this file already computes `scale`
+// from strokeWidth for the zoom/size-stable sizing fix — gap 5 — so reusing
+// IT here, instead of re-deriving tldraw's own per-terminal clamp formula,
+// is one fewer independently-tuned constant, at the cost of not being a
+// byte-identical port).
+//
+// 'pipe' — CHECKED AGAINST SOURCE, not assumed: `ARROWHEAD` is a valid
+// tlschema enum member (the installed tlschema package's shapes/
+// TLArrowShape.ts:68) but
+// `getArrowheadPathForType`'s switch (arrowheads.ts) has NO 'pipe' case and
+// no default arm either — the switch simply falls through to the function's
+// trailing `return ''`, an EMPTY path string. tldraw's real shipped renderer
+// therefore draws literally nothing for `arrowhead: 'pipe'` — this is not a
+// dead/unused enum value id happened to skip; it is a value the shipped
+// product accepts but renders invisibly. This file matches that exactly
+// (`'pipe'` and `'none'` both resolve to `null` below) rather than inventing
+// a plausible-looking pipe glyph tldraw itself does not have.
+const HALF_PI = Math.PI / 2
+
+function rotVec(v: Point, angle: number): Point {
+  const c = Math.cos(angle), s = Math.sin(angle)
+  return { x: v.x * c - v.y * s, y: v.x * s + v.y * c }
+}
+function rotAround(p: Point, center: Point, angle: number): Point {
+  const d = { x: p.x - center.x, y: p.y - center.y }
+  const r = rotVec(d, angle)
+  return { x: center.x + r.x, y: center.y + r.y }
+}
+function lerpPt(a: Point, b: Point, t: number): Point {
+  return { x: a.x + (b.x - a.x) * t, y: a.y + (b.y - a.y) * t }
+}
+
+/** `point` = the visible terminal (`tip`); `int` = a point pulled back from
+ * it toward `tail` by `ARROWHEAD_LENGTH_PX * scale` — tldraw's own {point,
+ * int} pair (see module comment above), degenerate zero-length tail->tip
+ * falling back to `int === point` (never NaN), same posture as
+ * `arrowheadPoints`'s own degenerate-tip note. */
+function arrowheadBase(tail: Point, tip: Point, scale: number): { point: Point; int: Point } {
+  const len = ARROWHEAD_LENGTH_PX * scale
+  const dx = tip.x - tail.x, dy = tip.y - tail.y
+  const dist = Math.hypot(dx, dy)
+  if (dist === 0) return { point: tip, int: tip }
+  const ux = -dx / dist, uy = -dy / dist // unit vector from tip TOWARD tail
+  return { point: tip, int: { x: tip.x + ux * len, y: tip.y + uy * len } }
+}
+
+/** One rendered glyph: either a filled/stroked path, or (dot) a circle.
+ * `fill: null` means "stroke only, no fill" (the 'arrow'/'bar' open-line
+ * variants) — mirrors ArrowStyle.stroke's own `'none'` sentinel convention
+ * elsewhere in this file. */
+type ArrowheadGlyph = { readonly kind: 'path'; readonly d: string; readonly filled: boolean } | { readonly kind: 'circle'; readonly cx: number; readonly cy: number; readonly r: number } | null
+
+function arrowheadGlyph(type: string, tail: Point, tip: Point, scale: number): ArrowheadGlyph {
+  if (type === 'none' || type === 'pipe') return null // see module comment: 'pipe' is real-but-invisible in tldraw too
+  const { point, int } = arrowheadBase(tail, tip, scale)
+  const pt = (p: Point) => `${p.x} ${p.y}`
+  switch (type) {
+    case 'triangle': {
+      const PL = rotAround(int, point, Math.PI / 6)
+      const PR = rotAround(int, point, -Math.PI / 6)
+      return { kind: 'path', d: `M ${pt(PL)} L ${pt(PR)} L ${pt(point)} Z`, filled: true }
+    }
+    case 'inverted': {
+      const d = { x: (int.x - point.x) / 2, y: (int.y - point.y) / 2 }
+      const PL = { x: point.x + rotVec(d, HALF_PI).x, y: point.y + rotVec(d, HALF_PI).y }
+      const PR = { x: point.x - rotVec(d, HALF_PI).x, y: point.y - rotVec(d, HALF_PI).y }
+      return { kind: 'path', d: `M ${pt(PL)} L ${pt(int)} L ${pt(PR)} Z`, filled: true }
+    }
+    case 'dot': {
+      const A = lerpPt(point, int, 0.45)
+      const r = Math.hypot(A.x - point.x, A.y - point.y)
+      return { kind: 'circle', cx: A.x, cy: A.y, r }
+    }
+    case 'diamond': {
+      const PB = lerpPt(point, int, 0.75)
+      const PL = rotAround(PB, point, Math.PI / 4)
+      const PR = rotAround(PB, point, -Math.PI / 4)
+      const mid = lerpPt(PL, PR, 0.5)
+      const PQ = { x: 2 * mid.x - point.x, y: 2 * mid.y - point.y }
+      return { kind: 'path', d: `M ${pt(PQ)} L ${pt(PR)} L ${pt(point)} L ${pt(PL)} Z`, filled: true }
+    }
+    case 'square': {
+      const PB = lerpPt(point, int, 0.85)
+      const d = { x: (PB.x - point.x) / 2, y: (PB.y - point.y) / 2 }
+      const rd = rotVec(d, HALF_PI)
+      const PL1 = { x: point.x + rd.x, y: point.y + rd.y }
+      const PR1 = { x: point.x - rd.x, y: point.y - rd.y }
+      const PL2 = { x: PB.x + rd.x, y: PB.y + rd.y }
+      const PR2 = { x: PB.x - rd.x, y: PB.y - rd.y }
+      return { kind: 'path', d: `M ${pt(PL1)} L ${pt(PL2)} L ${pt(PR2)} L ${pt(PR1)} Z`, filled: true }
+    }
+    case 'bar': {
+      const d = { x: (int.x - point.x) / 2, y: (int.y - point.y) / 2 }
+      const rd = rotVec(d, HALF_PI)
+      const PL = { x: point.x + rd.x, y: point.y + rd.y }
+      const PR = { x: point.x - rd.x, y: point.y - rd.y }
+      return { kind: 'path', d: `M ${pt(PL)} L ${pt(PR)}`, filled: false }
+    }
+    case 'arrow':
+    default: {
+      // tldraw's real default: an OPEN two-segment chevron (`M PL L point L
+      // PR`, no closing `Z`) — checked against source (arrowheads.ts's
+      // `getArrowhead`), NOT the filled triangle this file rendered for
+      // every arrow before this task. `default` also covers any future/
+      // unrecognized-but-non-'none' value, matching arrowStyle's own
+      // fallback-to-'arrow' resolution below.
+      const PL = rotAround(int, point, Math.PI / 6)
+      const PR = rotAround(int, point, -Math.PI / 6)
+      return { kind: 'path', d: `M ${pt(PL)} L ${pt(point)} L ${pt(PR)}`, filled: false }
+    }
+  }
+}
+
+// Plain inclusive AABB intersection (canvas-model keeps its own equivalent
+// private inside spatial-index.ts — four comparisons, not worth an export).
+function boundsIntersect(a: Bounds, b: Bounds): boolean {
+  return a.minX <= b.maxX && b.minX <= a.maxX && a.minY <= b.maxY && b.minY <= a.maxY
+}
+
+interface BoundTerminals { start?: string; end?: string }
+
+// One O(bindings) pass: arrowId -> which target each terminal is bound to.
+// Rows with an unrecognized/missing props.terminal are skipped (the same
+// rows resolveEndpoint's own `.find` would never match).
+function boundTargetsByArrow(bindings: readonly Binding[]): Map<string, BoundTerminals> {
+  const map = new Map<string, BoundTerminals>()
+  for (const b of bindings) {
+    const terminal = (b.props as { terminal?: string })?.terminal
+    if (terminal !== 'start' && terminal !== 'end') continue
+    const entry = map.get(b.fromId) ?? {}
+    entry[terminal] = b.toId
+    map.set(b.fromId, entry)
+  }
+  return map
+}
+
+// Cull check (c)'s per-terminal bbox contribution — deliberately NOT
+// routeArrow: a BOUND terminal contributes its target's ENTIRE worldBounds
+// (the anchor lies somewhere in the target's quad ⊆ these bounds — see the
+// module header's SOUNDNESS note; a centroid here was review-round-3's
+// under-inclusion bug); an unbound (or vanished-target, matching
+// routeArrow's own fallback family) terminal contributes the arrow's own
+// stored point exactly, as a degenerate bbox — resolveEndpoint's unbound arm.
+function terminalBounds(snapshot: CanvasDocument, arrow: Shape, terminal: 'start' | 'end', targetId: string | undefined): Bounds {
+  if (targetId) {
+    const target = snapshot.byId.get(targetId)
+    if (target) return worldBounds(snapshot, target)
+  }
+  const localPt: Point = terminal === 'start' ? { x: 0, y: 0 } : ((arrow.props as { end?: Point })?.end ?? { x: 0, y: 0 })
+  const p = toWorldPoint(snapshot, arrow, localPt)
+  return { minX: p.x, minY: p.y, maxX: p.x, maxY: p.y }
+}
+
+/** Paints one resolved ArrowheadGlyph — a filled/stroked `<path>` or (the
+ * 'dot' type) a `<circle>`. `data-overlay="arrowhead"` on every branch (the
+ * existing per-end presence/count assertions key off this attribute, not
+ * the element tag). `strokeWidth` is passed through for the OPEN variants
+ * ('arrow'/'bar', `filled: false`) — an un-filled path needs a real stroke
+ * to be visible at all, unlike every closed/filled variant. */
+function ArrowheadNode({ glyph, fill, strokeWidth }: { readonly glyph: NonNullable<ReturnType<typeof arrowheadGlyph>>; readonly fill: string; readonly strokeWidth: number }) {
+  if (glyph.kind === 'circle') {
+    return <circle data-overlay="arrowhead" cx={glyph.cx} cy={glyph.cy} r={glyph.r} fill={fill} />
+  }
+  return glyph.filled
+    ? <path data-overlay="arrowhead" d={glyph.d} fill={fill} />
+    : <path data-overlay="arrowhead" d={glyph.d} fill="none" stroke={fill} strokeWidth={strokeWidth} strokeLinejoin="round" strokeLinecap="round" />
+}
+
+export function Arrows({ snapshot, camera, viewportSize, index, routeFn, currentPageId }: ArrowsProps) {
+  const allArrows = snapshot.shapes.filter(
+    (s) => s.kind === 'arrow' && (currentPageId === undefined || pageIdOf(snapshot, s) === currentPageId),
+  )
+  if (allArrows.length === 0) return null
+
+  const viewport = viewportWorldBounds(camera, viewportSize)
+  const visibleIds = new Set(queryViewport(index, viewport))
+  const terminals = boundTargetsByArrow(snapshot.bindings)
+  const route = routeFn ?? routeArrow
+
+  const relevant = allArrows.filter((arrow) => {
+    if (visibleIds.has(arrow.id)) return true // (a) own shape bbox on-screen
+    const t = terminals.get(arrow.id)
+    // (b) a bound target on-screen — logically implied by (c)'s whole-bounds
+    // union, kept as a cheap early-out (see module header).
+    if (t && ((t.start !== undefined && visibleIds.has(t.start)) || (t.end !== undefined && visibleIds.has(t.end)))) return true
+    // (c) conservative segment bbox: union of both terminals' contributions
+    // (whole target worldBounds for bound, exact stored point for unbound),
+    // inflated by |bend| for the curve bulge — see the SOUNDNESS note — PLUS
+    // ARROW_HIT_MARGIN (validator fix, gap 2): an exact (zero-width/height,
+    // for an axis-aligned unbound arrow) bbox can sit a few world units
+    // outside the viewport while the arrow's actual STROKE — which has
+    // visible width, unlike this bbox's mathematical line — still reaches
+    // into it. Reusing the same click-precision margin geometry.ts's
+    // arrowHitTest uses keeps one tunable constant for "how far off the
+    // exact line an arrow is still meaningfully present," rather than a
+    // second, independently-drifting one here.
+    const b1 = terminalBounds(snapshot, arrow, 'start', t?.start)
+    const b2 = terminalBounds(snapshot, arrow, 'end', t?.end)
+    const rawBend = (arrow.props as { bend?: number })?.bend
+    const bend = typeof rawBend === 'number' && Number.isFinite(rawBend) ? Math.abs(rawBend) : 0
+    const inflate = bend + ARROW_HIT_MARGIN
+    const bbox: Bounds = {
+      minX: Math.min(b1.minX, b2.minX) - inflate, minY: Math.min(b1.minY, b2.minY) - inflate,
+      maxX: Math.max(b1.maxX, b2.maxX) + inflate, maxY: Math.max(b1.maxY, b2.maxY) + inflate,
+    }
+    return boundsIntersect(bbox, viewport)
+  })
+  if (relevant.length === 0) return null
+
+  return (
+    <>
+      {relevant.map((arrow) => {
+        const routed = route(snapshot, arrow, snapshot.bindings)
+        const startScreen = worldToScreen(camera, routed.start)
+        const endScreen = worldToScreen(camera, routed.end)
+        const midScreen = routed.mid ? worldToScreen(camera, routed.mid) : undefined
+        const style = arrowStyle(arrow, camera.z)
+        const headFill = style.stroke !== 'none' ? style.stroke : ARROW_STROKE
+        // End arrowhead: tail is the tangent's "from" point at t=1 (mid for
+        // a curve, start for a straight segment — see module header
+        // ARROWHEAD ORIENTATION), tip is the visible end point.
+        const endTail = midScreen ?? startScreen
+        const endGlyph = style.headEnd !== 'none' ? arrowheadGlyph(style.headEnd, endTail, endScreen, style.headScale) : null
+        // Start arrowhead: the SAME {tail, tip} composition, mirrored — tip
+        // is now the visible START point, and tail is the point one step
+        // further along the path FROM start (mid for a curve, end for a
+        // straight segment), so the glyph points outward at the start end
+        // exactly symmetrically to the end one.
+        const startTail = midScreen ?? endScreen
+        const startGlyph = style.headStart !== 'none' ? arrowheadGlyph(style.headStart, startTail, startScreen, style.headScale) : null
+        return (
+          <g key={arrow.id} data-overlay="arrow" data-shape-id={arrow.id}>
+            {style.stroke !== 'none' && (
+              <path
+                d={pathString(startScreen, endScreen, midScreen)}
+                fill="none"
+                stroke={style.stroke}
+                strokeWidth={style.strokeWidth}
+                {...(style.strokeDasharray !== undefined ? { strokeDasharray: style.strokeDasharray } : {})}
+              />
+            )}
+            {endGlyph && <ArrowheadNode glyph={endGlyph} fill={headFill} strokeWidth={style.strokeWidth} />}
+            {startGlyph && <ArrowheadNode glyph={startGlyph} fill={headFill} strokeWidth={style.strokeWidth} />}
+          </g>
+        )
+      })}
+    </>
+  )
+}

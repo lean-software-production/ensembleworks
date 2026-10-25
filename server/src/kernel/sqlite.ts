@@ -24,6 +24,10 @@ export class DatabaseSync {
 
   constructor(filename: string) {
     this.#db = new Database(filename)
+    // Allow transient locks from another connection's recovery/checkpoint to
+    // clear. Set this before journal_mode: opening WAL can itself need a lock.
+    // Keep the wait bounded so persistent contention still fails visibly.
+    this.#db.exec('PRAGMA busy_timeout = 1000')
     // WAL mode replaces rollback-journal's create→fsync→delete cycle per write
     // transaction with append-to-WAL + periodic checkpoint, and synchronous=NORMAL
     // drops an fsync per commit (durability weakens only on OS crash, not app
@@ -48,5 +52,16 @@ export class DatabaseSync {
       },
       iterate: (...params) => stmt.iterate(...(params as never[])),
     }
+  }
+
+  // Additive beyond the surface sync-core drives (it never closes its DBs):
+  // releases the underlying handle so callers that own short-lived per-room
+  // DBs (canvas-v2's DocumentActor / the C3 registry) can evict rooms without
+  // leaking fds. After close, prepare() throws RangeError "Cannot use a
+  // closed database"; statements prepared BEFORE the close refuse writes
+  // ("Database has closed") but still serve reads — bun defers the real close
+  // while statements are live (behavior pinned in ./sqlite.test.ts).
+  close(): void {
+    this.#db.close()
   }
 }

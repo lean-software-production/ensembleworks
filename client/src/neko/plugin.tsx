@@ -3,6 +3,7 @@
  */
 import type { ClientPlugin } from '../kernel/plugin'
 import { createNekoShape } from './createNekoShape'
+import { useNekoAvailable } from './nekoAvailable'
 import { NEKO_ICON_NAME, NEKO_TOOLBAR_ICON, NekoShapeUtil } from './NekoShapeUtil'
 
 export const nekoPlugin: ClientPlugin = {
@@ -15,6 +16,8 @@ export const nekoPlugin: ClientPlugin = {
 			label: 'browser',
 			icon: NEKO_ICON_NAME,
 			placement: 'overflow',
+			// Hidden when the shared-browser service isn't running on this host.
+			useAvailable: useNekoAvailable,
 			onSelect: (editor) => createNekoShape(editor),
 		},
 	],

@@ -35,7 +35,7 @@ export function createTelemetryRouter(ctx: PluginServerContext): express.Router 
 		for (const raw of events) {
 			const e = (raw ?? {}) as Record<string, unknown>
 			const roomId = sanitizeId(String(e.roomId ?? ''))
-			const plane = e.plane === 'livekit' || e.plane === 'sync' ? e.plane : null
+			const plane = e.plane === 'livekit' || e.plane === 'sync' || e.plane === 'lock' ? e.plane : null
 			const event = typeof e.event === 'string' ? e.event.slice(0, 64) : ''
 			const userId = typeof e.userId === 'string' ? e.userId.slice(0, 128) : ''
 			if (!roomId || !plane || !event) continue

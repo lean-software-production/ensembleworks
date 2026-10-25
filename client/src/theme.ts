@@ -37,7 +37,10 @@ export const wm = {
 	info: '#1d76d6',
 
 	// Type
-	mono: '"JetBrains Mono", ui-monospace, SFMono-Regular, Menlo, Consolas, monospace',
+	// Keep in sync with --wm-mono in theme.css. Symbols Nerd Font Mono is the
+	// self-hosted symbols-only fallback (PUA glyphs); JetBrains Mono stays
+	// primary so the terminal's measured cell is unchanged.
+	mono: '"JetBrains Mono", "Symbols Nerd Font Mono", ui-monospace, SFMono-Regular, Menlo, Consolas, monospace',
 	sans: '"PT Sans", -apple-system, BlinkMacSystemFont, system-ui, sans-serif',
 
 	// Elevation — flat, paper-like

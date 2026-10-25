@@ -11,6 +11,9 @@ import { readFrameId } from './chrome/frameLink'
 const ID_KEY = 'ensembleworks.userId'
 const NAME_KEY = 'ensembleworks.userName'
 const COLOR_KEY = 'ensembleworks.userColor'
+// First paint waits on the whoami seed (first visit per browser only), so it is
+// bounded: a slow or unreachable Access origin must not hold the canvas up.
+const WHOAMI_TIMEOUT_MS = 1_500
 
 export interface Identity {
 	id: string
@@ -43,6 +46,64 @@ export function getIdentity(): Identity {
 	}
 	localStorage.setItem(NAME_KEY, name)
 	return { id, name, colorKey: resolveColorKey(id) }
+}
+
+let memo: Identity | null = null
+
+/**
+ * getIdentity(), evaluated at most once per page load. Both module-scope call
+ * sites (main.tsx and App.tsx) go through this so the name prompt can never
+ * fire twice, and — the reason it exists — so identity is resolved at RENDER
+ * time rather than module-eval time. That lets main.tsx await
+ * seedNameFromWhoami() before anything reads the name; a module-eval read in a
+ * statically-imported module would run first and prompt regardless.
+ */
+export function identityOnce(): Identity {
+	return (memo ??= getIdentity())
+}
+
+/**
+ * Seed the display name from the Cloudflare Access identity (GET /api/whoami)
+ * so presence names and server logs name the same person — the client half of
+ * the identity binding (issue #55 Problem 1).
+ *
+ * Deliberately weak: it only ever fills an EMPTY name, so a name the user chose
+ * is never overwritten, and every failure path (offline, non-200, timeout, no
+ * SSO identity — local dev bypasses Access) leaves the name unset and falls
+ * through to getIdentity()'s prompt. Startup awaits this, so it is bounded and
+ * never throws.
+ */
+export async function seedNameFromWhoami(): Promise<void> {
+	if (localStorage.getItem(NAME_KEY)) return
+	const controller = new AbortController()
+	let timer: ReturnType<typeof setTimeout> | undefined
+	try {
+		// The deadline is enforced here rather than left to AbortSignal alone: the
+		// bound on first paint must hold even if the hang is downstream of the
+		// response headers (a stalled body, a slow json()), where an abort of the
+		// request no longer helps. The abort still fires, to cancel the request.
+		const name = await Promise.race([
+			(async () => {
+				const res = await fetch('/api/whoami', { signal: controller.signal })
+				if (!res.ok) return ''
+				const body = (await res.json()) as { identity?: unknown; kind?: unknown }
+				// A bot or anonymous caller is not this session's human user.
+				if (body.kind !== 'human') return ''
+				return typeof body.identity === 'string' ? body.identity.trim() : ''
+			})(),
+			new Promise<string>((resolve) => {
+				timer = setTimeout(() => {
+					controller.abort()
+					resolve('')
+				}, WHOAMI_TIMEOUT_MS)
+			}),
+		])
+		if (name) localStorage.setItem(NAME_KEY, name)
+	} catch {
+		// Offline, aborted, or malformed — the prompt is the fallback.
+	} finally {
+		if (timer !== undefined) clearTimeout(timer)
+	}
 }
 
 /**

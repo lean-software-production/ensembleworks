@@ -12,6 +12,23 @@ import { resolveCaller } from '../whoami.ts'
 export function createDiscordRouter(ctx: PluginServerContext): express.Router {
 	const router = express.Router()
 
+	// GET /api/discord/health — is the bridge bot process running? The bot's
+	// only HTTP surface is POST /post on loopback, unreachable from browsers,
+	// so the server answers on its behalf: any HTTP response from the port
+	// (even the 404 a GET earns) proves the process is up; a network error
+	// means it isn't. Feeds the command bar's useAvailable probe.
+	router.get('/api/discord/health', async (_req, res) => {
+		const botPort = process.env.DISCORD_PORT ?? '8790'
+		const up = await fetch(`http://127.0.0.1:${botPort}/post`, {
+			method: 'GET',
+			signal: AbortSignal.timeout(1000),
+		}).then(
+			() => true,
+			() => false
+		)
+		res.json({ ok: true, up })
+	})
+
 	// GET /api/discord/bindings?room=<room> — every binding for a room.
 	router.get('/api/discord/bindings', async (req, res) => {
 		const roomId = sanitizeId(String(req.query.room ?? 'team'))
@@ -115,9 +132,14 @@ export function createDiscordRouter(ctx: PluginServerContext): express.Router {
 		res.json({ ok: true, delivered })
 	})
 
-	// DELETE /api/discord/bindings/:id — idempotent removal.
-	router.delete('/api/discord/bindings/:id', async (req, res) => {
-		await ctx.storage.discord.remove(req.params.id)
+	// DELETE /api/discord/bindings?id=<id> — idempotent removal. The id is a query
+	// param, NOT a path segment: the CLI's generic renderer emits GET/DELETE input
+	// as query and never substitutes a `:id`, so a path-param route would silently
+	// no-op (delete nothing, report ok). Missing id is a 400 rather than a no-op.
+	router.delete('/api/discord/bindings', async (req, res) => {
+		const id = String(req.query.id ?? '').trim()
+		if (!id) return void res.status(400).json({ error: 'id' })
+		await ctx.storage.discord.remove(id)
 		res.json({ ok: true })
 	})
 

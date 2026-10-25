@@ -1,0 +1,180 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Mockup — team video in bb</title>
+<style>
+  :root{
+    --bg:#111418; --panel:#191d23; --panel2:#1f242b; --border:#2a3038;
+    --text:#d7dde4; --muted:#7d8794; --accent:#5b9dff; --green:#3fb96b;
+    --ring:#3fb96b;
+  }
+  *{box-sizing:border-box; margin:0}
+  body{font:13px/1.45 -apple-system,'Segoe UI',sans-serif; background:var(--bg); color:var(--text); height:100vh; display:flex; flex-direction:column; overflow:hidden}
+
+  /* ---- top bar ---- */
+  .topbar{height:38px; display:flex; align-items:center; gap:10px; padding:0 12px; background:var(--panel); border-bottom:1px solid var(--border); flex:none}
+  .topbar .logo{width:16px;height:16px;border-radius:4px;background:var(--accent)}
+  .topbar .title{font-weight:600}
+  .tabs{margin-left:auto; display:flex; gap:4px}
+  .tabs button{background:none;border:1px solid var(--border);color:var(--muted);padding:4px 12px;border-radius:6px;cursor:pointer;font:inherit}
+  .tabs button.active{background:var(--panel2);color:var(--text);border-color:#3b4450}
+
+  .shell{flex:1; display:flex; min-height:0}
+
+  /* ---- sidebar ---- */
+  .sidebar{width:230px; flex:none; background:var(--panel); border-right:1px solid var(--border); padding:10px 8px; display:flex; flex-direction:column; gap:2px}
+  .side-h{font-size:11px; text-transform:uppercase; letter-spacing:.06em; color:var(--muted); padding:6px 8px 4px}
+  .thread{padding:6px 8px; border-radius:6px; color:var(--muted); cursor:default; display:flex; align-items:center; gap:7px}
+  .thread.active{background:var(--panel2); color:var(--text)}
+  .thread .dot{width:7px;height:7px;border-radius:50%;flex:none}
+  .dot.run{background:var(--accent); animation:pulse 1.4s infinite}
+  .dot.idle{background:var(--green)}
+  .dot.none{background:#3a424c}
+  .thread .who{margin-left:auto; font-size:10px; background:#2b3a52; color:#9fc1ff; padding:1px 6px; border-radius:8px}
+  .canvas-row{margin-top:auto; padding:7px 8px; border-top:1px solid var(--border); display:flex; align-items:center; gap:8px; color:var(--muted)}
+  .canvas-row b{color:var(--text); font-weight:600}
+  .online{margin-left:auto; font-size:11px; color:var(--green)}
+
+  /* ---- main ---- */
+  .main{flex:1; position:relative; min-width:0; background:var(--bg); display:flex; flex-direction:column}
+  .surface{flex:1; overflow:hidden; position:relative}
+
+  /* thread view */
+  .msg{max-width:640px; margin:14px 24px; }
+  .msg .from{font-size:11px;color:var(--muted); margin-bottom:3px}
+  .msg .body{background:var(--panel2); border:1px solid var(--border); border-radius:10px; padding:10px 14px}
+  .msg.me .body{background:#22304a; border-color:#31456b}
+  code{background:#0d1013;padding:1px 5px;border-radius:4px;font-size:12px;color:#a9d1ff}
+
+  /* canvas view */
+  #canvasView{position:absolute; inset:0; display:none;
+    background-image:radial-gradient(#232a33 1px, transparent 1px); background-size:22px 22px}
+  .sticky{position:absolute; width:150px; padding:10px 12px; border-radius:8px; font-size:12px; color:#1c1c14; box-shadow:0 3px 10px rgba(0,0,0,.35)}
+  .sticky.yellow{background:#f5e08a} .sticky.pink{background:#f2b8c6} .sticky.blue{background:#a8cdf0}
+  .frame{position:absolute; border:1.5px solid #3b4450; border-radius:10px; }
+  .frame .flabel{position:absolute; top:-20px; left:6px; font-size:11px; color:var(--muted)}
+  .cursor{position:absolute; pointer-events:none}
+  .cursor svg{display:block}
+  .cursor .clabel{font-size:10px; padding:1px 6px; border-radius:6px; color:#fff; margin-top:2px; display:inline-block}
+
+  /* ---- video bubbles (shared between dock and canvas) ---- */
+  .bubble{width:52px;height:52px;border-radius:50%;position:relative;flex:none; cursor:pointer; transition:transform .15s}
+  .bubble:hover{transform:scale(1.55); z-index:30}
+  .bubble .face{width:100%;height:100%;border-radius:50%;display:flex;align-items:center;justify-content:center;font-size:20px; border:2px solid #333c47; overflow:hidden}
+  .bubble.speaking .face{border-color:var(--ring); box-shadow:0 0 0 3px rgba(63,185,107,.35); animation:speak 1s infinite}
+  .bubble .mic{position:absolute; right:-2px; bottom:-2px; width:16px;height:16px;border-radius:50%; background:#20262d; border:1px solid var(--border); display:flex;align-items:center;justify-content:center;font-size:9px}
+  .bubble .name{position:absolute; top:100%; left:50%; transform:translateX(-50%); font-size:10px; color:var(--muted); white-space:nowrap; margin-top:3px}
+  .f-alice{background:linear-gradient(140deg,#e2b06c,#9c5f3f)}
+  .f-bob{background:linear-gradient(140deg,#7fa8d9,#41618f)}
+  .f-cara{background:linear-gradient(140deg,#9fd9a2,#4f8f5b)}
+  .f-you{background:linear-gradient(140deg,#c39fd9,#6b4f8f)}
+
+  /* ---- floating dock ---- */
+  #dock{position:absolute; left:18px; bottom:18px; background:rgba(23,28,34,.92); border:1px solid var(--border); border-radius:16px; padding:10px 14px 22px; display:flex; gap:16px; align-items:center; box-shadow:0 8px 28px rgba(0,0,0,.45); backdrop-filter:blur(6px); z-index:20}
+  #dock .grip{color:#4a5460; cursor:grab; font-size:14px; align-self:flex-start; margin-top:14px}
+  #dock .where{position:absolute; top:-8px; left:50%; transform:translateX(-50%); font-size:10px; background:#2b3a52; color:#9fc1ff; padding:1px 8px; border-radius:8px; white-space:nowrap}
+  #dock .ctrl{display:flex; flex-direction:column; gap:6px; margin-left:4px; align-self:flex-start; margin-top:6px}
+  .ctrl button{width:28px;height:28px;border-radius:8px;border:1px solid var(--border);background:var(--panel2);color:var(--text);cursor:pointer;font-size:12px}
+  .ctrl button.off{color:#e06c6c}
+  .hint{position:absolute; bottom:6px; left:0; right:0; text-align:center; font-size:9px; color:#525c68}
+
+  @keyframes speak{50%{box-shadow:0 0 0 6px rgba(63,185,107,.15)}}
+  .speaking-label{box-shadow:0 0 0 2px rgba(63,185,107,.55); animation:speak 1s infinite}
+  @keyframes pulse{50%{opacity:.4}}
+
+  .note-banner{position:absolute; top:10px; left:50%; transform:translateX(-50%); background:#2b3a52; color:#b9d2f5; padding:4px 14px; border-radius:8px; font-size:11px; z-index:25}
+</style>
+</head>
+<body>
+
+<div class="topbar">
+  <div class="logo"></div><div class="title">bb — EnsembleWorks</div>
+  <div class="tabs">
+    <button id="tabThread" class="active" onclick="show('thread')">Thread view</button>
+    <button id="tabCanvas" onclick="show('canvas')">Canvas view</button>
+  </div>
+</div>
+
+<div class="shell">
+  <div class="sidebar">
+    <div class="side-h">Threads</div>
+    <div class="thread active"><span class="dot run"></span> ENG-42 flaky sync test <span class="who">Alice</span></div>
+    <div class="thread"><span class="dot idle"></span> Canvas: parity inventory</div>
+    <div class="thread"><span class="dot none"></span> Release 0.28 notes <span class="who">Cara</span></div>
+    <div class="thread"><span class="dot idle"></span> Fix dev-proxy leak</div>
+    <div class="canvas-row">🖊 <b>Canvas</b> <span class="online">● 4 online</span></div>
+  </div>
+
+  <div class="main"><div class="surface">
+
+    <!-- THREAD VIEW -->
+    <div id="threadView">
+      <div class="msg"><div class="from">Alice · 12:04</div>
+        <div class="body">The retry in <code>sync-server.test.ts</code> masks the real race — the peer connects before the snapshot import finishes.</div></div>
+      <div class="msg me"><div class="from">agent · 12:05</div>
+        <div class="body">Confirmed. Moving the <code>ready()</code> gate ahead of <code>connect()</code> and re-running the suite…</div></div>
+      <div class="msg"><div class="from">Alice · 12:07</div>
+        <div class="body">Nice. Bob — this touches your transport adapter, worth a look.</div></div>
+    </div>
+
+    <!-- CANVAS VIEW -->
+    <div id="canvasView">
+      <div class="note-banner">video stays in the dock — canvas cursors are just named cursors (subtle ring = speaking)</div>
+      <div class="frame" style="left:120px; top:90px; width:420px; height:300px"><span class="flabel">SPRINT BOARD</span></div>
+      <div class="sticky yellow" style="left:150px; top:130px">Port arrows to canvas-editor</div>
+      <div class="sticky pink"   style="left:330px; top:150px">Parity inventory — run against room SQLite</div>
+      <div class="sticky blue"   style="left:210px; top:260px">Video dock spike ← we are here</div>
+
+      <!-- plain named cursors; speaking shown only as a subtle ring on the label -->
+      <div class="cursor" style="left:320px; top:330px">
+        <svg width="13" height="17"><path d="M1 1 L12 9 L7 10 L9 16 L6 16 L4.5 10.5 L1 13 Z" fill="#e2b06c"/></svg>
+        <span class="clabel speaking-label" style="background:#9c5f3f">alice</span>
+      </div>
+
+      <div class="cursor" style="left:560px; top:180px">
+        <svg width="13" height="17"><path d="M1 1 L12 9 L7 10 L9 16 L6 16 L4.5 10.5 L1 13 Z" fill="#7fa8d9"/></svg>
+        <span class="clabel" style="background:#41618f">bob</span>
+      </div>
+    </div>
+
+    <!-- FLOATING DOCK (content-script chrome: survives every route) -->
+    <div id="dock">
+      <span class="grip">⋮⋮</span>
+      <div class="bubble speaking" id="dockAlice" title="Alice — in ENG-42 · click to follow">
+        <div class="face f-alice">👩🏽</div><div class="mic">🎙</div><div class="name">alice · ENG-42</div>
+      </div>
+      <div class="bubble" id="dockBob" title="Bob — on the canvas · click to follow">
+        <div class="face f-bob">🧔🏻</div><div class="mic">🎙</div><div class="name">bob · canvas</div>
+      </div>
+      <div class="bubble" title="Cara — muted, in Release notes">
+        <div class="face f-cara">👩🏼</div><div class="mic" style="color:#e06c6c">✕</div><div class="name">cara · release</div>
+      </div>
+      <div class="bubble" title="You">
+        <div class="face f-you">🙂</div><div class="mic">🎙</div><div class="name">you</div>
+      </div>
+      <div class="ctrl">
+        <button title="Mute">🎙</button>
+        <button title="Camera off" class="off">📷</button>
+        <button title="Pop out (PiP)">⧉</button>
+      </div>
+      <div class="hint">hover = enlarge · click name = follow · drag anywhere</div>
+      <div class="where" id="dockWhere">team call · 3 in canvas room</div>
+    </div>
+
+  </div></div>
+</div>
+
+<script>
+function show(which){
+  const canvas = which === 'canvas';
+  document.getElementById('canvasView').style.display = canvas ? 'block' : 'none';
+  document.getElementById('threadView').style.display = canvas ? 'none' : 'block';
+  document.getElementById('tabCanvas').classList.toggle('active', canvas);
+  document.getElementById('tabThread').classList.toggle('active', !canvas);
+  // video stays in the dock on every surface; only the context label changes
+  document.getElementById('dockWhere').textContent = canvas ? 'you are in the canvas room' : 'team call · 3 in canvas room';
+}
+</script>
+</body>
+</html>

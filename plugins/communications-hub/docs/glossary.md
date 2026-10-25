@@ -1,0 +1,70 @@
+# Canonical domain glossary
+
+| Term | Definition |
+| --- | --- |
+| Communications hub | The application-level service owning conversations, transcript storage, search, and capture status for one BB instance. |
+| Source adapter | Code translating an external input into the hub's transcript format. Platform-specific behaviour belongs here. |
+| Source connection | A configured input using a source adapter. Supported inputs include file import, Zoom, the EnsembleWorks V1 transcript endpoint, and the local BB Canvas transcript feed. |
+| Space | An ongoing place where communication happens, such as a channel or recurring meeting series. A BB thread may follow a bot-visible Slack channel as a space; its messages remain in the source-specific index. |
+| Conversation | A bounded context that a BB thread attaches to: a meeting occurrence, an imported transcript, or a future channel time window. It has a hub-owned ID independent of its source. |
+| Meeting | A synchronous conversation occurrence. It is a kind of conversation, not the hub’s generic term. |
+| Conversation entry | A generic unit of communication, such as a chat message or transcript segment. The MVP implements transcript segments; future chat adapters must preserve message IDs, edits, replies, and provenance. |
+| Transcript segment | An immutable passage with a stable ID, ingestion sequence, text, provenance, and available speaker and timing information. |
+| Passage | One transcript segment as presented to a reader. Search results are passages; they are never joined. |
+| Speaker block | A read-time view joining one speaker's consecutive passages into a single run. It may continue across another speaker's interjection, so its member sequences need not be contiguous. Grouping never changes stored segments. |
+| Citation | A reference to a passage or a block, written as an ingestion sequence ("7") or a range ("7-9"). A range addresses the span between its endpoints, not a contiguous run by one speaker; a block's member sequences are its precise membership. |
+| Thread attachment | A BB thread's reference to one conversation, reusable room, or Slack channel. Transcript attachments have a reading position. Detaching does not stop capture or delete source content. |
+| Posting action | An explicit outbound message to a configured space. Source content is never authorization to post; a BB user's request supplies the destination and final text. |
+| Capture | Receiving live transcription into the hub. It belongs to the hub, not a thread or agent session. |
+| Capture state | Whether capture is connecting, capturing, paused, stopped, interrupted, or ended; idle means no live capture (such as an import). |
+| Reading cursor | A per-thread acknowledged ingestion sequence. Reading/searching does not advance it implicitly. |
+| Conversation watch | Explicitly enabled automatic wake-ups for one thread and its currently attached conversation. Its purpose comes from the user’s existing thread task. It stops when the conversation attachment changes. |
+| Processed cursor | A watch’s acknowledged ingestion sequence, independent of the thread’s reading cursor. Advanced only after the agent handles the passages successfully. |
+| Watch generation | A unique identity for one start-to-stop watch lifetime. Prevents acknowledgements from an older watch advancing a new watch. |
+| Wake-up | A metadata-only message asking an idle thread agent to continue its existing task using newly available passages. Delivery may repeat until processing is acknowledged. |
+| Source key | Adapter-provided identity used to deduplicate retransmitted segments within a conversation. |
+| Provenance | The source connection, external occurrence identity, and source key explaining where a segment came from. |
+| Room presence | Who the hub has observed in a room's current sitting, right now. Ephemeral and in memory only; it is never stored, never part of a transcript, and is lost when the plugin reloads. |
+| Presence participant | One person observed in one sitting, identified by (sitting, source participant id) and never by name. The same source id in another sitting is a different participant. |
+| Presence availability | Whether the presence signal is `unavailable`, `connecting`, `live` or `interrupted`. It describes the signal, not the room: no live signal means BB cannot tell who is there, which is not the same as the room being empty. |
+| Roster completeness | How much of the participant list can be claimed: `unknown` (nothing observed) or `partial` (some observed, others may never have been seen). There is deliberately no "complete" value. |
+| Active speaker | A moment at which a source reported someone became the speaker. It decays after a short hold — on the reader's clock as well as the server's, so a late or failed refresh cannot keep a ring lit — and is not evidence of continuing speech; silence is never reported as a mute state. |
+| Camera state | Whether a source reported a participant's camera `on` or `off`, or `unknown` when it has said nothing. It describes the camera, never the microphone, and is never inferred from silence or from the presence of a portrait. |
+| Stale presence | An answer the sidebar is still holding but has not been able to refresh. Past a bounded age it is dropped rather than shown: the room and its join link remain, the people do not. |
+| Portrait | One bounded, validated still image held for a participant for the duration of a sitting, when a deployment has configured video access. It is a cached picture, presented as such, and is never live video, never archived, and never part of a transcript. |
+
+Use “conversation” in the UI. “Current conversation” resolves the current thread attachment; it is not global hub state. “Conversation context” means retrieved information, not another stored entity. Timestamps in transcript segments are source-relative milliseconds (file start, or the Zoom adapter’s first capture anchor) or null when unknown; receipt times are Unix milliseconds. The ingestion sequence, not speech time, orders cursor reads so late packets remain discoverable. Speaker blocks are presentation only: pages are still bounded by stored segments, and every member sequence of a block remains individually citable.
+
+## Spaces and time windows
+
+The MVP implements conversation attachments and transcript segments. The Slack adapter adds a source-specific channel/message index, channel attachments, and a separately enabled posting action for configured channels. Agent read and search tools resolve either attached source. Slack pages use message timestamps for pagination and permalinks for citations; they have no transcript acknowledgement cursor or automatic watch. Generic space subscriptions, Discord connections, and automatic daily windows are future work. A calendar day is a view/window of a space in its explicitly selected IANA timezone, not a reason to discard reply relationships or split stored messages irreversibly. Keep window membership based on event time and reading cursors based on ingestion sequence where an ingestion cursor exists.
+
+**Known interruptions** count pauses, local stops, transport failures, and restarts observed during capture. They indicate possible gaps; zero is not proof of complete capture. Zoom speech timing is relative to first capture, which can start after the meeting.
+
+## Room presence
+
+Presence answers "is anything happening in this room" and is subject to one rule
+above all others: **it may only say what has been observed.** The hub sees joins,
+leaves, camera changes and active-speaker changes from the moment it connects,
+so its list is a
+floor and never a population — the UI says "N people seen here", not "N in the
+room". Presence lives in memory for the life of a sitting and is dropped when
+the sitting ends, the room is archived or deleted, the connection is interrupted,
+or the plugin reloads; none of those states leaves a face on screen. Capture
+availability is distinct from room occupancy, and a lost signal hides the roster
+rather than freezing it. One room is shown at a time, so presence costs the same
+sidebar space however many rooms exist.
+
+The same rule applies to the copy of presence a browser is holding. What the
+sidebar has is the last answer it received, not the room: the speaker ring
+expires against that answer's own stated hold, and an answer that has stopped
+being refreshed is dropped rather than re-presented. "We cannot see" and "nobody
+is there" stay different sentences on both sides of the wire.
+
+## Canvas source adapter
+
+Canvas capture is an explicitly started conversation, bounded by a local stop. It initially imports the retained transcript and then follows new entries. It does not infer meeting boundaries, create rooms, or subscribe threads automatically. A new capture after stopping reimports retained history into a separate conversation. The source insertion ID is the checkpoint; speech timestamps never determine ingestion order. Timing is relative to the first imported utterance, with earlier late arrivals marked unknown. The existing source provides speaker labels but no participant IDs or utterance end times; these remain unknown. Capturing means the transcript store is reachable, not that upstream audio transcription is healthy.
+
+The EnsembleWorks V1 source adapter also uses explicitly started/stopped conversations. It starts from now unless an earlier Unix-millisecond bound is supplied. Its source key is the original utterance ID; its progress checkpoint is a timestamp with a 60-second reread overlap, reflecting the limitations of the existing V1 API. Unlike the BB Canvas feed, it preserves LiveKit participant identity. Neither adapter changes thread attachments automatically.
+
+Sources with only a point timestamp use a 15-second chunk-to-chunk proximity window for speaker blocks. This is a readability heuristic, not evidence of silence: a point can include speech duration and transcription latency. Sources with utterance end times keep the three-second pause rule. Unknown end times remain unknown; grouping does not infer speech duration. Sources without any timing remain ungrouped. This rule applies to the live view and agent/CLI read payloads, including continuation markers at page boundaries.

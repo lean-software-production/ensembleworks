@@ -8,7 +8,7 @@
  */
 import http from 'node:http'
 import os from 'node:os'
-import { serveFile } from './file-server-core.ts'
+import { sendServedFile, serveFile } from './file-server-core.ts'
 
 const PORT = Number(process.env.PORT ?? 8791)
 const ROOT = process.env.ENSEMBLEWORKS_FILES_ROOT ?? os.homedir()
@@ -19,9 +19,8 @@ const server = http.createServer(async (req, res) => {
 		return
 	}
 	const url = new URL(req.url ?? '/', 'http://internal')
-	const served = await serveFile(ROOT, url.pathname.replace(/^\/+/, ''))
-	res.writeHead(served.status, served.headers)
-	res.end(req.method === 'HEAD' ? undefined : (served.body ?? undefined))
+	const served = await serveFile(ROOT, url.pathname.replace(/^\/+/, ''), { range: req.headers.range })
+	sendServedFile(res, served, req.method)
 })
 
 server.listen(PORT, '127.0.0.1', () => {

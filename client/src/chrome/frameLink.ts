@@ -9,9 +9,14 @@ export function parseFrameId(raw: string | null | undefined): string | null {
 	return SHAPE_ID_RE.test(raw) ? raw : null
 }
 
-export function buildFrameLink(origin: string, room: string, frameId: string): string {
-	const params = new URLSearchParams({ room, frame: frameId })
+export function buildRoomLink(origin: string, room: string): string {
+	const params = new URLSearchParams({ room })
 	return `${origin}/?${params.toString()}`
+}
+
+export function buildFrameLink(origin: string, room: string, frameId: string): string {
+	const frame = new URLSearchParams({ frame: frameId })
+	return `${buildRoomLink(origin, room)}&${frame.toString()}`
 }
 
 export function readFrameId(search: string): string | null {

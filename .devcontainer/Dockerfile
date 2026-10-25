@@ -84,3 +84,14 @@ RUN set -eux; \
 RUN useradd -m -s /bin/bash -u 1000 dev \
 	&& echo 'dev ALL=(ALL) NOPASSWD:ALL' > /etc/sudoers.d/dev
 USER dev
+
+# OpenCode — terminal AI coding agent, available in every canvas terminal.
+# The official installer is per-user ($HOME/.opencode/bin), so this runs
+# after the USER dev switch; the symlink into /usr/local/bin is what makes
+# it reachable from tmux panes (non-login shells that never source the
+# .bashrc PATH edit — hence --no-modify-path, which would be dead weight).
+ARG OPENCODE_VERSION=1.17.18
+RUN set -eux; \
+	curl -fsSL https://opencode.ai/install | bash -s -- --version "${OPENCODE_VERSION}" --no-modify-path; \
+	sudo ln -s /home/dev/.opencode/bin/opencode /usr/local/bin/opencode; \
+	opencode --version

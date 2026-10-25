@@ -36,4 +36,53 @@ for (const row of db.prepare('SELECT k FROM kv ORDER BY k').iterate() as Iterabl
 }
 assert.deepEqual(seen, ['a', 'b'], 'iterate yields each row')
 
+// close: releases the handle. Pinned to bun:sqlite's actual (probed)
+// behavior — prepare() on a closed db throws RangeError "Cannot use a closed
+// database"; a statement prepared BEFORE the close throws Error "Database
+// has closed" on run() (writes), but its all()/iterate() STILL READ (bun
+// defers the real close while live statements exist). Every write path is
+// refused either way; a fresh handle on the same file works normally.
+const preClosedRead = db.prepare('SELECT COUNT(*) AS c FROM kv')
+const preClosedWrite = db.prepare("INSERT INTO kv (k, v) VALUES ('c', 'gamma')")
+db.close()
+assert.throws(() => db.prepare('SELECT 1'), /Cannot use a closed database/, 'prepare after close is refused')
+assert.throws(() => preClosedWrite.run(), /Database has closed/, 'pre-close WRITE statement is refused after close')
+assert.equal(
+  (preClosedRead.all()[0] as { c: number }).c, 2,
+  'quirk, pinned: a pre-close READ statement still works (bun defers close while statements are live)',
+)
+const db2 = new DatabaseSync(path.join(dir, 'test.sqlite'))
+assert.equal((db2.prepare('SELECT COUNT(*) AS c FROM kv').all()[0] as { c: number }).c, 2, 'reopen sees the rows')
+db2.close()
+
+// A separate connection can briefly hold the journal lock during startup.
+// Synchronize on actual lock acquisition before opening through the adapter;
+// the child releases it independently while the parent's constructor blocks.
+const contendedPath = path.join(dir, 'contended.sqlite')
+const locker = Bun.spawn([process.execPath, '-e', `
+  const { Database } = require('bun:sqlite');
+  const db = new Database(process.argv[1]);
+  db.exec('CREATE TABLE kv (v TEXT)');
+  db.exec('BEGIN EXCLUSIVE');
+  console.log('LOCKED');
+  setTimeout(() => { db.exec('COMMIT'); db.close(); }, 250);
+`, contendedPath], { stdout: 'pipe', stderr: 'inherit' })
+try {
+  const reader = locker.stdout.getReader()
+  const ready = await reader.read()
+  assert.equal(new TextDecoder().decode(ready.value).trim(), 'LOCKED')
+  reader.releaseLock()
+  const contended = new DatabaseSync(contendedPath)
+  try {
+    assert.equal((contended.prepare('PRAGMA journal_mode').all()[0] as { journal_mode: string }).journal_mode, 'wal')
+    contended.exec("INSERT INTO kv VALUES ('opened after lock release')")
+  } finally {
+    contended.close()
+  }
+  assert.equal(await locker.exited, 0)
+} finally {
+  if (locker.exitCode === null) locker.kill(9)
+  await locker.exited
+}
+
 console.log('ok: bun:sqlite DatabaseSync adapter')

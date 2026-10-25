@@ -1,0 +1,292 @@
+# Communications Hub for BB
+
+A persistent conversation library for one BB instance. Import a transcript or capture a Zoom meeting, attach a BB thread, and ask its agent to find and use what was discussed.
+
+## What the MVP includes
+
+- UTF-8 WebVTT, SRT and plain-text import, from a file or pasted text.
+- SQLite-backed conversations and immutable transcript segments, with full-text search and bounded pages.
+- Independent thread attachments and explicit reading cursors.
+- A Communications page, a Conversation thread panel, and agent tools returning grouped passages with citation links.
+- A Zoom RTMS source adapter, enabled separately after app/webhook configuration.
+- A Slack channel index and separately enabled posting action. The index searches public and private channels the bot has joined, never DMs.
+- A 36px room-presence row above the sidebar footer: one selected room, a status dot, up to three faces, and a popover with names, the Zoom link and the current conversation. See [room presence](#room-presence-in-the-sidebar).
+
+Read the [canonical glossary](docs/glossary.md), [MVP spec](docs/superpowers/specs/2026-09-10-communications-hub.md), and [Zoom setup](docs/zoom-setup.md). Repository instructions in [AGENTS.md](AGENTS.md) require future agents to use these terms.
+
+A **conversation** is the context a thread attaches to. A **meeting** is one kind of conversation. A **space** can represent a long-running Slack/Discord channel. The Slack read index stores channels and messages separately from immutable meeting transcripts; channel attachment, daily windows and space subscriptions are future work.
+
+## Install for local development
+
+Requires BB >=0.42 with Plugin SDK 0.4.47, Node.js 22+, and npm.
+
+```sh
+npm ci --include=dev
+npm test
+npm run typecheck
+bb plugin build
+bb plugin install . --yes
+```
+
+The installed path is the working checkout. After code changes, rebuild and reload:
+
+```sh
+bb plugin build
+bb plugin reload communications-hub
+```
+
+If npm's usual cache is not writable, pass `--cache /tmp/bb-communications-npm-cache` to npm commands. The checked-in lockfile pins dependencies. Runtime state is owned by BB storage, outside the checkout, and survives reloads.
+
+## Try the import workflow
+
+1. Open **Communications** in BB navigation.
+2. Import [fixtures/planning.vtt](fixtures/planning.vtt), or paste text with a title.
+3. In a BB thread, open **Conversation**, choose the imported conversation, and attach it.
+4. Ask: “Find what we agreed about authentication and tell me what to change.”
+5. The agent can search and read adjacent passages, then cite a link opening the corresponding passage or run in the transcript.
+
+The panel groups a speaker's consecutive passages the same way the agent tools do, and its citation link addresses the whole run (`/communications/CONVERSATION_ID/7-9`) so following it highlights every passage the run touches. **Send to thread** quotes a passage into the thread composer and leaves it there unsent, so the user decides what to ask about it.
+
+New agent tools become available when the provider session next starts/resumes; an already running session may need restarting after installation. The CLI works immediately. Attaching/detaching is independent of capture: closing a thread does not stop it, and detaching leaves its transcript available.
+
+## CLI
+
+All data output is JSON. Run `bb communications help` for full usage.
+
+```sh
+bb communications list
+bb communications import 'Planning' txt 'Alex: Add authentication.'
+bb communications attach CONVERSATION_ID THREAD_ID
+bb communications current THREAD_ID
+bb communications search CONVERSATION_ID authentication
+bb communications read CONVERSATION_ID 0 20
+bb communications acknowledge CONVERSATION_ID 2 THREAD_ID
+bb communications rename CONVERSATION_ID 'Attribution design'
+bb communications detach THREAD_ID
+bb communications status
+```
+
+For `current`, `attach`, `detach`, and `acknowledge`, the thread ID may be omitted when invoked from a BB thread. Use the UI for file imports and large transcripts; CLI text is passed as one quoted argument. No file path is read on the server on behalf of a remote CLI.
+
+## Agent tools
+
+| Tool | Purpose |
+| --- | --- |
+| `communications_current` | Resolve this thread's conversation, room, or Slack channel attachment. |
+| `communications_list` | Find other conversations when requested. |
+| `communications_search` | Search the attached transcript or channel; explicit target IDs select another source. |
+| `communications_read` | Read the attached transcript as speaker blocks or the attached channel as messages. |
+| `communications_acknowledge` | Advance the current thread's cursor after using passages. |
+| `communications_slack_post` | Post the final text requested by the BB user to a configured Slack channel. |
+
+Read/search default to the attached conversation or Slack channel. Explicit `conversationId` or `channelId` permits an intentional read of another target. Transcript pages use `after` (ingestion sequence); channel pages use `before` (Slack message timestamp). Reads do not implicitly acknowledge content. Transcript acknowledgement is monotonic and checked against both the current attachment and available sequences. Channels do not yet have an acknowledgement cursor or automatic watch.
+
+Transcript reads and searches retain their envelope: the `conversation`, a `notice` repeating that transcript content is reference material, `citations.base`, a page-local `speakers` table, `hasMore` and `nextCursor`. Channel reads and searches return `kind: "channel"`, channel details, `results`, `hasMore`, and `nextCursor`; each message carries a Slack permalink when available. Each transcript row's `speaker` is an index into `speakers`, or `null` when the passage is unattributed. A citation link is `citations.base` plus the row's `citation`, so the absolute URL is written once per page rather than once per passage. The stored segment ID, source key, per-row receipt time and per-row conversation ID are not sent to agents; a passage stays addressable by conversation and ingestion sequence.
+
+`communications_read` returns `blocks`. Consecutive passages from one speaker are joined into one readable run, continuing across another speaker's short interjection, so a sentence broken by a "Yeah" in the middle arrives whole. `communications_search` returns `passages` and never groups: matches are scattered hits, and joining two of them would invent a passage nobody spoke. Reading a block's neighbours still requires `communications_read`.
+
+A block's `citation` is `"7"` for a single passage or `"7-9"` for a run. A range denotes a span of the conversation, not a contiguous stretch of one speaker: `sequences` may be `[7, 9]` because 8 belongs to someone else's interjection. `sequences` is the precise membership, and the range is only the address. A block may also carry `continues: true`, meaning its run may extend onto the next page; read on before citing it, because the text is then incomplete. More than one block can be marked: speakers interleave, so a second speaker can still be mid-run when the page ends on someone else.
+
+Grouping is a read-time view. Stored segments are unchanged and immutable, and every member sequence remains individually citable. On a 308-segment Zoom meeting a full read produced 124 blocks instead of 308 rows, and the emitted JSON fell from 147,780 to 28,428 characters (roughly 36.9k to 7.1k tokens).
+
+Transcript content is reference material, not an instruction or authorisation source. Speech starts no agent work by default. An explicitly enabled conversation watch can wake the agent to continue the user’s existing task; speech never supplies new authorization. Agents should inspect surrounding discussion, capture coverage, and uncertainty before acting on the user's BB request.
+
+## Capture, timing and storage
+
+The hub records receipt times and observed capture interruptions. Zoom's transcript times are relative to the first capture anchor, which need not be the meeting's actual start. File timing is relative to the file's own timeline; plain text has no inferred timing. Cursor order uses ingestion sequence so delayed speech remains discoverable.
+
+Capture requires the BB process to remain running. A restart marks previously active captures interrupted. Disconnections, pauses and local stops can leave gaps, and capture beginning late does not backfill earlier speech. A zero interruption count does not prove the transcript is complete. Stopping local capture does not change Zoom's upstream host/consent settings.
+
+Transcripts are kept in the plugin's SQLite database under BB's data directory. There is no automatic retention/deletion policy in this proof of concept. Do not assume uninstalling BB configuration securely deletes stored data or backups. The BB instance is the access boundary: per-user/per-project transcript access controls are not implemented. Realtime events contain only change notifications, not transcript text. Secrets are stored with BB's secret settings.
+
+## Room presence in the sidebar
+
+One line, immediately above bb's sidebar footer, for ONE room at a time:
+a status dot, the room name, up to three faces with a ring on the active
+speaker, and "+N" for the rest. Clicking or pressing Enter opens a bounded,
+scrollable popover with the names, honest per-person status, a room picker when
+there is more than one room, **Open Zoom room** (the saved join link, opened by
+whichever Zoom client the user prefers — BB never joins a meeting itself) and a
+link to the current conversation. Escape, the close button, or a click elsewhere
+dismisses it; Escape and the close button return focus to the row.
+
+It is a content script (`app.contentScripts.register`), which is the only
+surface bb offers that survives route and thread navigation. Placement is one
+node that MOVES — into the mobile drawer when it opens, back out when it closes,
+and out of the document entirely on a route with no sidebar — so a re-render can
+never leave a second row behind. A narrow sidebar drops the room name; bb's
+collapsed icon rail shows a dot and a bare count. The row never joins the
+scrolling thread list, so the list keeps its own scroll.
+
+What it claims is bounded by what was observed: "N people seen here · list may
+be incomplete", never a headcount. No live stream means "No active stream — BB
+cannot tell who is here", which is not a claim that the room is empty. See
+[Zoom setup §8](docs/zoom-setup.md) for the two experimental settings that make
+participant events and still portraits available at all, and why both are off by
+default.
+
+```sh
+bb communications presence                 # what the row is showing, as JSON
+bb communications presence-select ROOM_ID  # choose the room ("-" clears it)
+```
+
+```sh
+npm run check:browser -- ./screenshots     # measure it in a real Chromium
+```
+
+Portraits use on-demand individual video subscriptions: camera-on requests an
+initial still; speaker events request a refresh at most once every 30 seconds
+per participant. Each request ends after one accepted image or a five-second
+timeout. Zoom sends no video while unsubscribed. This mode still needs a live
+Zoom integration check; actual bandwidth savings have not been measured.
+
+The last captured portrait stays visible while a replacement loads and while the
+participant is quiet. Stills remain bounded in memory and are cleared when the
+participant leaves, presence is lost, or the sitting ends.
+
+## Deliberate limits
+
+- Imports are at most 1 MB UTF-8 and 10,000 segments; malformed timed files fail atomically.
+- Segments contain at most 2,000 characters. Retrieval pages are counted in stored segments: 20 by default, at most 30. A read page therefore returns at most that many segments, presented as fewer blocks.
+- A block stops at 2,000 combined characters or a three-second silence from that speaker, so a long monologue arrives as several blocks. Passages without timing, such as plain-text imports, never join.
+- Keyword search matches all supplied words. Semantic search is not included.
+- Imports create separate conversations. Merging a polished transcript into an existing live conversation is deferred; existing passage IDs are not overwritten.
+- One configured Zoom connection, hosted meetings only, no audio/video storage, OAuth wizard, or remote hosted hub.
+- Presence is ephemeral and observation-only: never persisted, never claimed complete, dropped on interruption, reconnect, room archive/delete, sitting end and plugin reload. In the browser it also ages out: the speaker ring expires on the reader's own clock and a row that has stopped being refreshed drops its roster after twelve seconds rather than showing a stale one.
+- Presence's Zoom event codes and video media parameters follow Zoom's published RTMS reference (locked by `tests/zoom-rtms-contract.test.ts`), but have never been exchanged with a live meeting from this repository — so presence is opt-in, and portraits additionally need video access on your own Zoom app.
+- Zoom protocol tests do not establish successful integration with a real Zoom account. A live test requires app credentials, developer credits, host configuration, and a reachable HTTPS webhook.
+
+## Development
+
+The hub is `src/hub.ts`, canonical data types are `src/domain.ts`, source adapters are under `src/adapters/`, and BB RPC contracts are in `src/contracts.ts`. `server.ts` registers BB interfaces. `app.tsx` registers UI surfaces. Room presence is `src/presence/` — `roster.ts` (what may be claimed), `portraits.ts` (bounded validated stills), `service.ts` (sittings and sessions), `view.ts` (the hub-facing view) and `ui/` (the sidebar row: pure `anchor.ts`/`layout.ts`/`model.ts` decisions, `strip.ts` DOM, `mount.ts` lifecycle). Zoom wire details for presence stay in `src/adapters/zoom-presence.ts`. Use only public SDK declarations under `node_modules/@get-bb/plugin-sdk/bundled-types/`.
+
+```sh
+npm test
+npm run typecheck
+bb plugin types --check
+bb plugin build
+```
+
+## Validation performed
+
+Verified on 2026-09-11 against BB with Plugin SDK 0.4.47 on this machine:
+
+- `npm test` — 85 tests in 8 files pass (hub, import, zoom, zoom-protocol, server, app, grouping, presentation).
+- `npm run typecheck` — clean.
+- `bb plugin build` — server and app bundles emitted.
+- `bb plugin types --check` — pin 0.4.47 matches host 0.4.47.
+- `bb plugin install . --yes` — plugin loads and registers its CLI.
+- CLI smoke test on `fixtures/planning.vtt`: import created 4 segments; `attach`, `current`, `search webhook` (2 matching passages with citations), `read` (full page, `hasMore: false`), `acknowledge 2`, `list` and `detach` all returned expected JSON.
+- Reload persistence: after `bb plugin reload communications-hub`, the conversation and the thread's cursor at sequence 2 survived.
+- Browser check of the Communications page, including renaming a conversation from the transcript view.
+
+Live Zoom capture was verified on 2026-09-11 against a real hosted meeting: a user-managed General app in Development mode, a Zoom Developer Pack trial for RTMS credits, and the webhook published through `tools/zoom-webhook-gateway.mjs` behind a `cloudflared` tunnel. The run produced 308 transcript segments with speaker attribution, no interruptions, and a clean `ended` state, ingested 0.5–2.1 seconds after each utterance finished.
+
+That run also exposed a real defect. The SSRF guard resolved the RTMS host itself and always answered with a single address, but Node calls `lookup` with `all: true` whenever `autoSelectFamily` is on — its default — and then expects the whole array. Every signaling socket failed with `Invalid IP address: undefined` and closed at code 1006 before the handshake. `createPublicOnlyLookup` now answers in the shape the caller asked for, and still drops private and special-use addresses in both paths.
+
+Capture ended mid-meeting when the host's Zoom client crashed, and the conversation read as `ended` with `interruptionCount: 0` despite missing every later utterance — a concrete case of why a zero interruption count does not prove a transcript is complete.
+
+The cause was ours. Zoom's `meeting.rtms_stopped` carries a `stop_reason` that distinguishes a deliberate end from a dropped connection, but the signaling socket reported the stream stopped first, which ended the session and removed the capture before the webhook arrived, so the classification never ran. Finished captures now stay addressable long enough to record the reason. A crash and a clean leave are no longer indistinguishable, though a stop reason Zoom does not qualify still reads as an ordinary stop.
+
+Further live runs on 2026-09-11 confirmed capture does not require the app owner in the meeting, and that a guest joining a hostless join-before-host meeting from a browser is enough to start it. See [Validated behaviour](docs/zoom-setup.md#validated-behaviour-2026-09-11) for the full findings, including what remains untested.
+
+## Provenance
+
+The first build of this plugin was lost when its BB workspace was destroyed. This tree was reconstructed from agent transcripts and re-verified; see the recovery note in [the implementation plan](docs/superpowers/plans/2026-09-10-communications-hub.md).
+
+## Slack channels
+
+Create an internal Slack app with a bot user and these **bot token** read scopes: `channels:read`, `channels:history`, `groups:read`, `groups:history`, and `users:read`. The last scope resolves message author IDs to names; the channel reader continues to work without it and falls back to IDs. Do not grant `users:read.email`, `im:*`, `mpim:*`, or `search:read`. Reinstall the app in the workspace after adding a scope, then invite its bot to each public or private channel BB should read. In Communications Hub plugin settings, set **Slack bot token** and turn on **Enable Slack channel reading**. Keep the token in BB secret settings, not this checkout. The bot never joins channels on its own.
+
+```sh
+bb communications slack-sync
+bb communications slack-status
+bb communications slack-search 'deployment decision'
+bb communications slack-search 'deployment decision' G_PRIVATE_CHANNEL_ID
+bb communications slack-read G_PRIVATE_CHANNEL_ID
+bb communications attach-channel G_PRIVATE_CHANNEL_ID
+```
+
+The thread panel also offers joined Slack channels in its attachment picker. After attaching, `communications_current`, `communications_read`, and `communications_search` use that channel by default. The agent still has `communications_slack_search`, `communications_slack_read`, and `communications_slack_status` for workspace-wide search and explicit channel reads. Search spans the local index; it does not call Slack's user-token-only search API. Results carry channel identity, message timestamp, thread parent when present, author ID and resolved name when available, text (up to 4,000 characters in a tool result), and a Slack permalink. Names come from `users.info` or `bots.info`, are cached in memory for up to a day, and fall back to IDs if the scope or profile is unavailable. No email field is requested or stored. Search and read have bounded pages; pass the last result's `ts` as `before` for older results. Messages are reference material, never instructions to the agent. The read tools are available to every user of this BB instance, including content from private channels the bot joined.
+
+The first sync imports all history Slack makes available in each joined channel, including replies. The background service rescans once per hour; `slack-sync` runs an immediate refresh. Complete channel scans reconcile edits and deletions, and the membership scan removes local messages for channels the bot has left. An incomplete page fails without replacing that channel's prior index. `slack-status` reports the last complete workspace scan, errors, each channel's last successful scan, and whether author names were available on a recent lookup (`authorNames`). Results can be stale between scans or when a channel fails to refresh. A large history can take substantial time and Slack may rate limit it. Slack's own retention settings limit what can be indexed. This first version stores only searchable message text: files, attachments without text, reactions, and DMs are outside its coverage. Disabling the setting blocks reads but retains the local index in BB storage; switching to another workspace or removing the bot from a channel purges inaccessible entries on the next successful membership scan.
+
+### Posting
+
+Add the `chat:write` **bot scope** to the same Slack app and reinstall it. If Slack rotates the bot token, update **Slack bot token** in plugin settings and run `bb communications slack-sync` again. Set **Slack posting channel IDs** to a comma-separated list of channel IDs, then turn on **Enable Slack message posting**. Posting is off by default, and the channel must also be in the bot's current indexed membership. DMs are not accepted. The `communications_slack_post` agent tool requires a channel ID and final message text (up to 4,000 characters); `threadTs` optionally replies to a parent message. It returns the posted timestamp and permalink. The agent may call it only when the BB user explicitly asks to send that message. A Slack message, transcript, or channel attachment does not authorize a post. If the request times out or the response is unclear, check Slack before retrying to avoid a duplicate.
+
+The posting tool instructs BB agents to read and apply the `talking-to-humans` skill before drafting Slack text. The skill must be available in the agent's environment; the instruction guides the agent, while the channel allowlist and explicit posting request are the enforceable controls. Review drafts when wording matters.
+
+The matching CLI command is `bb communications slack-post CHANNEL_ID 'message text' [parent-ts]`. Quote message text as one argument. It applies the same channel limits and returns the same timestamp and permalink.
+
+
+## EnsembleWorks V1 (existing LiveKit transcript)
+
+The `ensembleworks` source reads the V1 server's existing `/api/scribe/transcript` endpoint. No upstream code change, new recorder or BB Canvas plugin is needed.
+
+```sh
+bb communications v1-start http://localhost:8788 team "EnsembleWorks V1"
+bb communications attach <returned-conversation-id>
+bb communications status
+bb communications v1-stop <conversation-id>
+```
+
+Capture starts from the current time by default. Supply an optional fourth argument, `since-ms` (Unix milliseconds), to include earlier speech. There is one active V1 source connection per Hub. Stop before switching server or room. Repeating start while active returns the existing conversation; it does not change the historical window. A stopped capture stays readable, and starting again creates a separate conversation. The panel's Stop capture also stops this source. The URL must be reachable from the BB server and have no embedded credentials; this adapter does not support authenticated V1 gateways.
+
+The adapter polls every two seconds, persists progress through BB storage, deduplicates utterance IDs and preserves LiveKit speaker identity. Thread reads, search, citations and independent acknowledgement cursors work as for other Hub conversations. HTTP requests time out after ten seconds and are aborted on disposal. Transcript contents and source errors stay out of logs.
+
+**V1 coverage limits:** the existing endpoint returns a timestamp-filtered tail rather than a durable sequence feed. Capture rereads a 60-second overlap to catch tied timestamps and moderately late speech. Arrivals older than that overlap are not discoverable. A response reaching 10,000 entries or 16 MiB interrupts capture without advancing its checkpoint, because it may omit earlier speech. Resolve the source/backlog before resuming, or explicitly stop and start a later window. Source history deletion/replacement cannot reliably be detected by this API. Capturing means the endpoint is reachable, not that upstream audio is healthy. Receipt freshness and capture detail remain visible.
+
+## BB Canvas transcript feed
+
+The Canvas adapter follows the transcript already received by the installed `canvas` plugin from the existing LiveKit scribe. Build and reload both plugins from this checkout before starting it; the Canvas plugin must expose `canvas_transcript_feed`.
+
+```sh
+bb communications canvas-start "EnsembleWorks team conversation"
+bb communications attach <returned-conversation-id>
+bb communications status
+```
+
+The initial capture imports **all retained Canvas transcript entries**, then checks for new entries every two seconds. An explicit start/stop defines the conversation; there is no automatic daily partition or thread subscription. Each thread can attach through the Communications thread panel or CLI and use the same read, search, citation and acknowledgement tools as other sources.
+
+`bb communications canvas-stop <conversation-id>` (or Stop capture in the panel) preserves the transcript and stops ingestion. Plugin reload resumes enabled capture automatically. Starting after a stop creates another conversation and imports retained history again.
+
+The feed uses stable source storage identity and insertion IDs, not speech timestamps, so tied timestamps, late speech, paginated backlogs and retries do not lose or duplicate passages within a capture. Hub SQLite stores passages; BB KV stores progress, saved only after append. A source database replacement interrupts the capture rather than mixing sources; stop and start a new capture to adopt it. Long utterances split into passages of at most 2,000 characters. Source-relative timing starts at the first imported utterance; earlier late arrivals have unknown timing. Speaker identity and end times are unknown because the Canvas store only has display labels and point timestamps.
+
+“Capturing” means the store is reachable. It does not assert that upstream LiveKit/Whisper is healthy; consult receipt freshness. No transcript text or upstream errors are logged. This adapter adds no inbound webhook, credentials, audio capture, or automatic agent dispatch.
+
+## Following a live transcript
+
+Opening an active conversation starts at its latest 20 passages and follows incoming speech automatically in both the Communications page and thread panel. New pages append in ingestion order, including after a reconnect; the live view retains the latest 200 passages. Scroll upward or choose **Pause live updates** to hold your place. **Follow live** jumps to the latest speech and resumes following. Searching and opening a citation pause following so incoming speech cannot replace what you are reading. Historical and search results retain manual pagination. These display controls never acknowledge a thread's reading cursor or stop capture.
+
+
+## Watch a conversation
+
+Give a thread its ongoing task, attach a conversation, then choose **Watch conversation** in its Communications thread panel. For example: “Maintain a local HTML mind map of this conversation. Update the same file as ideas develop, preserve stable nodes, and link claims to passages.” The watcher imposes no artifact format or task: another thread can use the same mechanism for questions, notes, or any other user-authorized work.
+
+Watching starts from passage zero, including existing history. A repeated start preserves progress. **Stop watching** prevents future automatic dispatch without stopping capture; starting again creates a new watch generation from zero. Detaching, changing the attached conversation (including a room’s next sitting), archiving or deleting the thread stops the watch. A room without a conversation cannot yet be watched. Stopping cannot undo a wake already dispatched.
+
+```sh
+bb communications watch-start THREAD_ID
+bb communications watch-status THREAD_ID
+bb communications watch-stop THREAD_ID
+# After the agent successfully processes passages, using the generation from status:
+bb communications watch-acknowledge CONVERSATION_ID GENERATION 20 THREAD_ID
+```
+
+Thread IDs may be omitted inside the target BB thread. Agents use `communications_watch_status` and `communications_watch_acknowledge` for the same status/progress protocol. There is no automatic activation tool; start through the UI or CLI only when the user asks.
+
+New hub changes are batched for 15 seconds. Busy threads retain pending work; only idle threads are selected for dispatch. Startup and 60-second polling recover missed notifications. Attempts are separated by at least 60 seconds, including failed or unacknowledged delivery. Error-state threads wait for user recovery. The BB process and plugin must remain running.
+
+The agent reads after the **processed cursor**, paginates through bounded transcript results, performs its existing task, then acknowledges the last passage successfully handled with the current **watch generation** and conversation ID. Reading, ordinary `communications_acknowledge`, a delivered wake, and an idle event never advance this cursor. A stale generation cannot acknowledge a restarted watch.
+
+Delivery is **at least once**, not exactly once: BB’s send API has no idempotency key, so a crash or an unacknowledged turn can cause replay. Tasks should update artifacts idempotently. A thread becoming busy between the status check and send may receive a queued message. Wake messages contain only watch metadata and processing guidance, never transcript text or spoken commands.
+
+### Live mind-map smoke procedure
+
+1. In a fresh thread, give the HTML mind-map task above and attach a live conversation. Enable watching.
+2. Speak a few ideas; check that the same HTML file evolves and the processed position advances. Add more speech during a turn and confirm it is picked up afterward.
+3. Stop watching, add more speech, and confirm that no further automatic wake is sent. Restart explicitly to replay history.
+4. Missed-notification and restart recovery are exercised deterministically in dispatcher tests. A live recovery check can reload the plugin while the watch has unprocessed passages, then observe the startup sweep subject to the attempt cooldown.
+
+Building and testing do not themselves enable watches or start tasks in existing threads. Live provider/artifact behavior must be verified separately from the fake-host tests.

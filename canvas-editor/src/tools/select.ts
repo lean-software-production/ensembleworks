@@ -1,0 +1,958 @@
+// The select tool: idle -> pointing(target?) -> dragging(translate) |
+// marquee, back to idle on pointerup. Built against a shared ToolContext
+// (tool-context.ts) rather than its own hit-test/spatial-index machinery —
+// see that module's doc comment for the once-per-commit refresh cadence this
+// tool relies on for hitTestTopmost/queryMarquee.
+//
+// FSM PURITY: SelectState carries everything the FSM needs across events
+// (downScreen/targetId/shiftDown/lastClick/grabWorld/startBounds/applied/
+// movingIds/excludedIds/snapResult) — there is no mutable field on the
+// closure itself. The only closure-captured objects are the ToolContext
+// (read-only queries:
+// hitTestTopmost/queryMarquee/snapshot/index) and the Editor (read via
+// editor.get() for the CURRENT selection/camera, exactly the "read-only
+// queries" input.ts's Tool<S> doc comment describes) — never written by this
+// file. Given the same (state, event) and the same doc/index snapshot behind
+// the ToolContext, onEvent always returns the same (state', intents), so a
+// recorded script replays deterministically.
+//
+// DOUBLE-CLICK-TO-EDIT (Unit 13): a completed click (pointerup resolving a
+// sub-threshold Pointing gesture, i.e. NOT a drag/marquee) is remembered on
+// the resulting Idle state as `lastClick`. The NEXT pointerdown, while still
+// idle, checks whether it lands on the SAME target, within
+// input.ts's DOUBLE_CLICK_MS/DOUBLE_CLICK_RADIUS_PX of that remembered click
+// (both derived from event.t/x/y deltas ONLY — never a wall clock, per the
+// package's determinism rule) — see `isDoubleClick`. If so, the Pointing
+// state carries `doubleClick: true`, and when THAT click also resolves
+// (pointerup, no drag), the select tool emits `BeginEdit(target)` in place of
+// (well, alongside) the ordinary `SetSelection` IFF the target's shape kind
+// is TEXT-CAPABLE (canvas-model's `isTextCapableKind`: note/text/geo — never
+// an embed kind, never a frame). A drag OR a marquee gesture always resets
+// `lastClick` to null on return to idle (neither is a click), and clicking
+// empty canvas does too (no target to remember).
+//
+// SNAP-DURING-DRAG (Unit 13): `computeSnappedDelta` is the ONE seam both the
+// Pointing->Dragging transition move AND every subsequent onDragging
+// pointermove funnel through — see that function's doc comment. `movingIds`
+// (the ids actually being translated) and `excludedIds` (movingIds ∪ every
+// descendant — canvas-model's `computeExcludedIds`) are both computed
+// EXACTLY ONCE, at the Pointing->Dragging transition (the "drag start" the
+// task spec means), and carried unchanged on the Dragging state for the rest
+// of the gesture — never recomputed per pointermove (see snapping.ts's own
+// documented cost rationale for `opts.excludedIds`: ~2.4ms derived vs
+// ~0.02ms precomputed at 1k shapes/999 descendants).
+//
+// ABSOLUTE-ANCHOR MODEL (Pilot 2 — replaces an earlier incremental model
+// that drifted): every pointermove recomputes the drag's TOTAL intended
+// translation from the GRAB point (`cursorWorld - grabWorld`, both
+// world-space), never a per-move increment off the previous pointer
+// position. `computeSnappedDelta` snaps that absolute candidate —
+// `startBounds` (the moving selection's world bounds, frozen at the SAME
+// Pointing->Dragging transition as movingIds/excludedIds above) shifted by
+// the raw TOTAL delta — against the frozen snap snapshot/index, and returns
+// the TOTAL (raw + snap) delta from the grab point. The Dragging state's
+// `applied` field remembers the total delta actually committed via
+// TranslateShapes so far; each move's INTENT is the STEP between the
+// newly-computed total and `applied` (`{dx: totalDx - applied.dx, dy:
+// totalDy - applied.dy}`), so the shape's on-doc position always equals
+// `startBounds + (raw + snap)` for the CURRENT cursor position — never the
+// sum of every past move's OWN snap adjustment. That distinction is the fix:
+// the prior (incremental) model recomputed each move's snap against the
+// shape's ACTUAL current position, which already carried every earlier
+// move's snap nudge, so repeatedly crossing a snap band accumulated a drift
+// between the shape and the cursor that grew without bound (reproduced by
+// interaction-contracts' `drag-cursor-lock` fuzz contract, which is what
+// caught it). Under this model a snap adjustment is never carried forward as
+// a positional accumulator — it is recomputed FRESH against the
+// grab-anchored raw delta on every move, so the shape can never wander more
+// than one snap radius from the cursor at any point in the gesture.
+//
+// REBUILD-CADENCE DISCIPLINE (load-bearing — reviewer-caught before this
+// comment existed): tool-context.ts's LAZY REBUILD contract, pinned by
+// tool-context.test.ts's "a 50-move drag triggers ZERO rebuilds" assertion,
+// means `ctx.snapshot()`/`ctx.index()` must be read AT MOST ONCE per drag
+// gesture, not once per pointermove — every commit this tool's OWN drag
+// makes marks the context dirty for the NEXT read, so calling either on
+// every move would force one full spatial-index rebuild per mouse event
+// (exactly the O(shapes)-per-pointermove cost the cadence rule forbids).
+// So: `ctx.snapshot()`/`ctx.index()` are read EXACTLY ONCE, at the
+// Pointing->Dragging transition (before any TranslateShapes of this gesture
+// has committed anything), and the resulting (frozen) doc/index pair is
+// carried on Dragging state for snapCandidates' TARGET lookups the whole
+// gesture through. Correct with respect to this tool's OWN activity: a
+// local drag changes nothing about any OTHER shape's position, size, or
+// the document's overall medianSize. Staleness with respect to REMOTE
+// activity is exactly snapping.ts's own documented contract, quoted rather
+// than paraphrased ("targets are where they were at the last rebuild; the
+// moving selection's own correctness comes from the exclusion set, not
+// from the index") — snapCandidates reads the index's AABB-family data
+// (queryViewport + boundsById), NOT the quad-exact query path, so
+// spatial-index.ts's "omissions, never false hits" guarantee does NOT
+// apply here: a remote peer moving a target mid-drag CAN produce a snap
+// guide (and a snapped delta) at that target's OLD position until the
+// gesture ends and the next drag reads a fresh pair. Accepted: a
+// one-gesture-stale guide against a concurrently-moving remote target is
+// visually self-correcting and far cheaper than an O(shapes) rebuild per
+// pointermove. The MOVING shape(s)' own candidate position is likewise
+// frozen-relative rather than live-read (see the ABSOLUTE-ANCHOR MODEL note
+// above): `startBounds` — captured ONCE at the same Pointing->Dragging
+// transition, from the very same frozen snapshot — shifted by the CURRENT
+// raw delta from the grab point is the candidate bounds `computeSnappedDelta`
+// snaps. There is no read of the moving shape's on-doc position at all after
+// drag start; the prior model's `liveBoundsAdapter`/`candidateBoundsAfterDelta`
+// live-read shim is gone with it.
+import {
+  BBTHREAD_DIVIDER_MARGIN,
+  BBTHREAD_PANE_MAX_FRACTION,
+  BBTHREAD_PANE_MIN_FRACTION,
+  COARSE_BBTHREAD_DIVIDER_MARGIN,
+  computeExcludedIds,
+  isFrameLike,
+  opensBodyEdit,
+  isPointInFrameHeaderBand,
+  isPointOnBbthreadDivider,
+  isTextCapableKind,
+  localBounds,
+  pageIdOf,
+  snapCandidates,
+  toLocalPoint,
+  worldBounds,
+  type Bounds,
+  type CanvasDocument,
+  type SnapResult,
+  type SpatialIndex,
+} from '@ensembleworks/canvas-model'
+import { frameCandidates, frameFor } from './frame-membership.js'
+import type { Intent } from '../intents.js'
+import { crossedThreshold, isDoubleClick, screenToWorld, type InputEvent, type PointerInputEvent, type Tool } from '../input.js'
+import type { ToolContext } from './tool-context.js'
+
+/**
+ * How wide the bbthread pane's divider grab band is, in WORLD units, for the
+ * pointer that produced THIS event (mobile-touch task, scope 3).
+ *
+ * TWO CORRECTIONS TO ONE FLAT CONSTANT, and they are independent:
+ *  - ZOOM. The stored margin is world units, so at 25% zoom canvas-model's 6
+ *    is a 1.5-SCREEN-pixel target and at 400% it is a 24px one. Dividing by
+ *    `zoom` fixes the band in screen space, which is where the user's hand
+ *    actually is. (This is the same reasoning canvas-react's overlay gives for
+ *    drawing handles in screen space: "1px is 1px at any zoom".)
+ *  - DEVICE. A fingertip needs ~44 screen px of target (COARSE_BBTHREAD_
+ *    DIVIDER_MARGIN's own doc comment cites the guidance); a mouse does not,
+ *    and giving it one would eat the click area either side.
+ *
+ * Read off the EVENT's own pointerType, not a device-level `(pointer: coarse)`
+ * media query: a touchscreen laptop and a tablet with a mouse both report a
+ * device answer that is wrong for half the events they deliver. An event with
+ * no pointerType (a hand-built script, a synthetic event) is treated as fine —
+ * the pre-mobile behaviour, so nothing that existed before this change moves.
+ *
+ * A non-finite or non-positive zoom (never produced by camera.ts's clamp, but
+ * this function is exported and cheap to make total) falls back to the raw
+ * screen margin rather than returning NaN, which would make the band match
+ * nothing at all.
+ */
+export function bbthreadDividerMargin(zoom: number, pointerType?: PointerInputEvent['pointerType']): number {
+  const screenPx = pointerType === 'touch' ? COARSE_BBTHREAD_DIVIDER_MARGIN : BBTHREAD_DIVIDER_MARGIN
+  return Number.isFinite(zoom) && zoom > 0 ? screenPx / zoom : screenPx
+}
+
+interface Idle {
+  readonly mode: 'idle'
+  /** The most recently COMPLETED click (a Pointing gesture that resolved at
+   * pointerup without crossing the drag threshold) — screen point + target +
+   * `event.t`, or null if the previous idle-exit wasn't a click at all (a
+   * drag, a marquee) or this is the tool's very first gesture. Consulted by
+   * the NEXT pointerdown to decide double-click-ness (see the module
+   * header). Only ever set when the click landed on an actual target — an
+   * empty-canvas click has nothing to double-click ONTO, so it resets this
+   * to null rather than remembering "the user clicked empty space twice". */
+  readonly lastClick: { readonly targetId: string; readonly x: number; readonly y: number; readonly t: number } | null
+}
+interface Pointing {
+  readonly mode: 'pointing'
+  /** SCREEN point of the pointerdown that started this gesture — threshold
+   * comparisons are screen-space (input.ts's crossedThreshold), so this
+   * is kept in screen space, not world space. */
+  readonly downScreen: { readonly x: number; readonly y: number }
+  /** hitTestTopmost's result at pointerdown, or null on a miss. Null steers
+   * a drag toward marquee; non-null steers it toward translate. */
+  readonly targetId: string | null
+  /** shift state AT POINTERDOWN (matches tldraw's own PointingShape.onEnter,
+   * which reads info.shiftKey off the pointerdown event that triggered the
+   * transition — node_modules/tldraw/src/lib/tools/SelectTool/childStates/
+   * PointingShape.ts) — decides add-vs-toggle at click-select time. */
+  readonly shiftDown: boolean
+  /** True iff THIS pointerdown was recognized, at idle-exit time, as the
+   * second half of a double-click on the same target as the previous
+   * completed click (see the module header). Decided once, at the
+   * idle->pointing transition, off `Idle.lastClick` — never re-derived
+   * later, so a click that STARTS as a double-click but then turns into a
+   * drag never accidentally becomes a double-click-driven edit (the
+   * pointerup branch below only ever inspects this flag from the Pointing
+   * state that is still active AT pointerup, i.e. one that never crossed the
+   * drag threshold). */
+  readonly doubleClick: boolean
+}
+interface Dragging {
+  readonly mode: 'dragging'
+  readonly targetId: string
+  /** WORLD point under the cursor at the pointerdown that started this drag
+   * (`screenToWorld(camera, downScreen)`) — the fixed anchor every
+   * subsequent move's translation is computed relative to (see the module
+   * header's ABSOLUTE-ANCHOR MODEL section). Never the drag's SCREEN point:
+   * a mid-drag camera change re-derives the current cursor's world point
+   * under the CURRENT camera, so the grabbed world point stays under the
+   * cursor. */
+  readonly grabWorld: { readonly x: number; readonly y: number }
+  /** The moving selection's UNION world bounds, captured ONCE at the
+   * Pointing->Dragging transition from the same frozen snapshot as
+   * `snapshot` below — the fixed base every move's candidate bounds
+   * (`startBounds` shifted by the raw total delta) is computed against. */
+  readonly startBounds: Bounds
+  /** The TOTAL (raw + snap) delta from `grabWorld` actually committed via
+   * TranslateShapes so far — compared against each move's newly-computed
+   * total to derive that move's STEP intent (see the module header's
+   * ABSOLUTE-ANCHOR MODEL section). This is what makes each move's snap
+   * adjustment ephemeral rather than a positional accumulator. */
+  readonly applied: { readonly dx: number; readonly dy: number }
+  /** The ids actually being translated — FIXED at the Pointing->Dragging
+   * transition (see the module header's SNAP-DURING-DRAG section), never
+   * recomputed off a possibly-drifted `editor.get().selection` mid-gesture. */
+  readonly movingIds: readonly string[]
+  /** `movingIds` ∪ every descendant ∪ every shape not on the current page —
+   * computed ONCE via `snapExcludedIds` (canvas-model's `computeExcludedIds`
+   * plus the page rule) at the SAME transition, reused verbatim by every
+   * subsequent pointermove's `snapCandidates` call (see the module header). */
+  readonly excludedIds: ReadonlySet<string>
+  /** The doc/index pair `ctx.snapshot()`/`ctx.index()` returned at the
+   * Pointing->Dragging transition — read ONCE and frozen for the rest of the
+   * gesture (see the module header's REBUILD-CADENCE DISCIPLINE section).
+   * Used for snapCandidates' target-shape lookups AND (once, via
+   * `startBounds` above) the moving selection's own start position — never
+   * re-read live mid-drag. */
+  readonly snapshot: CanvasDocument
+  readonly snapIndex: SpatialIndex
+  /** The most recent snapCandidates result (or null before the first move
+   * has computed one) — this is what canvas-react's Overlay ultimately
+   * renders as its `snapResult` prop (via the client's tool-loop wiring,
+   * Unit 13). Reset to null only by leaving 'dragging' (a fresh drag always
+   * starts from a clean slate). */
+  readonly snapResult: SnapResult | null
+}
+interface Marquee {
+  readonly mode: 'marquee'
+  /** SCREEN point of the pointerdown that started the gesture — the final
+   * world rect is computed at pointerup from THIS point and the up event's
+   * own (x, y), not accumulated incrementally, so intervening pointermoves
+   * need no tracked state at all. */
+  readonly downScreen: { readonly x: number; readonly y: number }
+}
+
+/** Resizable-pane task (docs/plans/2026-09-15-bb-thread-frame.md's
+ * "Resizable pane" section) — entered from Idle instead of Pointing when a
+ * pointerdown lands on a bbthread's divider band (canvas-model's
+ * `isPointOnBbthreadDivider`), taking precedence over BOTH the ordinary
+ * pane-is-solid translate path (Pointing->Dragging, which the divider band
+ * would otherwise also qualify for — it sits inside the solid pane) and the
+ * pane double-click-to-edit gate (onPointing's `opensBody`), which
+ * never even gets a look-in because this mode is entered straight from
+ * Idle's pointerdown, before a Pointing state (and hence a double-click
+ * check) is ever created. Every pointermove commits a `paneFraction`
+ * UpdateProps directly (no threshold gate, unlike Pointing->Dragging — a
+ * resize starts moving on the very first move, exactly like Dragging's own
+ * per-move commits); pointerup returns to Idle with no intents. Nothing to
+ * revert on cancel (tool-loop.ts's `cancelActiveTool`): each move's
+ * UpdateProps is already committed, the exact same posture Dragging's own
+ * translate takes (see that function's cancelActiveTool 'select' branch,
+ * which reverts only the transform composite's leg, never a plain
+ * Dragging/Marquee/ResizingPane gesture of select's OWN FSM). */
+interface ResizingPane {
+  readonly mode: 'resizingPane'
+  /** The bbthread shape being resized. */
+  readonly id: string
+  /** The shape's local width (`localBounds(shape).maxX`), frozen at the
+   * Idle->ResizingPane transition — the divisor `(w - localX) / w` needs to
+   * stay fixed across the whole gesture, exactly like Dragging's own frozen
+   * `startBounds`; a resize never changes the shape's own w/h, so this never
+   * goes stale mid-gesture. */
+  readonly w: number
+  /** The doc/index-free CanvasDocument snapshot read ONCE at the
+   * Idle->ResizingPane transition (see the module header's REBUILD-CADENCE
+   * DISCIPLINE section) — reused by every subsequent pointermove's
+   * `toLocalPoint` call for the shape's world->local projection. Safe to
+   * freeze: this gesture only ever writes `paneFraction`, never the shape's
+   * x/y/rotation/parent chain, so the frozen transform this snapshot yields
+   * never goes stale mid-gesture the way a moving shape's OWN position
+   * would. */
+  readonly snapshot: CanvasDocument
+}
+
+export type SelectState = Idle | Pointing | Dragging | Marquee | ResizingPane
+
+const IDLE: Idle = { mode: 'idle', lastClick: null }
+
+// ============================================================================
+// Arrow-key nudge (Task keyboard/K1) — pinned to e2e/goldens/feel.json's
+// captured tldraw numbers (nudgePx: 1, shiftNudgePx: 10), NOT re-derived
+// from tldraw source: MAJOR_NUDGE_FACTOR/MINOR_NUDGE_FACTOR live in
+// tldraw's Idle.ts and are applied against a *grid-aware* base step there,
+// whereas the golden numbers are what the capture rig actually observed at
+// z=1 on an ungridded canvas — the exact case this tool cares about
+// matching. Grid-aware nudging is a documented, deferred upgrade (no grid
+// concept exists in v2 yet).
+// ============================================================================
+const NUDGE_PX = 1
+const SHIFT_NUDGE_PX = 10
+
+/** ArrowUp/Down/Left/Right -> a {dx, dy} unit vector, or null for every other
+ * key. World-space convention (input.ts's screen==world at z=1, +y is
+ * DOWN — same convention TranslateShapes/screenToWorld already use
+ * throughout this file), so ArrowDown/ArrowRight are POSITIVE. */
+function nudgeDirection(key: string): { dx: number; dy: number } | null {
+  switch (key) {
+    case 'ArrowLeft': return { dx: -1, dy: 0 }
+    case 'ArrowRight': return { dx: 1, dy: 0 }
+    case 'ArrowUp': return { dx: 0, dy: -1 }
+    case 'ArrowDown': return { dx: 0, dy: 1 }
+    default: return null
+  }
+}
+
+/** SHIFT-CONSTRAINED DRAG (Task keyboard/K2) — tldraw parity (Translating.ts's
+ * `flatten`): given a RAW (pre-snap) delta from the drag's grab point, zero
+ * whichever axis has the SMALLER magnitude, keeping the dominant axis's full
+ * value. A no-op when `shift` is false. Shared by the Pointing->Dragging
+ * transition's own first move (onPointing, below) and every subsequent
+ * onDragging pointermove, so a drag that STARTS with Shift already held is
+ * constrained from its very first committed step, not just from the second
+ * move onward.
+ *
+ * Also reports WHICH axis it locked (`lockedAxis`), so computeSnappedDelta
+ * can re-zero that same axis AFTER snapping (fix for the validator-caught
+ * snap leak, Task keyboard fix-round): snapCandidates finds the best guide
+ * on X and Y INDEPENDENTLY, so a target sitting close to the suppressed
+ * axis's (already-zeroed) position can still report a non-zero delta on
+ * that axis — without re-zeroing after the fact, that snap adjustment
+ * reintroduces the exact movement Shift was just told to suppress. tldraw
+ * avoids this the same way: Translating.ts's snapTranslateShapes takes a
+ * `lockedAxis` and re-flattens the snapped delta by it (see this function's
+ * caller). `null` when shift is false (nothing locked) OR when dx/dy tie
+ * exactly (an arbitrary pick would be no more "correct" than leaving both
+ * live — ties are astronomically rare pointer input anyway). */
+function flattenForShift(
+  dx: number, dy: number, shift: boolean,
+): { dx: number; dy: number; lockedAxis: 'x' | 'y' | null } {
+  if (!shift) return { dx, dy, lockedAxis: null }
+  if (Math.abs(dx) < Math.abs(dy)) return { dx: 0, dy, lockedAxis: 'x' }
+  if (Math.abs(dy) < Math.abs(dx)) return { dx, dy: 0, lockedAxis: 'y' }
+  return { dx, dy, lockedAxis: null }
+}
+
+// ============================================================================
+// Snap-during-drag helper (shared by the Pointing->Dragging transition move
+// AND every subsequent onDragging pointermove — see the module header).
+// ============================================================================
+
+/** The union of `ids`' worldBounds under `doc` — used ONCE, at the
+ * Pointing->Dragging transition, to capture the moving selection's
+ * `startBounds` from the frozen snapshot (see the module header's
+ * ABSOLUTE-ANCHOR MODEL section) — never re-read live mid-drag. Reimplemented
+ * here rather than imported: canvas-react's combinedWorldBounds
+ * (overlay/Selection.tsx) computes the exact same union, but canvas-editor
+ * may never import canvas-react (boundary.test.ts forbids a react dependency
+ * at all) — this is the same handful of lines, kept package-local. Returns
+ * null iff every id is vanished (mirrors combinedWorldBounds' own
+ * null-on-empty contract). */
+function unionWorldBounds(doc: CanvasDocument, ids: readonly string[]): Bounds | null {
+  let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity, any = false
+  for (const id of ids) {
+    const shape = doc.byId.get(id)
+    if (!shape) continue
+    const b = worldBounds(doc, shape)
+    minX = Math.min(minX, b.minX); minY = Math.min(minY, b.minY)
+    maxX = Math.max(maxX, b.maxX); maxY = Math.max(maxY, b.maxY)
+    any = true
+  }
+  return any ? { minX, minY, maxX, maxY } : null
+}
+
+/** Given the RAW (pre-snap) TOTAL delta from the drag's grab point (NOT a
+ * per-move increment — see the module header's ABSOLUTE-ANCHOR MODEL
+ * section), returns the TOTAL delta (raw + snap adjustment) to actually
+ * apply via TranslateShapes, plus the SnapResult to carry on the Dragging
+ * state for the renderer. `startBounds` is the moving selection's world
+ * bounds captured ONCE at drag start (unionWorldBounds, above) — this
+ * function shifts it by `rawDx/rawDy` and snaps THAT candidate; it never
+ * reads the moving shape's own on-doc position, so a snap adjustment from an
+ * earlier move can never leak into a later move's candidate (the fix for the
+ * cursor-lock drift the `drag-cursor-lock` contract catches). `frozenSnap`/
+ * `frozenIndex` MUST be the pair read ONCE at the Pointing->Dragging
+ * transition (see the module header's REBUILD-CADENCE DISCIPLINE section) —
+ * used ONLY for target lookups (medianSize + candidate bounds). `excluded`
+ * MUST likewise be the drag-start-computed set, passed straight through to
+ * snapCandidates' `opts.excludedIds` escape hatch so this never re-derives it
+ * per move.
+ *
+ * `lockedAxis` (Task keyboard fix-round — validator-caught snap leak): when
+ * flattenForShift suppressed an axis, that SAME axis is re-zeroed here AFTER
+ * snapCandidates runs, not just before it. snapCandidates finds the best
+ * guide on X and Y INDEPENDENTLY of one another, so a target sitting close
+ * to the suppressed axis's (already-zeroed) candidate position can still
+ * report a non-zero `snapResult.dx`/`dy` on THAT axis — left unzeroed, a
+ * comment on this very function used to (wrongly) claim that could "never"
+ * happen; it does. Only the DELTA is re-zeroed, never the reported
+ * `snapResult`/guide — the renderer still draws the guide line that WOULD
+ * have applied were the axis not locked, exactly matching tldraw's own
+ * snapTranslateShapes (Translating.ts), which re-flattens the delta by
+ * `lockedAxis` but leaves the returned nudges/guides untouched. */
+function computeSnappedDelta(
+  startBounds: Bounds,
+  frozenSnap: CanvasDocument,
+  frozenIndex: SpatialIndex,
+  movingIds: readonly string[],
+  excluded: ReadonlySet<string>,
+  rawDx: number,
+  rawDy: number,
+  lockedAxis: 'x' | 'y' | null = null,
+): { dx: number; dy: number; snapResult: SnapResult } {
+  const bounds: Bounds = {
+    minX: startBounds.minX + rawDx, minY: startBounds.minY + rawDy,
+    maxX: startBounds.maxX + rawDx, maxY: startBounds.maxY + rawDy,
+  }
+  const snapResult = snapCandidates(frozenIndex, frozenSnap, movingIds, bounds, { excludedIds: excluded })
+  const dx = lockedAxis === 'x' ? 0 : rawDx + snapResult.dx
+  const dy = lockedAxis === 'y' ? 0 : rawDy + snapResult.dy
+  return { dx, dy, snapResult }
+}
+
+/** The drag-start snap exclusion set: canvas-model's computeExcludedIds
+ * (movingIds and their descendants) PLUS every shape not on `pageId`. The
+ * frozen index spans the whole room, so without the page half a drag would
+ * snap to guides from shapes on other pages the user cannot see. Computed
+ * ONCE at the Pointing->Dragging transition, like computeExcludedIds alone
+ * was. */
+function snapExcludedIds(snapshot: CanvasDocument, movingIds: readonly string[], pageId: string): Set<string> {
+  const excluded = computeExcludedIds(snapshot, movingIds)
+  for (const s of snapshot.shapes) if (pageIdOf(snapshot, s) !== pageId) excluded.add(s.id)
+  return excluded
+}
+
+// ============================================================================
+// FRAME MEMBERSHIP ON DROP (frame-membership task —
+// docs/plans/2026-09-15-bb-thread-frame.md's "Membership", which deferred
+// exactly this). Until now the ONE producer of a ReparentShapes intent was
+// create.ts's frame-capture: draw a frame around some shapes and they became
+// its children, and after that membership never changed again — a shape
+// dragged into an existing frame stayed a page-level shape that merely
+// overlapped it, and a shape dragged out of one followed that frame around
+// the canvas forever. This closes both directions, on pointerup of a
+// select-tool translate.
+//
+// The RULE ITSELF (centre-containment, deepest-wins, bbthread's
+// workspace-only region) lives in frame-membership.ts, shared with the OTHER
+// moment that can change membership — create.ts, for a shape drawn inside a
+// frame. See that module's header for why it is centre and not full
+// containment.
+// ============================================================================
+
+function dropTargetIntents(ctx: ToolContext, movingIds: readonly string[], excluded: ReadonlySet<string>, pageId: string): Intent[] {
+  const doc = ctx.snapshot()
+  const candidates = frameCandidates(doc, excluded, pageId)
+  const byParent = new Map<string, string[]>()
+  for (const id of movingIds) {
+    const shape = doc.byId.get(id)
+    if (!shape) continue // TOLERANCE: a mid-drag remote delete — nothing to reparent.
+    const target = frameFor(doc, shape, candidates)
+    const nextParentId = target ? target.id : pageId
+    if (nextParentId === shape.parentId) continue
+    if (target === null && !isFrameLike(doc.byId.get(shape.parentId)?.kind ?? 'geo')) continue
+    const group = byParent.get(nextParentId)
+    if (group) group.push(id)
+    else byParent.set(nextParentId, [id])
+  }
+  // Emitted in first-seen parent order — deterministic for replay, and the
+  // editor's ReparentShapes is per-id tolerant anyway (canReparent skips an
+  // id whose move would cycle, e.g. a frame dropped onto its own descendant,
+  // without disturbing the rest of the batch).
+  return [...byParent].map(([parentId, ids]): Intent => ({ type: 'ReparentShapes', ids, parentId }))
+}
+
+function toggleOrAdd(current: ReadonlySet<string>, id: string): string[] {
+  // Shift-click TOGGLE (our documented choice to match tldraw parity):
+  // node_modules/tldraw/src/lib/tools/SelectTool/childStates/PointingShape.ts
+  // — onEnter adds the shape to the selection only if it wasn't already
+  // present (lines ~51-60); if it WAS already present, onEnter's early-return
+  // guard (line ~37: `selectedShapeIds.includes(outermostSelectingShape.id)`)
+  // routes to onPointerUp's additive branch, which calls
+  // `this.editor.deselect(selectingShape)` for a shape already in the
+  // selection under the additive (shift/accel) key. Net effect: shift-click
+  // ADDS an unselected shape, REMOVES an already-selected one — a toggle, not
+  // an add-only. We reproduce that exact net effect here in one step (no
+  // separate onEnter/onPointerUp split, since our FSM decides everything at
+  // pointerup for symmetry with the miss case — see PointingCanvas note
+  // below).
+  if (current.has(id)) return [...current].filter((existing) => existing !== id)
+  return [...current, id]
+}
+
+export function createSelectTool(ctx: ToolContext): Tool<SelectState> {
+  const editor = ctx.editor
+
+  /** The topmost bbthread whose divider band (at THIS pointer's margin — see
+   * `bbthreadDividerMargin`) contains the event's world point, or null.
+   *
+   * Candidates come from a degenerate-box `queryMarquee`, which is the
+   * context's page-scoped, index-backed "which shapes are near this point"
+   * read — the same machinery `hitTestTopmost` uses, minus the per-kind
+   * hit-region test we are deliberately bypassing here. Paint order (later
+   * shapes paint on top) decides between overlapping candidates, matching
+   * hitTestTopmost's own topmost rule. */
+  function dividerUnder(event: PointerInputEvent): { shape: import('@ensembleworks/canvas-model').Shape; snapshot: CanvasDocument } | null {
+    const point = worldOf(event)
+    const candidates = new Set(ctx.queryMarquee({ minX: point.x, minY: point.y, maxX: point.x, maxY: point.y }, 'intersect'))
+    if (candidates.size === 0) return null
+    const snapshot = ctx.snapshot()
+    const margin = bbthreadDividerMargin(ctx.editor.get().camera.z, event.pointerType)
+    for (let i = snapshot.shapes.length - 1; i >= 0; i--) {
+      const shape = snapshot.shapes[i]!
+      if (shape.kind !== 'bbthread' || !candidates.has(shape.id)) continue
+      if (isPointOnBbthreadDivider(snapshot, shape, point, margin)) return { shape, snapshot }
+    }
+    return null
+  }
+
+  function worldOf(screen: { readonly x: number; readonly y: number }) {
+    return screenToWorld(editor.get().camera, screen)
+  }
+
+  return {
+    initialState: IDLE,
+    onEvent(state: SelectState, event: InputEvent): { state: SelectState; intents: Intent[] } {
+      switch (state.mode) {
+        case 'idle':
+          return onIdle(state, event)
+        case 'pointing':
+          return onPointing(state, event)
+        case 'dragging':
+          return onDragging(state, event)
+        case 'marquee':
+          return onMarquee(state, event)
+        case 'resizingPane':
+          return onResizingPane(state, event)
+      }
+    },
+  }
+
+  function onIdle(state: Idle, event: InputEvent): { state: SelectState; intents: Intent[] } {
+    if (event.type === 'pointerdown') {
+      const hit = ctx.hitTestTopmost(worldOf(event))
+      const editingId = editor.get().editingId
+      // END-EDIT-ON-OUTSIDE-CLICK (pane input routing task): a pointerdown
+      // that lands on anything OTHER than the shape currently being edited
+      // ends that edit FIRST, before the normal pointing/selection
+      // machinery below decides what this click means. Today this only
+      // matters at the FSM level for a kind with no DOM editing surface of
+      // its own (a bbthread's thread pane has no textarea to blur) — every
+      // text-capable kind already gets this for free from TextEditor.tsx's
+      // own blur handler, so this EndEdit is harmless-but-redundant there
+      // (editor.ts's EndEdit is idempotent once editingId is already null,
+      // and here editingId is still non-null at the moment this fires, same
+      // as any other EndEdit emission). A click on the editing shape itself
+      // (hit === editingId) is explicitly excluded — that's a normal
+      // re-click within the same edit, not an "outside" click. Computed here
+      // (before the divider check below) because BOTH the divider path and
+      // the ordinary pointing path need the exact same EndEdit intent.
+      const endEditIntents: Intent[] = editingId !== null && hit !== editingId ? [{ type: 'EndEdit' }] : []
+      // RESIZABLE PANE (docs/plans/2026-09-15-bb-thread-frame.md's
+      // "Resizable pane" section): a pointerdown landing on a bbthread's
+      // divider band (canvas-model's isPointOnBbthreadDivider) enters
+      // ResizingPane directly from Idle — BEFORE the ordinary Pointing
+      // transition below ever runs — so it takes precedence over both the
+      // pane-is-solid translate path (the divider sits inside that same
+      // solid pane) and the pane double-click-to-edit gate (onPointing's
+      // opensBody, which never gets a look-in: a Pointing state is
+      // never created for a divider-starting gesture in the first place).
+      //
+      // NOT GATED ON `hit` (mobile-touch task, scope 3): the grab band is now
+      // wider than the flat margin `hitTestPoint` folds into the shape's own
+      // hit region, so for a finger — or for a mouse at low zoom — the outer
+      // half of the band falls in the bbthread's HOLLOW workspace, where
+      // hitTestPoint correctly reports a miss and `hit` comes back null. The
+      // shape is found by its own bounds query instead. Widening
+      // hitTestPoint to match was the alternative and is worse: it would make
+      // that strip of workspace non-hollow for every caller and every pointer,
+      // including the marquee (bbthread-workspace-is-hollow).
+      {
+        const divider = dividerUnder(event)
+        if (divider) {
+          const w = localBounds(divider.shape).maxX
+          return { state: { mode: 'resizingPane', id: divider.shape.id, w, snapshot: divider.snapshot }, intents: endEditIntents }
+        }
+      }
+      // Double-click candidacy, decided ONCE here (see the module header):
+      // same target as the last completed click, within the shared
+      // isDoubleClick window/radius (event.t/x/y deltas only).
+      const doubleClick =
+        hit !== null &&
+        state.lastClick !== null &&
+        state.lastClick.targetId === hit &&
+        isDoubleClick(state.lastClick, event)
+      return {
+        state: { mode: 'pointing', downScreen: { x: event.x, y: event.y }, targetId: hit, shiftDown: event.modifiers.shift, doubleClick },
+        intents: endEditIntents,
+      }
+    }
+    if (event.type === 'pointermove') {
+      // SetHover only while idle (per the task spec) — mid-gesture hover is
+      // not tracked; the pressed/dragged shape is unambiguous without it.
+      const hit = ctx.hitTestTopmost(worldOf(event))
+      return { state, intents: [{ type: 'SetHover', id: hit }] }
+    }
+    // ENTER-TO-EDIT (tldraw parity, checked against source: node_modules/
+    // tldraw/src/lib/tools/SelectTool/childStates/Idle.ts:640-661 — Enter on
+    // a lone, text-capable selected shape begins editing it). Gated on
+    // `editingId === null` for the same idempotency reason double-click's
+    // BeginEdit re-emission is harmless elsewhere in this file: a stray
+    // Enter that reaches here while ALREADY editing (this tool's own idle
+    // state, so nothing should normally be mid-edit AND idle here — the
+    // session's resolveShortcut declines every key while editingId is set,
+    // and editing keys normally land in the TextEditor's textarea rather
+    // than here — but this FSM must not assume its caller's discipline) must not re-fire a no-op BeginEdit against a
+    // stale read. `editor.get().selection` (not this FSM's own state) is
+    // the single source of truth for "what's selected" — select.ts never
+    // carries its own copy of the selection.
+    if (event.type === 'keydown' && event.key === 'Enter') {
+      const selection = editor.get().selection
+      if (selection.size === 1 && editor.get().editingId === null) {
+        const [targetId] = selection
+        const shape = ctx.snapshot().byId.get(targetId!)
+        if (shape && isTextCapableKind(shape.kind)) {
+          return { state, intents: [{ type: 'BeginEdit', id: targetId! }] }
+        }
+      }
+      return { state, intents: [] }
+    }
+    // ESCAPE-ENDS-EDITING (pane input routing task, docs/plans/
+    // 2026-09-15-bb-thread-frame.md's follow-up section): mirrors the
+    // browser path's session/keyboard.ts `resolveShortcut` change (a new
+    // 'endEdit' ShortcutCommand) at the FSM level, where no session layer
+    // sits between raw input and this tool — library.test.ts's fsm-runner
+    // feeds a 'key' GestureOp straight to this tool's onEvent, so ending an
+    // edit on Escape has to be a decision this FSM makes itself too, not
+    // something only the browser's session wiring handles. A region with its
+    // OWN DOM editing surface (note/text/geo's TextEditor.tsx textarea, a
+    // frame-like name's FrameNameEditor.tsx input) already ends its edit on
+    // Escape via that surface's own keydown handling before a keydown would
+    // reach here in a real browser — this branch is what a region with NO
+    // such surface (a bbthread's thread pane) relies on instead.
+    if (event.type === 'keydown' && event.key === 'Escape' && editor.get().editingId !== null) {
+      return { state, intents: [{ type: 'EndEdit' }] }
+    }
+    if (event.type === 'keydown') {
+      // Arrow-key nudge (Task keyboard/K1) — only while idle: a nudge
+      // mid-drag/mid-marquee would race the gesture's own TranslateShapes,
+      // so this deliberately never fires from onPointing/onDragging/
+      // onMarquee (none of which handle 'keydown' at all, falling through to
+      // their own no-op default). Reads the LIVE selection (editor.get(),
+      // never a cached one) — one keydown, one TranslateShapes, one
+      // editor.applyAll() commit at the caller (CanvasV2App's
+      // dispatchToActiveTool/tool-loop.ts), i.e. one undo step per keypress.
+      const dir = nudgeDirection(event.key)
+      if (!dir) return { state, intents: [] }
+      // Never while text-editing: the textarea owns arrow keys for caret
+      // movement (tldraw parity) — pinned by select.test.ts case 16b.
+      if (editor.get().editingId !== null) return { state, intents: [] }
+      const ids = [...editor.get().selection]
+      if (ids.length === 0) return { state, intents: [] }
+      const amount = event.modifiers.shift ? SHIFT_NUDGE_PX : NUDGE_PX
+      return { state, intents: [{ type: 'TranslateShapes', ids, dx: dir.dx * amount, dy: dir.dy * amount }] }
+    }
+    return { state, intents: [] }
+  }
+
+  function onPointing(state: Pointing, event: InputEvent): { state: SelectState; intents: Intent[] } {
+    if (event.type === 'pointermove') {
+      const here = crossedThreshold(state.downScreen, event)
+      if (!here) return { state, intents: [] }
+
+      if (state.targetId !== null) {
+        const targetId = state.targetId
+        // MODALITY: never drag the shape currently being text-edited (pilot
+        // 4 — interaction-contracts' 'no-drag-while-typing'). The editing
+        // textarea owns the pointer while editingId === targetId; treat this
+        // pointerdown-turned-drag as a no-op for translation rather than
+        // starting a Dragging gesture. Guarded here (the Pointing->Dragging
+        // transition), not at pointerdown/onIdle, so click-to-place-caret
+        // (handled by the DOM textarea itself, not this FSM) keeps working —
+        // only the DRAG is suppressed, and only for a drag that targets the
+        // shape actively being edited; a drag started on ANY OTHER shape
+        // while editing continues unaffected below.
+        // A click (pointerdown+up, no drag) on the shape being edited can
+        // re-fire `BeginEdit(target)` on pointerup; that is IDEMPOTENT
+        // (editingId is already `=== target`, so re-applying BeginEdit is a
+        // no-op), and in the browser the TextEditor textarea's
+        // stopPropagation belt (Task E4) means the canvas never even sees
+        // that pointer pair.
+        // This `editingId` read is LIVE at the threshold-crossing move, not
+        // captured at pointerdown; if editing happens to END mid-Pointing (an
+        // EndEdit lands between the pointerdown and this move), the live read
+        // returns `null` and the drag proceeds normally — benign, because
+        // editing is already over, so a translate is exactly what the user
+        // now wants.
+        if (editor.get().editingId === targetId) return { state, intents: [] }
+        const selection = editor.get().selection
+        const intents: Intent[] = []
+        // "If the pressed target wasn't in the selection, selection becomes
+        // [target] first" — our documented rule (task spec, C4): a drag that
+        // starts on a shape outside the current selection replaces the
+        // selection with just that shape before translating, rather than
+        // dragging the old selection out from under the new target.
+        if (!selection.has(targetId)) intents.push({ type: 'SetSelection', ids: [targetId] })
+        const movingIds = selection.has(targetId) ? [...selection] : [targetId]
+        // DRAG START (Unit 13): the ToolContext's doc/index pair is read
+        // EXACTLY ONCE here and frozen for the whole gesture (see the module
+        // header's REBUILD-CADENCE DISCIPLINE section) — excludedIds is
+        // derived from this SAME read, never a separate one.
+        const snapshot = ctx.snapshot()
+        const snapIndex = ctx.index()
+        const excludedIds = snapExcludedIds(snapshot, movingIds, editor.get().currentPageId)
+        const camera = editor.get().camera
+        // ABSOLUTE-ANCHOR MODEL (see the module header): grabWorld is the
+        // WORLD point under the cursor at pointerdown — the fixed anchor
+        // every move (this one and every later one) computes its TOTAL
+        // translation relative to. startBounds is the moving selection's
+        // world bounds, captured ONCE here from the frozen snapshot.
+        const grabWorld = screenToWorld(camera, state.downScreen)
+        const startBounds = unionWorldBounds(snapshot, movingIds) ?? {
+          minX: grabWorld.x, minY: grabWorld.y, maxX: grabWorld.x, maxY: grabWorld.y,
+        }
+        const to = screenToWorld(camera, here)
+        const { dx: rawDx, dy: rawDy, lockedAxis } = flattenForShift(to.x - grabWorld.x, to.y - grabWorld.y, event.modifiers.shift)
+        const { dx, dy, snapResult } = computeSnappedDelta(startBounds, snapshot, snapIndex, movingIds, excludedIds, rawDx, rawDy, lockedAxis)
+        intents.push({ type: 'TranslateShapes', ids: movingIds, dx, dy })
+        return {
+          state: { mode: 'dragging', targetId, grabWorld, startBounds, applied: { dx, dy }, movingIds, excludedIds, snapshot, snapIndex, snapResult },
+          intents,
+        }
+      }
+
+      return { state: { mode: 'marquee', downScreen: state.downScreen }, intents: [] }
+    }
+
+    if (event.type === 'pointerup') {
+      const intents: Intent[] = []
+      if (state.targetId !== null) {
+        const targetId = state.targetId
+        // DOUBLE-CLICK-TO-EDIT (Unit 13): a recognized double-click (set at
+        // the idle->pointing transition — see the module header) on a
+        // TEXT-CAPABLE target begins editing, in place of the ordinary
+        // shift/toggle-or-replace selection logic below. A double-click on
+        // other kind falls through to single-click resolution unless the
+        // model grants a body edit or a frame header rename below.
+        const shape = ctx.snapshot().byId.get(targetId)
+        // FRAME RENAME (frame-interaction task, gap 1; extended to
+        // 'bbthread' by isFrameLike, bb-thread-frame task): a double-click
+        // that lands specifically on a frame-like shape's HEADER band
+        // (canvas-model's isPointInFrameHeaderBand — the header label, not
+        // the body/border) also begins editing, in place of the ordinary
+        // isTextCapableKind gate (a frame-like shape is never text-capable —
+        // canvas-model/src/shape.ts's TEXT_CAPABLE_KINDS deliberately
+        // excludes both). The generic BeginEdit(target)/editingId machinery
+        // is reused verbatim; it's the CLIENT's job (client/src/canvas-v2,
+        // DOM authoring layer) to mount a name-input editor instead of the
+        // richText TextEditor when editingId resolves to a frame-like shape
+        // — this FSM only decides WHEN to fire the intent, never what UI
+        // renders for it.
+        const opensFrameRename = shape !== undefined && isFrameLike(shape.kind) && isPointInFrameHeaderBand(ctx.snapshot(), shape, worldOf(event))
+        // Stage 1b: the model owns non-text body-entry policy. bbthread
+        // retains its pane-only gate; artifact enters private body focus.
+        // Header rename still has precedence and uses region:'name'.
+        const opensBody = shape !== undefined && opensBodyEdit(ctx.snapshot(), shape, worldOf(event))
+        if (state.doubleClick && shape && (isTextCapableKind(shape.kind) || opensFrameRename || opensBody)) {
+          intents.push({ type: 'SetSelection', ids: [targetId] })
+          intents.push({ type: 'BeginEdit', id: targetId, region: opensFrameRename ? 'name' : 'body' })
+        } else if (state.shiftDown) {
+          intents.push({ type: 'SetSelection', ids: toggleOrAdd(editor.get().selection, targetId) })
+        } else {
+          intents.push({ type: 'SetSelection', ids: [targetId] })
+        }
+        return { state: { mode: 'idle', lastClick: { targetId, x: event.x, y: event.y, t: event.t } }, intents }
+      }
+      // Click on empty canvas deselects, REGARDLESS of shift — our
+      // simplification. tldraw instead skips clearing when the additive
+      // (shift/accel) key is held (node_modules/tldraw/src/lib/tools/
+      // SelectTool/childStates/PointingCanvas.ts's onEnter: `if
+      // (!additiveSelectionKey) { ... selectNone() }`), and does so
+      // immediately at pointerDOWN rather than waiting for pointerup. We
+      // decide uniformly at pointerup instead (both the hit and miss cases
+      // resolve at the same FSM edge, keeping the tool's mutation point
+      // singular and easy to reason about/test), and don't special-case
+      // shift for the miss case.
+      intents.push({ type: 'SetSelection', ids: [] })
+      return { state: IDLE, intents } // no target: nothing to remember for a future double-click
+    }
+
+    return { state, intents: [] }
+  }
+
+  function onDragging(state: Dragging, event: InputEvent): { state: SelectState; intents: Intent[] } {
+    if (event.type === 'pointermove') {
+      const camera = editor.get().camera
+      const cursorWorld = screenToWorld(camera, { x: event.x, y: event.y })
+      // ABSOLUTE target translation from the grab point (world-anchored — a
+      // mid-drag camera change re-derives cursorWorld under the new camera, so
+      // the grabbed world point stays under the cursor; the drift-prone
+      // incremental screen anchor is gone). Mirrors transform.ts's
+      // recompute-from-gesture-start-anchors pattern.
+      // SHIFT-CONSTRAINED DRAG (Task keyboard/K2) — live modifier read off
+      // THIS pointermove (never the Pointing state's frozen `shiftDown`,
+      // which only ever captured shift-AT-POINTERDOWN for the click-toggle
+      // decision above; a drag can start unshifted and have Shift pressed
+      // mid-gesture, or vice versa, and tldraw's own Translating.ts reads
+      // the CURRENT shift key on every move for exactly that reason).
+      // flattenForShift zeroes whichever axis has the smaller magnitude,
+      // applied BEFORE computeSnappedDelta — but that alone is NOT enough:
+      // snapCandidates finds the best guide on X and Y INDEPENDENTLY, so a
+      // snap target sitting close to the suppressed axis's (already-zeroed)
+      // candidate position can still report a non-zero delta on THAT axis
+      // and reintroduce the very movement Shift just suppressed (a prior
+      // version of this comment claimed that could "never" happen — it can;
+      // see select.test.ts's locked-axis-next-to-a-snap-target case).
+      // computeSnappedDelta's own `lockedAxis` param re-zeroes that axis
+      // AFTER snapping runs, closing the gap — tldraw's Translating.ts fix
+      // (snapTranslateShapes re-flattening by `lockedAxis`) for the exact
+      // same leak.
+      const { dx: rawDx, dy: rawDy, lockedAxis } = flattenForShift(
+        cursorWorld.x - state.grabWorld.x, cursorWorld.y - state.grabWorld.y, event.modifiers.shift,
+      )
+      // Reuses the FROZEN startBounds/snapshot/index from drag start
+      // (state.startBounds/state.snapshot/state.snapIndex) — never a fresh
+      // ctx.snapshot()/ctx.index() read here (see the module header's
+      // REBUILD-CADENCE DISCIPLINE section), and never the moving shape's
+      // own on-doc position either (see ABSOLUTE-ANCHOR MODEL). totalDx/
+      // totalDy is the TOTAL (raw + snap) delta from the grab point — NOT a
+      // per-move increment.
+      const { dx: totalDx, dy: totalDy, snapResult } = computeSnappedDelta(
+        state.startBounds, state.snapshot, state.snapIndex, state.movingIds, state.excludedIds, rawDx, rawDy, lockedAxis,
+      )
+      // The STEP to commit this move is the difference between the newly
+      // computed TOTAL and what was already `applied` — this is what keeps a
+      // snap adjustment from becoming a positional accumulator (see the
+      // module header). TOLERANCE: a mid-drag remote delete of the target
+      // (or any moving id) is not this tool's problem to detect —
+      // TranslateShapes already skips unresolvable ids (editor.ts's
+      // TOLERANCE CONTRACT); computeSnappedDelta itself never depends on the
+      // moving shape still existing (startBounds was captured once, at drag
+      // start, while it did). We still emit the intent unconditionally; the
+      // editor's own per-id skip is what makes that safe.
+      const stepDx = totalDx - state.applied.dx
+      const stepDy = totalDy - state.applied.dy
+      const intents: Intent[] = []
+      // COMMIT CADENCE WATCH-ITEM (owned by the H3 perf rig): each of these
+      // per-pointermove TranslateShapes intents becomes ONE doc.commit()
+      // (script.ts's run() applies per event), i.e. one sync frame per
+      // mouse move during a drag. The ToolContext's lazy rebuild keeps the
+      // LOCAL index cost off this path, but the wire/undo-granularity cost
+      // of per-move commits is unmeasured until H3 profiles it.
+      if (stepDx !== 0 || stepDy !== 0) {
+        intents.push({ type: 'TranslateShapes', ids: state.movingIds, dx: stepDx, dy: stepDy })
+      }
+      return { state: { ...state, applied: { dx: totalDx, dy: totalDy }, snapResult }, intents }
+    }
+    if (event.type === 'pointerup') {
+      // Frame membership is settled HERE, once, on the completed drop — see
+      // the FRAME MEMBERSHIP ON DROP block above. Deliberately NOT per
+      // pointermove: mid-drag reparenting would rewrite the moving shapes'
+      // frame of reference under the absolute-anchor translate math, and
+      // would spray an undo-stack entry per frame boundary crossed.
+      // UNDO GRANULARITY: this is its own commit, one step behind the last
+      // move's TranslateShapes — the per-pointermove-commit granularity this
+      // engine already has (CLAUDE.md's Phase-4 note), neither widened nor
+      // narrowed by this task.
+      const intents = dropTargetIntents(ctx, state.movingIds, state.excludedIds, editor.get().currentPageId)
+      return { state: IDLE, intents } // a drag is never a click: nothing to remember for double-click
+    }
+    return { state, intents: [] }
+  }
+
+  function onMarquee(state: Marquee, event: InputEvent): { state: SelectState; intents: Intent[] } {
+    if (event.type === 'pointermove') {
+      return { state, intents: [] } // no live-preview intent exists yet (D2's problem, deferred)
+    }
+    if (event.type === 'pointerup') {
+      const camera = editor.get().camera
+      const a = screenToWorld(camera, state.downScreen)
+      const b = screenToWorld(camera, { x: event.x, y: event.y })
+      const bounds = {
+        minX: Math.min(a.x, b.x), minY: Math.min(a.y, b.y),
+        maxX: Math.max(a.x, b.x), maxY: Math.max(a.y, b.y),
+      }
+      // MODE CHOICE: 'intersect' (quad-accurate), pending golden-parity
+      // calibration — our documented default, not a confirmed tldraw match.
+      // tldraw's own Brushing.ts (node_modules/tldraw/src/lib/tools/
+      // SelectTool/childStates/Brushing.ts) actually uses 'intersect'-style
+      // semantics by DEFAULT too (a shape is selected once the brush box
+      // collides its bounds and a per-edge line-segment hit test against its
+      // true geometry succeeds — see hitTestBrushEdges) and only requires
+      // full CONTAINMENT in "wrap mode" (a user preference, isWrapMode/
+      // ctrlKey-inverted — see Brushing.onEnter/hitTestShapes). So
+      // 'intersect' as our default is at minimum directionally aligned with
+      // tldraw's non-wrap-mode default, though the exact per-shape test
+      // differs (SAT-against-true-quad here vs. line-segment-vs-geometry
+      // there) — hence "pending golden-parity calibration" rather than a
+      // confirmed match.
+      // FRAME EXCEPTION (frame-interaction task, gap 4 — tldraw parity:
+      // Brushing.ts:199-203 skips a frame-like shape unless the brush FULLY
+      // contains it): a marquee that merely CLIPS a frame's edge must select
+      // the frame's children, never the frame itself — otherwise the very
+      // next drag moves the whole frame + contents instead of the notes the
+      // user actually brushed. Every other kind keeps the 'intersect' result
+      // above unchanged; a frame candidate is additionally required to
+      // appear in the 'contain' (full-enclosure) query.
+      const intersectIds = ctx.queryMarquee(bounds, 'intersect')
+      const snapshot = ctx.snapshot()
+      const isFrameLikeId = (id: string) => {
+        const kind = snapshot.byId.get(id)?.kind
+        return kind !== undefined && isFrameLike(kind)
+      }
+      const ids = intersectIds.some(isFrameLikeId)
+        ? (() => {
+            const containedIds = new Set(ctx.queryMarquee(bounds, 'contain'))
+            return intersectIds.filter((id) => !isFrameLikeId(id) || containedIds.has(id))
+          })()
+        : intersectIds
+      return { state: IDLE, intents: [{ type: 'SetSelection', ids }] }
+    }
+    return { state, intents: [] }
+  }
+
+  // RESIZABLE PANE (docs/plans/2026-09-15-bb-thread-frame.md's "Resizable
+  // pane" section): every pointermove projects the CURRENT cursor into the
+  // resized shape's own local frame (via the FROZEN snapshot/w captured at
+  // the Idle->ResizingPane transition — see that state's doc comment) and
+  // commits the resulting clamped fraction directly, no threshold gate (a
+  // resize tracks the cursor from its very first move, unlike Pointing-
+  // >Dragging's crossedThreshold gate — there is no "was this actually a
+  // click" ambiguity here, since a divider-starting gesture is NEVER a
+  // click target itself). pointerup returns to Idle with NO intents: like
+  // Dragging's own translate, every move already committed its own
+  // UpdateProps, so there is nothing left to flush at gesture end.
+  function onResizingPane(state: ResizingPane, event: InputEvent): { state: SelectState; intents: Intent[] } {
+    if (event.type === 'pointermove') {
+      const shape = state.snapshot.byId.get(state.id)
+      // TOLERANCE: a mid-gesture remote delete of the target shape is not
+      // this tool's problem to detect (same posture as onDragging's own
+      // TOLERANCE CONTRACT note) — simply stop emitting further UpdateProps
+      // for an id that no longer resolves, rather than throwing.
+      if (!shape) return { state, intents: [] }
+      const local = toLocalPoint(state.snapshot, shape, worldOf(event))
+      const fraction = Math.min(BBTHREAD_PANE_MAX_FRACTION, Math.max(BBTHREAD_PANE_MIN_FRACTION, (state.w - local.x) / state.w))
+      return { state, intents: [{ type: 'UpdateProps', id: state.id, props: { paneFraction: fraction } }] }
+    }
+    if (event.type === 'pointerup') {
+      return { state: IDLE, intents: [] }
+    }
+    return { state, intents: [] }
+  }
+}

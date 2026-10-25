@@ -1,0 +1,20 @@
+{
+  // Typechecks the tests, which tsconfig.json's include list deliberately leaves out.
+  //
+  // Separate rather than merged for one reason: `skipLibCheck` must be true here. Vitest's
+  // types reach happy-dom's .d.ts, and in this checkout that resolves to the parent
+  // monorepo's hoisted node_modules — a copy this isolated package does not own and whose
+  // errors say nothing about our code. The product code keeps `skipLibCheck: false`.
+  "extends": "./tsconfig.json",
+  "compilerOptions": {
+    "skipLibCheck": true
+  },
+  "include": [
+    "**/*.ts",
+    "**/*.tsx"
+  ],
+  "exclude": [
+    "node_modules",
+    "dist"
+  ]
+}

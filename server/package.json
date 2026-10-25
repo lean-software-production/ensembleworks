@@ -15,15 +15,19 @@
     "typecheck": "bunx tsc --noEmit"
   },
   "dependencies": {
+    "@ensembleworks/canvas-doc": "*",
+    "@ensembleworks/canvas-model": "*",
+    "@ensembleworks/canvas-sync": "*",
     "@ensembleworks/contracts": "*",
     "@tldraw/sync-core": "5.1.0",
     "@tldraw/tlschema": "5.1.0",
     "@tldraw/utils": "5.1.0",
     "@tldraw/validate": "5.1.0",
     "express": "^5.0.0",
-    "livekit-server-sdk": "2.15.4",
-    "marked": "^18.0.5",
-    "ws": "^8.18.0"
+    "livekit-server-sdk": "2.19.0",
+    "marked": "^18.0.13",
+    "rrweb": "2.1.4",
+    "ws": "^8.21.3"
   },
   "devDependencies": {
     "@types/express": "^5.0.0",

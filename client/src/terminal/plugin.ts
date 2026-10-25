@@ -26,9 +26,13 @@ export const terminalPlugin: ClientPlugin = {
 	icons: { [TERMINAL_ICON_NAME]: TERMINAL_TOOLBAR_ICON },
 	barItems: [
 		{
+			// EW26: no `accelerator`. A bare 'm' dropped a terminal shape + a PTY
+			// onto the SHARED canvas — cheap for the person who typed it, noise
+			// for everyone else. The bar button is the deliberate route; there is
+			// no confirmation because creating a terminal is common and trivially
+			// deleted (unlike Present, which grabs the whole room's viewport).
 			id: 'terminal',
 			label: 'terminal',
-			accelerator: 'm',
 			icon: TERMINAL_ICON_NAME,
 			placement: 'priority',
 			onSelect: openNewTerminal,

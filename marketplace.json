@@ -1,0 +1,29 @@
+{
+  "$schema": "https://getbb.app/schemas/marketplace.schema.json",
+  "schemaVersion": 1,
+  "name": "ensembleworks",
+  "displayName": "EnsembleWorks",
+  "description": "Plugins maintained by EnsembleWorks.",
+  "plugins": [
+    {
+      "id": "communications-hub",
+      "displayName": "Communications Hub",
+      "description": "Import transcripts, attach conversations to BB threads, and retrieve citable passages.",
+      "icon": { "url": "./icons/communications-hub.svg" },
+      "tags": ["communications", "transcripts", "meetings"],
+      "author": {
+        "name": "EnsembleWorks",
+        "github": "lean-software-production",
+        "url": "https://github.com/lean-software-production"
+      },
+      "source": {
+        "git": {
+          "url": "https://github.com/lean-software-production/ensembleworks.git",
+          "subdir": "plugins/communications-hub",
+          "range": ">=0.1.1-preview.1 <0.1.1",
+          "tagPrefix": "communications-hub/"
+        }
+      }
+    }
+  ]
+}

@@ -17,6 +17,7 @@
 #                         checksum, ew_boot_check, print the swap plan. No ssh/swap.
 #   DEPLOY_FETCH_DIR=dir  read release assets from a local dir instead of curl (tests/dry-run).
 #   EW_ALLOW_ERA_CROSS=1  permit the one sanctioned cross-era swap (cutover.sh sets it).
+#   EW_SYNC_MEMORY_MAX=8G override the derived sync MemoryMax (any systemd size: 8G, 8192M).
 set -euo pipefail
 cd "$(git rev-parse --show-toplevel)"
 
@@ -24,7 +25,8 @@ SSH_TARGET="${1:?usage: deploy.sh <ssh-target> <version> [--dry-run]}"
 VERSION="${2:?usage: deploy.sh <ssh-target> <version> [--dry-run]}"
 VERSION="${VERSION#v}" # accept 0.2.0 or v0.2.0
 TAG="v${VERSION}"
-DRY_RUN=0; [ "${3:-}" = "--dry-run" ] && DRY_RUN=1
+DRY_RUN=0
+[ "${3:-}" = "--dry-run" ] && DRY_RUN=1
 APP_USER="${APP_USER:-ensembleworks}"
 REPO_SLUG="${REPO_SLUG:-lean-software-production/ensembleworks}"
 KEEP="${KEEP:-3}"
@@ -54,14 +56,18 @@ AGENT_USER="${AGENT_USER:-ensembleworks-agent}"
 if [ "$DRY_RUN" = 1 ]; then
 	# shellcheck disable=SC1091 # relative path, resolved via `cd` to repo root above
 	. deploy/lib.sh
-	scratch="$(mktemp -d)"; trap 'rm -rf "$scratch"' EXIT
+	scratch="$(mktemp -d)"
+	trap 'rm -rf "$scratch"' EXIT
 	NEW="${scratch}/${VERSION}"
 	echo "==> [dry-run] fetching v${VERSION} into ${NEW}"
 	ew_fetch_release "${VERSION}" "${NEW}" "${REPO_SLUG}" ""
 	cp deploy/posture-era "${NEW}/.ew-era"
 	echo "==> [dry-run] boot-check"
 	# shellcheck disable=SC2015 # C is a bare `exit 1` after echo — B (echo) never fails
-	ew_boot_check "${NEW}" "" && echo "    boot-check OK" || { echo "    boot-check FAILED" >&2; exit 1; }
+	ew_boot_check "${NEW}" "" && echo "    boot-check OK" || {
+		echo "    boot-check FAILED" >&2
+		exit 1
+	}
 	echo "==> [dry-run] swap plan:"
 	echo "    release dir : ~${APP_USER}/releases/${VERSION}"
 	echo "    new era     : $(cat "${NEW}/.ew-era")"
@@ -87,13 +93,17 @@ for f in "$REQ_FILE" "$LIB_FILE" "$CADDY_PROD" \
 	deploy/posture-era \
 	deploy/tmux-ensembleworks.conf \
 	deploy/ensembleworks-gh-token \
+	deploy/git-credential-ensembleworks \
+	deploy/gh-shim \
+	deploy/ensembleworks-gh-doctor \
+	deploy/ensembleworks-claude-settings \
 	bin/gh-app-token.bash \
 	deploy/agent-home/AGENTS.md \
 	deploy/agent-home/.claude/CLAUDE.md \
+	deploy/agent-home/.claude/ensembleworks-settings.json \
 	deploy/agent-home/.claude/skills/publish-doc/SKILL.md \
 	deploy/agent-home/term.env.example \
-	deploy/agent-home/term-env.bashrc \
-	deploy/agent-home/gh-helper.bashrc; do
+	deploy/agent-home/term-env.bashrc; do
 	[ -f "$f" ] || {
 		echo "missing $f — run from the repo root" >&2
 		exit 1
@@ -115,6 +125,7 @@ KEEP='${KEEP}'
 EDGE_PORT='${EDGE_PORT}'
 SHARED_BROWSER='${SHARED_BROWSER}'
 EW_ALLOW_ERA_CROSS='${EW_ALLOW_ERA_CROSS:-0}'
+EW_SYNC_MEMORY_MAX='${EW_SYNC_MEMORY_MAX:-}'
 AGENT_USER='${AGENT_USER}'
 APP_HOME="\$(getent passwd "\${APP_USER}" | cut -d: -f6)"
 RELEASES="\${APP_HOME}/releases"
@@ -156,6 +167,16 @@ if test -x /usr/local/bin/check-database-backup-fresh.sh; then
   sudo -u "\${APP_USER}" /usr/local/bin/check-database-backup-fresh.sh >/dev/null 2>&1 \
     || echo "    note: room-database backup on /home is STALE — investigate (deploy not blocked)" >&2
 fi
+# Storage geometry contract — REQUIRED (required-database-dirs spec). The sync
+# unit sources storage.env and the server refuses to boot on a missing or
+# collision-shaped triple, so a bad file would strand the box AFTER the swap;
+# catch it here instead, before any fetch. Key-presence only — the server's
+# startup validation owns the geometry rules.
+STORAGE_ENV="\${APP_HOME}/.config/ensembleworks/storage.env"
+sudo test -f "\$STORAGE_ENV" || { echo "PREFLIGHT FAILED: \$STORAGE_ENV missing — provision it (laingville bootstrap / required-database-dirs migration runbook)" >&2; exit 1; }
+for k in DATA_DIR DATABASE_DIR DATABASE_BACKUPS_DIR; do
+  sudo grep -q "^\${k}=" "\$STORAGE_ENV" || { echo "PREFLIGHT FAILED: \${k}= missing from \$STORAGE_ENV" >&2; exit 1; }
+done
 echo "    preflight ok"
 
 # ---- fetch the tag's artifacts into \${NEW} -----------------------------------
@@ -178,17 +199,67 @@ else
   asapp touch "\${NEW}/.ew-verified"
 fi
 
+# ---- ensure the fast-disk room-DB base dir exists ----------------------------
+# DATABASE_DIR comes from the box's storage.env (preflight proved it's there —
+# no hardcoded path here, one source of truth). The server creates only the
+# rooms/ leaf (as \${APP_USER}) and CANNOT create the root-owned /var/lib
+# parent, so guarantee the app-owned base dir here (idempotent). Also
+# provisioned by the laingville bootstrap; kept here so a deploy can never
+# half-apply the geometry change (the drift class behind the 2026-07-10
+# room-DB corruption incident).
+DB_DIR="\$(sudo grep '^DATABASE_DIR=' "\$STORAGE_ENV" | tail -n1 | cut -d= -f2-)"
+sudo install -d -m 0755 "\$(dirname "\$DB_DIR")"
+sudo install -d -m 0700 -o "\${APP_USER}" -g "\${APP_USER}" "\$DB_DIR"
+
+# ---- derive the sync memory ceiling ------------------------------------------
+# A FIXED size cannot be right across a fleet spanning 7.7 -> 23 GiB of RAM: a
+# value that contains a leak on the small boxes throttles a healthy server on the
+# big one, and a value sized for the big one sits above the entire slice envelope
+# on the small ones, so it can never fire. Derive it per box instead.
+#
+# Prefer half the slice's own MemoryHigh. The unit already declares
+# Slice=ensembleworks.slice, so that envelope is the honest denominator: staying
+# well under it is what makes sync trip its OWN ceiling first, leaving the other
+# services in the slice untouched by one service's leak. Fall back to a fraction
+# of MemTotal where the host has not set an envelope (a plain box, CI, a
+# single-tenant install) so this is never load-bearing on the host's config.
+#
+# The floor is the other guard rail: below it the cap is likelier to kill a
+# healthy sync than to contain a leak, so clamp rather than emit a hostile value.
+SYNC_MEMORY_MAX="\${EW_SYNC_MEMORY_MAX:-}"
+if [ -z "\$SYNC_MEMORY_MAX" ]; then
+  slice_high="\$(systemctl show ensembleworks.slice -p MemoryHigh --value 2>/dev/null || true)"
+  case "\$slice_high" in
+    '' | *[!0-9]*) slice_high='' ;; # unset, "infinity", or anything non-numeric
+  esac
+  if [ -n "\$slice_high" ]; then
+    sync_max_mb=\$((slice_high / 1048576 / 2))
+  else
+    sync_max_mb=\$((\$(awk '/^MemTotal:/{printf "%d", \$2 / 1024}' /proc/meminfo) * 35 / 100))
+  fi
+  [ "\$sync_max_mb" -lt 1024 ] && sync_max_mb=1024
+  SYNC_MEMORY_MAX="\${sync_max_mb}M"
+fi
+echo "    sync MemoryMax: \${SYNC_MEMORY_MAX}"
+
 # ---- install prod systemd units -----------------------------------------------
 # Units are committed templates in deploy/systemd/prod/ (scp'd to /tmp); sed fills
-# in @APP_USER@ / @APP_HOME@. Slice membership + per-service MemoryLow are folded
-# into each [Service] (the host owns the ensembleworks.slice envelope; these are
-# its sub-division, summing <= the envelope MemoryLow). \${ENSEMBLEWORKS_URL} in the
-# scribe unit stays literal for systemd to expand — sed only touches @TOKENS@.
+# in @APP_USER@ / @APP_HOME@ / @SYNC_MEMORY_MAX@. Slice membership + per-service
+# MemoryLow are folded into each [Service] (the host owns the ensembleworks.slice
+# envelope; these are its sub-division, summing <= the envelope MemoryLow).
+# \${ENSEMBLEWORKS_URL} in the scribe unit stays literal for systemd to expand —
+# sed only touches @TOKENS@.
 echo "==> installing prod systemd units"
-# Drop stale per-service drop-ins from older deploys (slice/MemoryLow now in-unit).
+# Drop stale per-service drop-ins from older deploys (slice/MemoryLow/MemoryMax now
+# in-unit). NOTE this is unconditional and recursive: a drop-in written here by any
+# OTHER owner does not survive a deploy either. That is deliberate — per-service
+# resource settings have exactly one owner, this file — but it means a host-side
+# cap must be expressed in the unit above (or via EW_SYNC_MEMORY_MAX), never as an
+# ensembleworks-*.service.d/ drop-in, which would silently evaporate on the next
+# deploy and leave a false sense of containment.
 sudo rm -rf /etc/systemd/system/ensembleworks-sync.service.d /etc/systemd/system/ensembleworks-term.service.d /etc/systemd/system/ensembleworks-files.service.d /etc/systemd/system/ensembleworks-scribe.service.d /etc/systemd/system/ensembleworks-discord.service.d
 for u in ensembleworks-sync ensembleworks-term ensembleworks-files ensembleworks-scribe ensembleworks-discord; do
-  sed -e "s|@APP_USER@|\${APP_USER}|g" -e "s|@APP_HOME@|\${APP_HOME}|g" "/tmp/\${u}.service" | sudo tee "/etc/systemd/system/\${u}.service" >/dev/null
+  sed -e "s|@APP_USER@|\${APP_USER}|g" -e "s|@APP_HOME@|\${APP_HOME}|g" -e "s|@SYNC_MEMORY_MAX@|\${SYNC_MEMORY_MAX}|g" "/tmp/\${u}.service" | sudo tee "/etc/systemd/system/\${u}.service" >/dev/null
 done
 
 # ---- install the OPTIONAL shared browser (neko) ------------------------------
@@ -236,6 +307,30 @@ if id -u "\${AGENT_USER}" >/dev/null 2>&1; then
   # the boundary. See deploy/github-app-runbook.md.
   sudo install -m0755 /tmp/ew-gh-app-token.bash /usr/local/bin/gh-app-token.bash
   sudo install -m0755 /tmp/ew-ensembleworks-gh-token /usr/local/bin/ensembleworks-gh-token
+  # EW25: the auth path itself. These live in /usr/local/bin because it is the
+  # ONLY directory every shell finds — it is on sudo's secure_path and on a
+  # scrubbed \`env -i sh\`'s PATH, where ~/.local/bin is not. All three are inert
+  # for any user other than \${AGENT_USER}, so the app user, root, and any human
+  # shelling in are unaffected.
+  sudo install -m0755 /tmp/ew-git-credential-ensembleworks /usr/local/bin/git-credential-ensembleworks
+  # The shim shadows the real gh and execs it by absolute path (/usr/bin/gh).
+  # Nothing in this repo provisions gh, so that path is a host assumption: apt
+  # installs to /usr/bin/gh, but the release tarball installs to
+  # /usr/local/bin/gh — exactly where we install the shim. Overwriting a
+  # tarball gh would leave the shim exec'ing a binary that no longer exists,
+  # breaking gh for EVERY user on the box, unrepairable by redeploy. So: only
+  # install when the real gh is where the shim expects it, and never clobber a
+  # /usr/local/bin/gh that isn't already ours.
+  if [ ! -x /usr/bin/gh ]; then
+    echo "    warn: /usr/bin/gh not present — skipping the gh shim (git auth still installed)" >&2
+  elif [ -e /usr/local/bin/gh ] && ! grep -q 'gh-shim' /usr/local/bin/gh 2>/dev/null; then
+    echo "    ERROR: /usr/local/bin/gh exists and is not our shim — refusing to overwrite the real gh" >&2
+    exit 1
+  else
+    sudo install -m0755 /tmp/ew-gh-shim /usr/local/bin/gh
+  fi
+  sudo install -m0755 /tmp/ew-ensembleworks-gh-doctor /usr/local/bin/ensembleworks-gh-doctor
+  sudo install -m0755 /tmp/ew-ensembleworks-claude-settings /usr/local/bin/ensembleworks-claude-settings
   # Box-wide tmux conf the sandbox user CAN read (it can't read the app's 700 home
   # where deploy/tmux-ensembleworks.conf ships). The host-provisioned launcher
   # (/usr/local/bin/ensembleworks-term-launch) execs \`tmux -f /etc/ensembleworks/tmux.conf\`.
@@ -249,6 +344,16 @@ if id -u "\${AGENT_USER}" >/dev/null 2>&1; then
     sudo install -d -o "\${AGENT_USER}" -m0755 "\${AGENT_HOME}/.claude/skills/publish-doc"
     sudo install -o "\${AGENT_USER}" -m0644 /tmp/ew-agent-home/.claude/skills/publish-doc/SKILL.md \
       "\${AGENT_HOME}/.claude/skills/publish-doc/SKILL.md"
+    # Claude Code settings every agent on every box shares (today: the auto-mode
+    # classifier rule that lets a trainer's "merge it" count as the review). The
+    # user's settings.json is also edited by hand and by /permissions, so merge
+    # the fragment in rather than overwrite. The fragment gets a stable root-owned
+    # copy in /etc (like tmux.conf above) that the sandbox user reads but can't edit.
+    # Non-fatal, like the gh doctor below.
+    sudo install -D -m0644 /tmp/ew-agent-home/.claude/ensembleworks-settings.json /etc/ensembleworks/claude-settings.json
+    sudo -H -u "\${AGENT_USER}" /usr/local/bin/ensembleworks-claude-settings \\
+      /etc/ensembleworks/claude-settings.json "\${AGENT_HOME}/.claude/settings.json" ||
+      echo "    warn: ensembleworks-claude-settings failed (left settings.json as it was)" >&2
   fi
   # Tool env for canvas shells (OPENCODE_API_KEY, …): mirror the legacy app-user
   # term.env mechanism for the sandbox user — a 600 env file it owns, sourced by its
@@ -263,11 +368,55 @@ if id -u "\${AGENT_USER}" >/dev/null 2>&1; then
   if ! sudo -u "\${AGENT_USER}" grep -q __ew_term_env_file "\${AGENT_HOME}/.bashrc" 2>/dev/null; then
     sudo cat /tmp/ew-agent-home/term-env.bashrc | sudo -u "\${AGENT_USER}" tee -a "\${AGENT_HOME}/.bashrc" >/dev/null
   fi
-  # gh wrapper (separate marker, so boxes that already have the term.env stanza still
-  # pick this up on a later deploy).
-  if ! sudo -u "\${AGENT_USER}" grep -q __ew_gh_helper "\${AGENT_HOME}/.bashrc" 2>/dev/null; then
-    sudo cat /tmp/ew-agent-home/gh-helper.bashrc | sudo -u "\${AGENT_USER}" tee -a "\${AGENT_HOME}/.bashrc" >/dev/null
+  # EW25: exactly ONE auth path, reachable from every shell. The legacy ~/.bashrc
+  # gh() function existed only in interactive shells, so \`claude -p\`, the Relay
+  # executor and any \`sh -c\` got the bare /usr/bin/gh and died on "gh auth
+  # login". Strip it so the PATH shim installed above is the only wrapper. This
+  # is idempotent: a .bashrc without the markers is left untouched, and nothing
+  # else in the file is affected.
+  if sudo -u "\${AGENT_USER}" grep -q __ew_gh_helper "\${AGENT_HOME}/.bashrc" 2>/dev/null; then
+    sudo -u "\${AGENT_USER}" sed -i \\
+      '/^# --- EnsembleWorks gh helper (__ew_gh_helper) ---\$/,/^# --- end EnsembleWorks gh helper ---\$/d' \\
+      "\${AGENT_HOME}/.bashrc"
+    echo "    removed the legacy interactive-only gh() stanza from \${AGENT_HOME}/.bashrc"
   fi
+  # The EW25 prototypes live in ~/.local/bin, which is EARLIER on the agent's
+  # interactive PATH than /usr/local/bin — left in place they would shadow the
+  # shim and the fix would look like it had not landed. Only delete files that
+  # are ours (they call the token wrapper); never a hand-written replacement.
+  for p in gh git-credential-ensembleworks; do
+    proto="\${AGENT_HOME}/.local/bin/\${p}"
+    if sudo -u "\${AGENT_USER}" test -f "\$proto" &&
+       sudo -u "\${AGENT_USER}" grep -q ensembleworks-gh-token "\$proto"; then
+      sudo -u "\${AGENT_USER}" rm -f "\$proto"
+      echo "    removed prototype \$proto (superseded by /usr/local/bin/\${p})"
+    fi
+  done
+  # Credential config goes in the AGENT USER's OWN ~/.gitconfig — git reads it on
+  # every invocation regardless of PATH or shell type, and nothing outside this
+  # user changes (deliberately NOT the box-wide system config: a human who has
+  # run \`gh auth login\` must keep their own identity). unset-all first makes the seed
+  # idempotent AND clears the prototype's ~/.local/bin helper path AND the
+  # \`cache --timeout=2700\` helper earlier deploys put in front. That cache served
+  # expired tokens: git re-stores the credential after every successful operation,
+  # which restarts the 2700s timer, so a busy token stayed cached past its ~60min
+  # life ("Invalid username or token" on the next push). Its socket also can't be
+  # created inside agent sandboxes. So every git operation mints (~½s, the same
+  # cost the gh shim already accepts), and \`credential-cache exit\` drops any
+  # stale token a running daemon still holds. -H so git writes the target user's
+  # own ~/.gitconfig.
+  sudo -H -u "\${AGENT_USER}" git config --global --unset-all credential.https://github.com.helper || true
+  sudo -H -u "\${AGENT_USER}" git credential-cache exit 2>/dev/null || true
+  sudo -H -u "\${AGENT_USER}" git config --global --add credential.https://github.com.helper /usr/local/bin/git-credential-ensembleworks
+  # Prove it in the shape that actually matters: the sandbox user under a
+  # SCRUBBED NON-INTERACTIVE shell (an interactive one would pass even with the
+  # old function). HOME is passed explicitly because ~/.gitconfig is where the
+  # credential config lives. Non-fatal, matching the CLI version self-check
+  # above — aborting a production deploy because the GitHub App is not
+  # provisioned on that host would be a worse failure than the one being fixed.
+  sudo -u "\${AGENT_USER}" env -i HOME="\${AGENT_HOME}" /bin/sh -c \\
+    '/usr/local/bin/ensembleworks-gh-doctor --quiet' ||
+    echo "    warn: ensembleworks-gh-doctor failed (diagnosis above)" >&2
 else
   echo "    sandbox user \${AGENT_USER} not present — skipping CLI + agent-home seed"
   echo "    (provision it via the laingville bootstrap; the term gateway fails closed until then)" >&2
@@ -339,6 +488,10 @@ scp -q "$PROD_UNITS"/ensembleworks-shared-browser.slice "${SSH_TARGET}:/tmp/"
 scp -q deploy/posture-era "${SSH_TARGET}:/tmp/ew-posture-era"
 scp -q deploy/tmux-ensembleworks.conf "${SSH_TARGET}:/tmp/ew-tmux.conf"
 scp -q deploy/ensembleworks-gh-token "${SSH_TARGET}:/tmp/ew-ensembleworks-gh-token"
+scp -q deploy/git-credential-ensembleworks "${SSH_TARGET}:/tmp/ew-git-credential-ensembleworks"
+scp -q deploy/gh-shim "${SSH_TARGET}:/tmp/ew-gh-shim"
+scp -q deploy/ensembleworks-gh-doctor "${SSH_TARGET}:/tmp/ew-ensembleworks-gh-doctor"
+scp -q deploy/ensembleworks-claude-settings "${SSH_TARGET}:/tmp/ew-ensembleworks-claude-settings"
 scp -q bin/gh-app-token.bash "${SSH_TARGET}:/tmp/ew-gh-app-token.bash"
 # Pre-clean the remote dir: `scp -r src host:dest` is non-idempotent — if dest
 # already exists (a prior deploy's copy survives in /tmp until reboot), scp nests

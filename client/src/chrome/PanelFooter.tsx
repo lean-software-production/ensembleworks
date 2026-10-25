@@ -10,6 +10,9 @@
  * tldraw's own kbd is just 'v', but ui.tsx's tools override aliases it to
  * 'v,s' (the Phase-1 "s̲elect" accelerator, spec §4), and displayKeyForKbd
  * makes the bar underline the S — so S leads here too.
+ *
+ * EW26 removed the terminal (M) and Present (P) accelerators outright, so
+ * neither is listed here — both are button-only now.
  */
 import { useState, type ReactNode } from 'react'
 import { wm } from '../theme'
@@ -43,7 +46,10 @@ export function PanelFooter() {
 	const toggle = (section: OpenSection) => setOpen((current) => (current === section ? null : section))
 
 	return (
-		<div style={{ marginTop: 'auto', borderTop: `1px solid ${wm.ruleStrong}` }}>
+		// No marginTop:auto here — the YouBar above (SidePanel.tsx) carries it,
+		// so bar+footer sit together pinned to the panel bottom. A second auto
+		// margin would split the free space and strand the bar mid-panel.
+		<div style={{ borderTop: `1px solid ${wm.ruleStrong}` }}>
 			<div style={{ display: 'flex' }}>
 				<button
 					type="button"
@@ -169,8 +175,7 @@ function HelpSection() {
 	return (
 		<div style={sectionStyle}>
 			<ShortcutLine>
-				select <b>S/V</b> · note <b>N</b> · text <b>T</b> · frame <b>F</b> · terminal <b>M</b> · cast{' '}
-				<b>C</b>
+				select <b>S/V</b> · note <b>N</b> · text <b>T</b> · frame <b>F</b> · cast <b>C</b>
 			</ShortcutLine>
 			<ShortcutLine>
 				tldraw defaults: draw <b>D</b> · eraser <b>E</b> · arrow <b>A</b> · line <b>L</b> · rectangle{' '}

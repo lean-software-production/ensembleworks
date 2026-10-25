@@ -1,0 +1,749 @@
+// Run: bun src/overlay.test.ts
+// Component tests use renderToStaticMarkup (no DOM emulator — see
+// viewport.test.ts's header) with React.createElement, hence `.test.ts` not
+// `.test.tsx` (see that same header for why). Covers D4 (Selection/Handles/
+// SnapGuides) and D5 (Arrows) — both land in the same screen-space overlay
+// SVG, so one file exercises the whole paint stack Overlay.tsx composes.
+import assert from 'node:assert/strict'
+import { createElement } from 'react'
+import { renderToStaticMarkup } from 'react-dom/server'
+import { buildSpatialIndex, makeDocument, routeArrow, type Binding, type CanvasDocument, type Shape, type SnapResult } from '@ensembleworks/canvas-model'
+import { selectionHandles, worldToScreen, type Camera } from '@ensembleworks/canvas-editor'
+import { arrowheadPoints, Arrows } from './overlay/Arrows.js'
+import { combinedWorldBounds, Selection } from './overlay/Selection.js'
+import { Hover } from './overlay/Hover.js'
+import { Handles } from './overlay/Handles.js'
+import { SnapGuides } from './overlay/SnapGuides.js'
+
+// Shared viewport for every Arrows test — Arrows needs one for culling (its
+// viewportWorldBounds derives the world-space cull rect from camera + size).
+const VP = { width: 800, height: 600 }
+
+const geoShape = (id: string, x: number, y: number, w = 100, h = 100, rotation = 0): Shape =>
+  ({
+    id, kind: 'geo', parentId: 'page:p', index: 'a1', x, y, rotation,
+    isLocked: false, opacity: 1, meta: {}, props: { w, h },
+  }) as Shape
+
+const arrowShape = (id: string, x: number, y: number, props: Record<string, unknown> = {}): Shape =>
+  ({
+    id, kind: 'arrow', parentId: 'page:p', index: 'a1', x, y, rotation: 0,
+    isLocked: false, opacity: 1, meta: {}, props,
+  }) as Shape
+
+const endBinding = (arrowId: string, targetId: string, nx: number, ny: number): Binding => ({
+  id: `binding:${arrowId}-end` as any, fromId: arrowId as any, toId: targetId as any,
+  props: { terminal: 'end', anchor: { nx, ny } }, meta: {},
+})
+const startBinding = (arrowId: string, targetId: string, nx: number, ny: number): Binding => ({
+  id: `binding:${arrowId}-start` as any, fromId: arrowId as any, toId: targetId as any,
+  props: { terminal: 'start', anchor: { nx, ny } }, meta: {},
+})
+
+function docOf(shapes: Shape[], bindings: Binding[] = []): CanvasDocument {
+  return makeDocument({ pages: [{ id: 'page:p', name: 'P' }], shapes, bindings })
+}
+
+// Direct arithmetic reimplementation of input.ts's NORMATIVE camera
+// convention (screen = (world + camera.xy) * z) — used throughout so
+// expectations are computed independently of `worldToScreen` itself, not
+// merely re-invoking the function under test's own dependency.
+function toScreen(camera: Camera, p: { x: number; y: number }): { x: number; y: number } {
+  return { x: (p.x + camera.x) * camera.z, y: (p.y + camera.y) * camera.z }
+}
+
+// ============================================================================
+// 1. Selection: a rotated shape's outline polygon — hand-rotated corners
+//    (independent trig, NOT calling worldCorners), then converted to screen
+//    via the direct arithmetic above.
+// ============================================================================
+{
+  const theta = Math.PI / 6 // 30 degrees
+  const shape = geoShape('shape:rot', 40, 20, 80, 40, theta)
+  const camera: Camera = { x: 5, y: -10, z: 1.5 }
+  const doc = docOf([shape])
+
+  const cos = Math.cos(theta), sin = Math.sin(theta)
+  // Local box corners (0,0),(w,0),(w,h),(0,h) — hand-rotated by theta then
+  // translated by the shape's own x/y (an unparented root shape, so world ==
+  // local-rotated-then-translated with NO parent composition involved).
+  const rotate = (lx: number, ly: number) => ({ x: lx * cos - ly * sin + shape.x, y: lx * sin + ly * cos + shape.y })
+  const handCorners = [rotate(0, 0), rotate(80, 0), rotate(80, 40), rotate(0, 40)]
+  const expectedPoints = handCorners.map((c) => toScreen(camera, c)).map((p) => `${p.x},${p.y}`).join(' ')
+
+  const html = renderToStaticMarkup(
+    createElement(Selection, { snapshot: doc, selection: new Set(['shape:rot']), camera }),
+  )
+  assert.ok(html.includes(`points="${expectedPoints}"`), `rotated selection outline should be "${expectedPoints}": ${html}`)
+  assert.doesNotMatch(html, /data-overlay="selection-bounds"/, 'a SINGLE selected shape renders no separate combined-bounds rect')
+  console.log('ok: Selection — rotated shape outline matches independently hand-rotated corners')
+}
+
+// ============================================================================
+// 2. Multi-select: combined AABB bounds rect, via combinedWorldBounds (shared
+//    with Handles.tsx) — two axis-aligned shapes, union hand-computed.
+// ============================================================================
+{
+  const a = geoShape('shape:a', 0, 0, 100, 50)
+  const b = geoShape('shape:b', 200, 100, 50, 50)
+  const doc = docOf([a, b])
+  const camera: Camera = { x: 0, y: 0, z: 1 }
+
+  const bounds = combinedWorldBounds(doc, ['shape:a', 'shape:b'])
+  assert.deepEqual(bounds, { minX: 0, minY: 0, maxX: 250, maxY: 150 }, 'hand-expected union of both AABBs')
+
+  const html = renderToStaticMarkup(
+    createElement(Selection, { snapshot: doc, selection: new Set(['shape:a', 'shape:b']), camera }),
+  )
+  assert.match(html, /data-overlay="selection-bounds"/, 'multi-select renders the combined bounds rect')
+  assert.ok(html.includes('width="250"') && html.includes('height="150"'), `combined bounds rect should be 250x150: ${html}`)
+  console.log('ok: Selection — multi-select combined AABB bounds rect')
+}
+
+// ============================================================================
+// 3. Handles: screen positions cross-checked by COMPOSING the library
+//    functions by hand (selectionHandles + worldToScreen), for a known
+//    camera — one handle ('nw') spot-checked exactly.
+// ============================================================================
+{
+  const bounds = { minX: 10, minY: 20, maxX: 110, maxY: 120 }
+  const camera: Camera = { x: 3, y: 4, z: 2 }
+  const handles = selectionHandles(bounds)
+  const nw = handles.find((h) => h.id === 'nw')!
+  const expectedNw = worldToScreen(camera, nw.point) // composed by hand from the two library primitives
+  assert.deepEqual(expectedNw, { x: (10 + 3) * 2, y: (20 + 4) * 2 }, 'sanity: hand arithmetic agrees with worldToScreen')
+
+  const html = renderToStaticMarkup(createElement(Handles, { bounds, camera }))
+  const expectedX = expectedNw.x - 8 / 2 // HANDLE_SIZE_PX = 8, rect is centered on the point
+  const expectedY = expectedNw.y - 8 / 2
+  assert.ok(
+    html.includes(`data-handle-id="nw"`) && html.includes(`x="${expectedX}"`) && html.includes(`y="${expectedY}"`),
+    `nw handle rect should be positioned at (${expectedX},${expectedY}): ${html}`,
+  )
+  // All 9 handles present.
+  for (const h of handles) assert.match(html, new RegExp(`data-handle-id="${h.id}"`), `handle ${h.id} should render`)
+  console.log('ok: Handles — nw handle screen position cross-checked against selectionHandles + worldToScreen composed by hand')
+}
+
+// ============================================================================
+// 4. Zoom independence: the SAME bounds under z=1 and z=4 render handle
+//    rects of the IDENTICAL pixel size (8x8) — only the CENTER moves, per
+//    worldToScreen, never the glyph's own dimensions.
+// ============================================================================
+{
+  const bounds = { minX: 0, minY: 0, maxX: 100, maxY: 100 }
+  const htmlZ1 = renderToStaticMarkup(createElement(Handles, { bounds, camera: { x: 0, y: 0, z: 1 } }))
+  const htmlZ4 = renderToStaticMarkup(createElement(Handles, { bounds, camera: { x: 0, y: 0, z: 4 } }))
+  const sizeRe = /data-handle-id="nw"[^>]*width="(-?[\d.]+)"[^>]*height="(-?[\d.]+)"/
+  const m1 = htmlZ1.match(sizeRe)
+  const m4 = htmlZ4.match(sizeRe)
+  assert.ok(m1 && m4, `both renders should expose the nw handle's rect width/height: z1=${htmlZ1} z4=${htmlZ4}`)
+  assert.equal(m1![1], '8', 'z=1: handle width is the fixed 8px constant')
+  assert.equal(m4![1], '8', 'z=4: handle width is STILL the fixed 8px constant — zoom-independent')
+  assert.equal(m1![1], m4![1])
+  assert.equal(m1![2], m4![2])
+  console.log('ok: Handles — zoom-independent screen size (8px at both z=1 and z=4)')
+}
+
+// ============================================================================
+// 4b. note-fixed-size task: `hideResizeHandles` suppresses the 4 corner + 4
+//    edge handles, leaving ONLY the rotate handle painted. Default (prop
+//    omitted) keeps painting all 9, unchanged — every existing call site
+//    above this one never passes the prop, so this is purely additive.
+// ============================================================================
+{
+  const bounds = { minX: 0, minY: 0, maxX: 200, maxY: 200 }
+  const camera: Camera = { x: 0, y: 0, z: 1 }
+  const htmlHidden = renderToStaticMarkup(createElement(Handles, { bounds, camera, hideResizeHandles: true }))
+  assert.match(htmlHidden, /data-handle-id="rotate"/, 'rotate handle still paints when resize handles are hidden')
+  for (const id of ['nw', 'n', 'ne', 'e', 'se', 's', 'sw', 'w']) {
+    assert.doesNotMatch(htmlHidden, new RegExp(`data-handle-id="${id}"`), `corner/edge handle "${id}" must not paint when hideResizeHandles is true`)
+  }
+  const htmlShown = renderToStaticMarkup(createElement(Handles, { bounds, camera, hideResizeHandles: false }))
+  for (const h of selectionHandles(bounds)) {
+    assert.match(htmlShown, new RegExp(`data-handle-id="${h.id}"`), `handle ${h.id} should still paint when hideResizeHandles is false`)
+  }
+  const htmlDefault = renderToStaticMarkup(createElement(Handles, { bounds, camera }))
+  assert.equal(htmlDefault, htmlShown, 'omitting hideResizeHandles defaults to false (paints all 9, byte-identical to explicit false)')
+  console.log('ok: Handles — hideResizeHandles suppresses corner/edge handles, keeps rotate, defaults to false')
+}
+
+// ============================================================================
+// 5. SnapGuides: exact line coordinates for one x-axis and one y-axis guide,
+//    hand-computed against a known camera + viewport.
+// ============================================================================
+{
+  const camera: Camera = { x: 10, y: -20, z: 2 }
+  const viewportSize = { width: 800, height: 600 }
+  const snapResult: SnapResult = {
+    dx: 0, dy: 0,
+    guides: [{ axis: 'x', at: 50, kind: 'edge' }, { axis: 'y', at: 30, kind: 'center' }],
+  }
+  const html = renderToStaticMarkup(createElement(SnapGuides, { snapResult, camera, viewportSize }))
+
+  const screenX = toScreen(camera, { x: 50, y: 0 }).x
+  const screenY = toScreen(camera, { x: 0, y: 30 }).y
+  assert.ok(
+    html.includes(`data-snap-axis="x"`) && html.includes(`x1="${screenX}"`) && html.includes(`y1="0"`) && html.includes(`y2="${viewportSize.height}"`),
+    `x-axis guide should be a full-height vertical line at screen-x=${screenX}: ${html}`,
+  )
+  assert.ok(
+    html.includes(`data-snap-axis="y"`) && html.includes(`y1="${screenY}"`) && html.includes(`x1="0"`) && html.includes(`x2="${viewportSize.width}"`),
+    `y-axis guide should be a full-width horizontal line at screen-y=${screenY}: ${html}`,
+  )
+  console.log('ok: SnapGuides — exact hand-computed line coordinates, full-viewport-length')
+}
+
+// ============================================================================
+// 6. Empty selection / no snap result: nothing renders.
+// ============================================================================
+{
+  const doc = docOf([geoShape('shape:a', 0, 0)])
+  const camera: Camera = { x: 0, y: 0, z: 1 }
+  const selHtml = renderToStaticMarkup(createElement(Selection, { snapshot: doc, selection: new Set<string>(), camera }))
+  assert.equal(selHtml, '', 'empty selection renders nothing from Selection')
+  const handlesHtml = renderToStaticMarkup(createElement(Handles, { bounds: null, camera }))
+  assert.equal(handlesHtml, '', 'null bounds (empty/vanished selection) renders nothing from Handles')
+  const guidesHtml = renderToStaticMarkup(createElement(SnapGuides, { camera, viewportSize: { width: 100, height: 100 } }))
+  assert.equal(guidesHtml, '', 'no snapResult renders nothing from SnapGuides')
+  console.log('ok: empty selection / absent snap result render nothing')
+}
+
+// ============================================================================
+// 6b. Hover (Task visual-chrome, gaps "hover shape indicator" / "hover
+//     outline"): editorState.hover was computed and stored (canvas-editor's
+//     select tool) but never painted — this component is that paint step.
+// ============================================================================
+{
+  // hover === null -> nothing.
+  {
+    const doc = docOf([geoShape('shape:a', 0, 0)])
+    const camera: Camera = { x: 0, y: 0, z: 1 }
+    const html = renderToStaticMarkup(createElement(Hover, { snapshot: doc, hover: null, selection: new Set<string>(), camera }))
+    assert.equal(html, '', 'hover===null renders nothing')
+  }
+  // Hovering a shape ALREADY in the selection renders nothing (its own
+  // selection outline already gives that feedback — tldraw parity, see
+  // ShapeIndicatorOverlayUtil.ts's `!idsToDisplay.includes(hovered)` guard).
+  {
+    const doc = docOf([geoShape('shape:a', 0, 0)])
+    const camera: Camera = { x: 0, y: 0, z: 1 }
+    const html = renderToStaticMarkup(
+      createElement(Hover, { snapshot: doc, hover: 'shape:a', selection: new Set(['shape:a']), camera }),
+    )
+    assert.equal(html, '', 'a hovered shape that is ALSO selected renders no separate hover indicator')
+  }
+  // Hovering a non-selected shape draws its outline — exact screen points,
+  // hand-computed independently (same convention as case 1 above).
+  {
+    const shape = geoShape('shape:hover', 10, 20, 40, 30)
+    const doc = docOf([shape])
+    const camera: Camera = { x: 5, y: -10, z: 1.5 }
+    const corners = [{ x: 10, y: 20 }, { x: 50, y: 20 }, { x: 50, y: 50 }, { x: 10, y: 50 }]
+    const expectedPoints = corners.map((c) => toScreen(camera, c)).map((p) => `${p.x},${p.y}`).join(' ')
+    const html = renderToStaticMarkup(
+      createElement(Hover, { snapshot: doc, hover: 'shape:hover', selection: new Set<string>(), camera }),
+    )
+    assert.ok(
+      html.includes(`data-overlay="hover-indicator"`) && html.includes(`points="${expectedPoints}"`),
+      `hovering an unselected shape should draw its outline at "${expectedPoints}": ${html}`,
+    )
+    assert.match(html, /stroke-width="1.5"/, `hover indicator should stroke at 1.5px (tldraw parity): ${html}`)
+  }
+  // Arrow special case: hovering an arrow traces its routed path (same
+  // shapeOutlineNode dispatch Selection.tsx's own arrow case uses).
+  {
+    const arrow = arrowShape('shape:arrow-hover', 0, 0, { end: { x: 100, y: 0 } })
+    const doc = docOf([arrow])
+    const camera: Camera = { x: 10, y: -5, z: 2 }
+    const startScreen = toScreen(camera, { x: 0, y: 0 })
+    const endScreen = toScreen(camera, { x: 100, y: 0 })
+    const html = renderToStaticMarkup(
+      createElement(Hover, { snapshot: doc, hover: 'shape:arrow-hover', selection: new Set<string>(), camera }),
+    )
+    assert.ok(html.includes('<path'), `an arrow's hover indicator should be a <path>, not a <polygon>: ${html}`)
+    assert.ok(
+      html.includes(`d="M ${startScreen.x} ${startScreen.y} L ${endScreen.x} ${endScreen.y}"`),
+      `an arrow's hover indicator should trace its routed path: ${html}`,
+    )
+  }
+  console.log('ok: Hover — null/already-selected render nothing, an unselected hover draws its outline at 1.5px, an arrow traces its routed path')
+}
+
+// ============================================================================
+// 7. Arrows: unbound straight arrow — hand-computed screen path string.
+// ============================================================================
+{
+  const arrow = arrowShape('shape:arrow', 0, 0, { end: { x: 100, y: 0 } })
+  const doc = docOf([arrow])
+  const camera: Camera = { x: 10, y: -5, z: 2 }
+  const startScreen = toScreen(camera, { x: 0, y: 0 })
+  const endScreen = toScreen(camera, { x: 100, y: 0 })
+  const expectedD = `M ${startScreen.x} ${startScreen.y} L ${endScreen.x} ${endScreen.y}`
+
+  const html = renderToStaticMarkup(createElement(Arrows, { snapshot: doc, camera, viewportSize: VP, index: buildSpatialIndex(doc) }))
+  assert.ok(html.includes(`d="${expectedD}"`), `straight arrow path should be "${expectedD}": ${html}`)
+  console.log('ok: Arrows — straight path, hand-computed screen coordinates')
+}
+
+// ============================================================================
+// 8. Arrows: curved (bend != 0) — hand-computed control point (chord midpoint
+//    + bend along the chord's perpendicular, same convention arrow-route.
+//    test.ts pins) THEN converted to screen, composing a Q path.
+// ============================================================================
+{
+  const arrow = arrowShape('shape:arrow', 0, 0, { end: { x: 100, y: 0 }, bend: 10 })
+  const doc = docOf([arrow])
+  const camera: Camera = { x: 10, y: -5, z: 2 }
+  // Hand-derived per arrow-route.ts's curveMid: horizontal chord (0,0)->
+  // (100,0), unit dir (1,0), perpendicular (0,1) -> mid = (50,0) + 10*(0,1) = (50,10).
+  const expectedMidWorld = { x: 50, y: 10 }
+  const startScreen = toScreen(camera, { x: 0, y: 0 })
+  const endScreen = toScreen(camera, { x: 100, y: 0 })
+  const midScreen = toScreen(camera, expectedMidWorld)
+  const expectedD = `M ${startScreen.x} ${startScreen.y} Q ${midScreen.x} ${midScreen.y} ${endScreen.x} ${endScreen.y}`
+
+  const html = renderToStaticMarkup(createElement(Arrows, { snapshot: doc, camera, viewportSize: VP, index: buildSpatialIndex(doc) }))
+  assert.ok(html.includes(`d="${expectedD}"`), `curved arrow path should be "${expectedD}": ${html}`)
+  console.log('ok: Arrows — curved path, hand-computed control point')
+}
+
+// ============================================================================
+// 9. Arrowhead tangent orientation: STRAIGHT arrow orients along
+//    (end - start); CURVED arrow orients along (end - mid), NOT (end -
+//    start) — both hand-computed via direct rotation math matching the
+//    default 'arrow' glyph (an OPEN chevron — tldraw's real default, ported
+//    in arrowheadGlyph's 'arrow'/default case; see that function's doc
+//    comment for the source citation), scaled by headScale (strokeWidth /
+//    DEFAULT_STROKE_WIDTH_PX — here 3/1.5 = 2, since z=2 and no props.size
+//    is set: baseStrokeWidth 1.5 * z 2 = 3).
+// ============================================================================
+{
+  const camera: Camera = { x: 10, y: -5, z: 2 }
+  const HEAD_SCALE = 2 // (1.5 * z2) / 1.5
+
+  // Mirrors arrowheadGlyph's 'arrow' case exactly, independently
+  // re-implemented (not calling the library function) so this is a real
+  // cross-check, not an echo of the implementation.
+  function handChevron(tail: { x: number; y: number }, tip: { x: number; y: number }, scale: number) {
+    const len = 10 * scale
+    const dx = tip.x - tail.x, dy = tip.y - tail.y
+    const dist = Math.hypot(dx, dy)
+    const int = { x: tip.x + (-dx / dist) * len, y: tip.y + (-dy / dist) * len }
+    const rotAround = (p: { x: number; y: number }, center: { x: number; y: number }, angle: number) => {
+      const d = { x: p.x - center.x, y: p.y - center.y }
+      const c = Math.cos(angle), s = Math.sin(angle)
+      return { x: center.x + d.x * c - d.y * s, y: center.y + d.x * s + d.y * c }
+    }
+    const PL = rotAround(int, tip, Math.PI / 6)
+    const PR = rotAround(int, tip, -Math.PI / 6)
+    return [PL, tip, PR] as const
+  }
+
+  // Pulls the 3 numeric points out of a rendered `d="M x y L x y L x y"`
+  // chevron string — a float-tolerant cross-check (the test's own
+  // independently-ordered floating point arithmetic need not produce the
+  // EXACT same last-ULP string as the library's, only the same point within
+  // epsilon).
+  function parseChevron(d: string): [{ x: number; y: number }, { x: number; y: number }, { x: number; y: number }] {
+    const nums = d.match(/-?\d+(\.\d+)?(e-?\d+)?/g)!.map(Number)
+    return [{ x: nums[0]!, y: nums[1]! }, { x: nums[2]!, y: nums[3]! }, { x: nums[4]!, y: nums[5]! }]
+  }
+  function assertPointsClose(actual: readonly { x: number; y: number }[], expected: readonly { x: number; y: number }[], msg: string) {
+    for (let i = 0; i < 3; i++) {
+      assert.ok(Math.abs(actual[i]!.x - expected[i]!.x) < 1e-6 && Math.abs(actual[i]!.y - expected[i]!.y) < 1e-6, `${msg} — point ${i}: ${JSON.stringify(actual[i])} vs ${JSON.stringify(expected[i])}`)
+    }
+  }
+
+  // Straight: tail = start, tip = end.
+  {
+    const startScreen = toScreen(camera, { x: 0, y: 0 })
+    const endScreen = toScreen(camera, { x: 100, y: 0 })
+    const expected = handChevron(startScreen, endScreen, HEAD_SCALE)
+    const doc = docOf([arrowShape('shape:arrow', 0, 0, { end: { x: 100, y: 0 } })])
+    const html = renderToStaticMarkup(createElement(Arrows, { snapshot: doc, camera, viewportSize: VP, index: buildSpatialIndex(doc) }))
+    const dMatch = html.match(/data-overlay="arrowhead" d="([^"]+)"/)
+    assert.ok(dMatch, `expected a rendered arrowhead path: ${html}`)
+    assertPointsClose(parseChevron(dMatch![1]!), expected, 'straight arrowhead should point along (end-start)')
+    console.log('ok: Arrows — straight arrowhead oriented along (end - start)')
+  }
+
+  // Curved: tail = mid (NOT start) — the whole point of this test.
+  {
+    const midScreen = toScreen(camera, { x: 50, y: 10 })
+    const endScreen = toScreen(camera, { x: 100, y: 0 })
+    const expected = handChevron(midScreen, endScreen, HEAD_SCALE)
+    const doc = docOf([arrowShape('shape:arrow', 0, 0, { end: { x: 100, y: 0 }, bend: 10 })])
+    const html = renderToStaticMarkup(createElement(Arrows, { snapshot: doc, camera, viewportSize: VP, index: buildSpatialIndex(doc) }))
+    const dMatch = html.match(/data-overlay="arrowhead" d="([^"]+)"/)
+    assert.ok(dMatch, `expected a rendered arrowhead path: ${html}`)
+    assertPointsClose(parseChevron(dMatch![1]!), expected, 'curved arrowhead should point along (end-mid), NOT (end-start)')
+    console.log('ok: Arrows — curved arrowhead oriented along (end - mid), not (end - start)')
+  }
+}
+
+// ============================================================================
+// 10. A BOUND arrow re-routes when the snapshot moves the target: two
+//     renders, the target translated between them, the rendered path's
+//     start point moves accordingly — proving arrows read live snapshot
+//     state each render rather than a cached bind-time position.
+// ============================================================================
+{
+  const camera: Camera = { x: 0, y: 0, z: 1 } // identity — screen == world, isolates the assertion to routing, not projection
+  const arrow = arrowShape('shape:arrow', 50, 50, { end: { x: 500, y: 0 } })
+  const bindings = [startBinding('shape:arrow', 'shape:a', 0.5, 0.5)]
+
+  const a0 = geoShape('shape:a', 0, 0, 100, 100)
+  const before = docOf([a0, arrow], bindings)
+  const htmlBefore = renderToStaticMarkup(createElement(Arrows, { snapshot: before, camera, viewportSize: VP, index: buildSpatialIndex(before) }))
+  assert.ok(htmlBefore.includes('d="M 100 50'), `before the move, bound start should clip to A's original right edge (100,50): ${htmlBefore}`)
+
+  const a1 = geoShape('shape:a', 200, 0, 100, 100) // translated +200 on x
+  const after = docOf([a1, arrow], bindings)
+  const htmlAfter = renderToStaticMarkup(createElement(Arrows, { snapshot: after, camera, viewportSize: VP, index: buildSpatialIndex(after) }))
+  assert.ok(htmlAfter.includes('d="M 300 50'), `after the move, bound start should clip to A's NEW right edge (300,50): ${htmlAfter}`)
+  assert.notEqual(htmlBefore, htmlAfter, 'the two renders must actually differ')
+  console.log('ok: Arrows — a bound arrow re-routes against the live snapshot when its target moves')
+}
+
+// ============================================================================
+// 11. Arrow CULLING: with the camera parked over one small region, only the
+//     near arrow renders — five arrows living ~10k world units away are
+//     culled (their own shape bbox is off-viewport, they have no bindings,
+//     and their approximate segment bbox doesn't touch the viewport either).
+//     RED-FIRST: written against the pre-culling Arrows (which routed and
+//     rendered every arrow in the doc unconditionally) — all five far ids
+//     appeared in the output and this block failed.
+// ============================================================================
+{
+  const camera: Camera = { x: 0, y: 0, z: 1 } // viewport = world [0,800]x[0,600]
+  const near = arrowShape('shape:near', 100, 100, { end: { x: 100, y: 0 } })
+  const fars = [0, 1, 2, 3, 4].map((i) => arrowShape(`shape:far${i}`, 10_000 + i * 1_000, 10_000, { end: { x: 100, y: 0 } }))
+  const doc = docOf([near, ...fars])
+
+  const html = renderToStaticMarkup(createElement(Arrows, { snapshot: doc, camera, viewportSize: VP, index: buildSpatialIndex(doc) }))
+  assert.ok(html.includes('data-shape-id="shape:near"'), `the near arrow must render: ${html}`)
+  for (let i = 0; i < 5; i++) {
+    assert.ok(!html.includes(`data-shape-id="shape:far${i}"`), `far arrow shape:far${i} must be culled: ${html}`)
+  }
+  console.log('ok: Arrows — culling: only the near arrow renders, five ~10k-units-away arrows culled')
+}
+
+// ============================================================================
+// 12. Culling MUST NOT drop a spanning arrow (the over-inclusion bound's
+//     non-negotiable half): both endpoints off-viewport — start at world
+//     (-1000, 300), end at (2000, 300) — but the segment crosses the whole
+//     viewport horizontally. The arrow's own shape bbox sits off-screen at
+//     x=-1000 and there are no bindings, so only the approximate-segment-
+//     bbox check (cull path (c)) can save it. ALSO: a bound arrow whose own
+//     stored position is far away but whose TARGET is on-screen must render
+//     (cull path (b)/(c) via the target).
+// ============================================================================
+{
+  const camera: Camera = { x: 0, y: 0, z: 1 }
+  const spanning = arrowShape('shape:span', -1000, 300, { end: { x: 3000, y: 0 } }) // world end = (2000, 300)
+  const target = geoShape('shape:target', 300, 200, 100, 100) // on-screen
+  const boundFarArrow = arrowShape('shape:boundfar', 5000, 5000) // own bbox far off-screen
+  const bindings = [endBinding('shape:boundfar', 'shape:target', 0.5, 0.5)]
+  const doc = docOf([spanning, target, boundFarArrow], bindings)
+
+  const html = renderToStaticMarkup(createElement(Arrows, { snapshot: doc, camera, viewportSize: VP, index: buildSpatialIndex(doc) }))
+  assert.ok(html.includes('data-shape-id="shape:span"'), `the spanning arrow (both endpoints off-viewport, segment crosses it) MUST render: ${html}`)
+  assert.ok(html.includes('data-shape-id="shape:boundfar"'), `the far-away arrow bound to an ON-SCREEN target MUST render: ${html}`)
+  console.log('ok: Arrows — spanning arrow and far-arrow-with-visible-target both survive culling')
+}
+
+// ============================================================================
+// 13. Culling actually SKIPS the routing work (the perf point, pinned via
+//     the injectable routeFn test seam): near + spanning + 5 far arrows —
+//     routeFn is called EXACTLY twice (the two renderable arrows), never
+//     for the culled five. RED-FIRST: the pre-culling Arrows had no routeFn
+//     seam and routed all 7 unconditionally — this block failed with
+//     calls=0 (prop ignored).
+// ============================================================================
+{
+  const camera: Camera = { x: 0, y: 0, z: 1 }
+  const near = arrowShape('shape:near', 100, 100, { end: { x: 100, y: 0 } })
+  const spanning = arrowShape('shape:span', -1000, 300, { end: { x: 3000, y: 0 } })
+  const fars = [0, 1, 2, 3, 4].map((i) => arrowShape(`shape:far${i}`, 10_000 + i * 1_000, 10_000, { end: { x: 100, y: 0 } }))
+  const doc = docOf([near, spanning, ...fars])
+
+  const routed: string[] = []
+  const countingRoute: typeof routeArrow = (snapshot, arrow, bindings) => {
+    routed.push(arrow.id)
+    return routeArrow(snapshot, arrow, bindings)
+  }
+  const html = renderToStaticMarkup(createElement(Arrows, { snapshot: doc, camera, viewportSize: VP, index: buildSpatialIndex(doc), routeFn: countingRoute }))
+  assert.ok(html.includes('data-shape-id="shape:near"') && html.includes('data-shape-id="shape:span"'), `both renderable arrows present: ${html}`)
+  assert.deepEqual(routed.sort(), ['shape:near', 'shape:span'], `routeFn must be called EXACTLY for the two renderable arrows, never the culled five — got [${routed.join(', ')}]`)
+  console.log('ok: Arrows — routing cost bounded by visible+spanning (routeFn called 2x for 7 arrows)')
+}
+
+// ============================================================================
+// 14. Culling soundness REGRESSION (reviewer's constructed counterexample —
+//     the centroid approximation violated the one-sided guarantee): target
+//     rect x∈[-900,-100], y∈[-800,700], entirely LEFT of the viewport
+//     [0,800]x[0,600] (cull check (b) fails); arrow start BOUND at anchor
+//     (nx=1, ny=1) -> world (-100,700) (the rect's bottom-right corner);
+//     unbound end at world (900,-100); the arrow's own x/y parked at
+//     (5000,5000) (check (a) fails). The routed segment (-100,700) ->
+//     (900,-100) crosses the viewport — enters at (25,600), passes through
+//     (100,540) at t=0.2 — but the OLD check (c) approximated the bound
+//     terminal by the target's worldBounds CENTROID (-500,-50), giving a
+//     segment bbox with maxY=-50 that misses the viewport entirely: a
+//     VISIBLE arrow was dropped. RED-FIRST: this block failed against the
+//     centroid-based (c) (shape:sneaky absent from the output); green after
+//     (c) unions the target's WHOLE worldBounds into the bbox.
+// ============================================================================
+{
+  const camera: Camera = { x: 0, y: 0, z: 1 } // viewport = world [0,800]x[0,600]
+  const target = geoShape('shape:tall', -900, -800, 800, 1500) // worldBounds [-900,-100]x[-800,700]
+  // props.end is a LOCAL OFFSET from the arrow's own x/y: world end =
+  // (5000-4100, 5000-5100) = (900,-100).
+  const arrow = arrowShape('shape:sneaky', 5000, 5000, { end: { x: -4100, y: -5100 } })
+  const bindings = [startBinding('shape:sneaky', 'shape:tall', 1, 1)] // anchor world (-100, 700)
+  const doc = docOf([target, arrow], bindings)
+
+  // Sanity on the construction itself (independent arithmetic): the raw
+  // segment from the anchor (-100,700) to the unbound end (900,-100) at
+  // t=0.2 sits at (100,540) — inside the viewport — while the OLD centroid
+  // bbox topped out at maxY=-50, entirely above the viewport's y range.
+  const segAt = (t: number) => ({ x: -100 + t * 1000, y: 700 - t * 800 })
+  const probe = segAt(0.2)
+  assert.deepEqual(probe, { x: 100, y: 540 }, 'construction sanity: the routed chord passes through (100,540)')
+  assert.ok(probe.x >= 0 && probe.x <= 800 && probe.y >= 0 && probe.y <= 600, 'construction sanity: that point is inside the viewport')
+
+  const html = renderToStaticMarkup(createElement(Arrows, { snapshot: doc, camera, viewportSize: VP, index: buildSpatialIndex(doc) }))
+  assert.ok(html.includes('data-shape-id="shape:sneaky"'), `a VISIBLE bound arrow must never be culled — check (c) must union the target's whole worldBounds: ${html}`)
+  console.log('ok: Arrows — culling soundness: bound-terminal counterexample (visible segment, off-screen target + endpoints) renders')
+}
+
+// ============================================================================
+// 15. Arrow styling — props.color: reuses GeoShape.tsx's GEO_COLORS table
+//     (same color->hex map every other colored shape kind uses), NOT a
+//     second hand-copied table. Expected hex hand-copied from GeoShape.tsx's
+//     GEO_COLORS.blue.solid ('#4465e9') rather than importing GEO_COLORS
+//     into this test, so the assertion doesn't just echo the implementation
+//     back at itself. RED-FIRST: before this task, Arrows.tsx hardcoded
+//     ARROW_STROKE ('var(--canvas-arrow, #1a1a1a)') and ignored props.color
+//     entirely — this block failed against that code (stroke stayed the
+//     hardcoded var(), never '#4465e9').
+// ============================================================================
+{
+  const camera: Camera = { x: 0, y: 0, z: 1 }
+  const arrow = arrowShape('shape:blue', 0, 0, { color: 'blue', end: { x: 100, y: 0 } })
+  const doc = docOf([arrow])
+  const html = renderToStaticMarkup(createElement(Arrows, { snapshot: doc, camera, viewportSize: VP, index: buildSpatialIndex(doc) }))
+  assert.match(html, /data-shape-id="shape:blue"[\s\S]*?stroke="#4465e9"/, `props.color:'blue' should stroke with GEO_COLORS.blue.solid ('#4465e9'), not the hardcoded default: ${html}`)
+  console.log("ok: Arrows — props.color:'blue' resolves via the shared GEO_COLORS table, not the hardcoded stroke")
+}
+
+// ============================================================================
+// 16. Arrow styling — props.dash: reuses GeoShape.tsx's dashArray() (same
+//     strokeWidth-scaled dasharray formula geo dashed/dotted uses).
+//     strokeWidth here is the pre-existing hardcoded default (1.5px — no
+//     props.size given), since dash and size are independent axes.
+//     dashed -> "3 3" (strokeWidth*DASH_LENGTH_RATIO(2) both segment+gap);
+//     dotted -> "0.015 3.75" (strokeWidth/DOT_RATIO(100) dot,
+//     strokeWidth*DOT_GAP_MULTIPLIER(2.5) gap) — hand-computed from the
+//     formulas GeoShape.tsx's module header DASH ARRAYS documents, not by
+//     calling dashArray() from the test. solid -> no strokeDasharray
+//     attribute at all (a plain, undashed stroke). RED-FIRST: before this
+//     task, Arrows.tsx never emitted a strokeDasharray attribute at all —
+//     dashed and dotted rendered IDENTICALLY (both plain solid lines).
+// ============================================================================
+{
+  const camera: Camera = { x: 0, y: 0, z: 1 }
+  const dashedArrow = arrowShape('shape:dashed', 0, 0, { dash: 'dashed', end: { x: 100, y: 0 } })
+  const dottedArrow = arrowShape('shape:dotted', 0, 200, { dash: 'dotted', end: { x: 100, y: 200 } })
+  const solidArrow = arrowShape('shape:solid', 0, 400, { dash: 'solid', end: { x: 100, y: 400 } })
+  const doc = docOf([dashedArrow, dottedArrow, solidArrow])
+  const html = renderToStaticMarkup(createElement(Arrows, { snapshot: doc, camera, viewportSize: VP, index: buildSpatialIndex(doc) }))
+  assert.match(html, /data-shape-id="shape:dashed"[\s\S]*?stroke-dasharray="3 3"/, `props.dash:'dashed' at the default strokeWidth(1.5) should be stroke-dasharray="3 3": ${html}`)
+  assert.match(html, /data-shape-id="shape:dotted"[\s\S]*?stroke-dasharray="0\.015 3\.75"/, `props.dash:'dotted' at the default strokeWidth(1.5) should be stroke-dasharray="0.015 3.75" — DIFFERENT from dashed's: ${html}`)
+  const solidSection = html.slice(html.indexOf('data-shape-id="shape:solid"'))
+  assert.doesNotMatch(solidSection.slice(0, solidSection.indexOf('</g>')), /stroke-dasharray/, `props.dash:'solid' should have NO stroke-dasharray attribute: ${html}`)
+  console.log('ok: Arrows — props.dash dashed/dotted/solid each resolve to distinct dasharray via the shared dashArray()')
+}
+
+// ============================================================================
+// 17. Arrow styling — props.size: reuses GeoShape.tsx's STROKE_WIDTH_PX
+//     table (s:2, m:3.5, l:5, xl:10). 'xl' must render strictly wider than
+//     's'. RED-FIRST: before this task, Arrows.tsx hardcoded
+//     strokeWidth={1.5} regardless of props.size — both would have rendered
+//     identically at 1.5, failing the "strictly wider" assertion.
+// ============================================================================
+{
+  const camera: Camera = { x: 0, y: 0, z: 1 }
+  const small = arrowShape('shape:s', 0, 0, { size: 's', end: { x: 100, y: 0 } })
+  const xl = arrowShape('shape:xl', 0, 200, { size: 'xl', end: { x: 100, y: 200 } })
+  const doc = docOf([small, xl])
+  const html = renderToStaticMarkup(createElement(Arrows, { snapshot: doc, camera, viewportSize: VP, index: buildSpatialIndex(doc) }))
+  assert.match(html, /data-shape-id="shape:s"[\s\S]*?stroke-width="2"/, `props.size:'s' should be STROKE_WIDTH_PX.s (2): ${html}`)
+  assert.match(html, /data-shape-id="shape:xl"[\s\S]*?stroke-width="10"/, `props.size:'xl' should be STROKE_WIDTH_PX.xl (10), wider than 's': ${html}`)
+  console.log("ok: Arrows — props.size:'xl' renders wider strokeWidth than 's', via the shared STROKE_WIDTH_PX table")
+}
+
+// ============================================================================
+// 18. Arrow styling — props.arrowheadEnd/arrowheadStart: 'none' suppresses
+//     the arrowhead at that end; any other value draws one. Default (no
+//     props at all) matches the OLD hardcoded behavior exactly — one
+//     arrowhead, at the end only (shape.ts's documented tldraw defaults:
+//     arrowheadStart:'none', arrowheadEnd:'arrow') — so the pre-existing
+//     "no props" test in block 7/8 above still passing after this change is
+//     itself evidence the default path didn't regress. RED-FIRST: before
+//     this task, Arrows.tsx ALWAYS rendered exactly one
+//     data-overlay="arrowhead" polygon (at the end) regardless of
+//     arrowheadEnd/arrowheadStart — so arrowheadEnd:'none' (expecting ZERO
+//     end polygons) and arrowheadStart:'triangle' (expecting ONE start
+//     polygon where none ever rendered) both failed against that code.
+// ============================================================================
+{
+  const camera: Camera = { x: 0, y: 0, z: 1 }
+  const noEndHead = arrowShape('shape:no-end-head', 0, 0, { arrowheadEnd: 'none', end: { x: 100, y: 0 } })
+  const bothHeads = arrowShape('shape:both-heads', 0, 200, { arrowheadStart: 'triangle', arrowheadEnd: 'triangle', end: { x: 100, y: 200 } })
+  const doc = docOf([noEndHead, bothHeads])
+  const html = renderToStaticMarkup(createElement(Arrows, { snapshot: doc, camera, viewportSize: VP, index: buildSpatialIndex(doc) }))
+
+  const noEndSection = html.slice(html.indexOf('data-shape-id="shape:no-end-head"'), html.indexOf('data-shape-id="shape:both-heads"'))
+  assert.doesNotMatch(noEndSection, /data-overlay="arrowhead"/, `arrowheadEnd:'none' should render NO arrowhead polygon: ${html}`)
+
+  const bothSection = html.slice(html.indexOf('data-shape-id="shape:both-heads"'))
+  const headMatches = bothSection.match(/data-overlay="arrowhead"/g) ?? []
+  assert.equal(headMatches.length, 2, `arrowheadStart+arrowheadEnd both non-'none' should render TWO arrowhead polygons (one per end): ${html}`)
+  console.log("ok: Arrows — arrowheadEnd:'none' suppresses the end arrowhead; arrowheadStart:'triangle' draws a start arrowhead the old code never had")
+}
+
+// ============================================================================
+// 13. Task arrow-body (gap 2/3): an arrow's selection indicator must trace
+//    its actual routed path (straight or curved, bound or unbound) — NOT
+//    worldCorners' box quad, which for an arrow is the stale localBounds
+//    100x100-at-start default. Selection.tsx special-cases kind === 'arrow'
+//    to draw routeArrow's own path (the SAME path Arrows.tsx renders) as an
+//    SVG <path>, never a <polygon> box, for that shape.
+// ============================================================================
+{
+  const camera: Camera = { x: 0, y: 0, z: 1 }
+  const arrow = arrowShape('shape:arrow', 200, 300, { end: { x: 400, y: 0 } })
+  const doc = docOf([arrow])
+  const routed = routeArrow(doc, arrow, doc.bindings)
+  const startScreen = worldToScreen(camera, routed.start)
+  const endScreen = worldToScreen(camera, routed.end)
+
+  const html = renderToStaticMarkup(createElement(Selection, { snapshot: doc, selection: new Set(['shape:arrow']), camera }))
+  assert.doesNotMatch(html, /<polygon/, `an arrow's selection indicator must not be a box polygon: ${html}`)
+  assert.match(html, /<path/, `an arrow's selection indicator must be a path tracing its routed line: ${html}`)
+  assert.ok(
+    html.includes(`M ${startScreen.x} ${startScreen.y} L ${endScreen.x} ${endScreen.y}`),
+    `arrow selection path should trace the exact routed straight segment: ${html}`,
+  )
+  console.log('ok: Selection — straight arrow indicator traces its routed start->end path, not a box quad')
+}
+
+{
+  const camera: Camera = { x: 10, y: -5, z: 2 }
+  const arrow = arrowShape('shape:curved', 0, 0, { end: { x: 200, y: 0 }, bend: 40 })
+  const doc = docOf([arrow])
+  const routed = routeArrow(doc, arrow, doc.bindings)
+  const startScreen = worldToScreen(camera, routed.start)
+  const endScreen = worldToScreen(camera, routed.end)
+  const midScreen = worldToScreen(camera, routed.mid!)
+
+  const html = renderToStaticMarkup(createElement(Selection, { snapshot: doc, selection: new Set(['shape:curved']), camera }))
+  assert.ok(
+    html.includes(`M ${startScreen.x} ${startScreen.y} Q ${midScreen.x} ${midScreen.y} ${endScreen.x} ${endScreen.y}`),
+    `curved arrow selection path should trace the exact quadratic control point, converted to screen under this camera: ${html}`,
+  )
+  console.log('ok: Selection — curved arrow indicator traces its routed quadratic Bézier, respecting camera')
+}
+
+// ============================================================================
+// 19. Arrowhead GLYPH VARIANTS (arrow-handles task, gap 4): each of the 8
+//     non-'none' ARROWHEAD values renders a STRUCTURALLY DISTINCT glyph, not
+//     the same triangle repeated 8 times -- 'dot' renders a <circle>, every
+//     other type a <path> with its own distinct `d`, and no two path `d`s
+//     coincide. 'pipe' renders NOTHING (checked against tldraw source --
+//     arrowheads.ts's getArrowheadPathForType has no 'pipe' case and falls
+//     through to `return ''` -- see arrowheadGlyph's own module comment).
+//     RED-FIRST: before this task every non-'none' type rendered the exact
+//     same <polygon> triangle -- this block's "8 distinct d/kind values"
+//     assertion would have failed with 7 duplicates.
+// ============================================================================
+{
+  const camera: Camera = { x: 0, y: 0, z: 1 }
+  const types = ['arrow', 'triangle', 'square', 'dot', 'diamond', 'inverted', 'bar'] as const
+  const shapes = types.map((t, i) => arrowShape(`shape:${t}`, 0, i * 100, { arrowheadEnd: t, end: { x: 100, y: i * 100 } }))
+  const pipeShape = arrowShape('shape:pipe', 0, 700, { arrowheadEnd: 'pipe', end: { x: 100, y: 700 } })
+  const doc = docOf([...shapes, pipeShape])
+  const html = renderToStaticMarkup(createElement(Arrows, { snapshot: doc, camera, viewportSize: VP, index: buildSpatialIndex(doc) }))
+
+  const glyphSignatures = new Set<string>()
+  for (const t of types) {
+    const start = html.indexOf(`data-shape-id="shape:${t}"`)
+    const section = html.slice(start, html.indexOf('</g>', start)) // THIS shape's own <g> only
+    const circleMatch = section.match(/<circle data-overlay="arrowhead"[^>]*>/)
+    const pathMatch = section.match(/<path data-overlay="arrowhead" d="([^"]+)"/)
+    const signature = circleMatch ? `circle:${circleMatch[0]}` : pathMatch ? `path:${pathMatch[1]}` : null
+    assert.ok(signature, `expected a rendered arrowhead glyph for type '${t}': ${html}`)
+    assert.ok(!glyphSignatures.has(signature!), `type '${t}' rendered a glyph identical to an earlier type -- expected 8 STRUCTURALLY DISTINCT glyphs: ${html}`)
+    glyphSignatures.add(signature!)
+  }
+  assert.equal(glyphSignatures.size, types.length, 'every non-none arrowhead type renders a distinct glyph')
+
+  const pipeSection = html.slice(html.indexOf('data-shape-id="shape:pipe"'))
+  assert.doesNotMatch(pipeSection.slice(0, pipeSection.indexOf('</g>')), /data-overlay="arrowhead"/, `'pipe' should render NO glyph, matching tldraw's own real (source-verified) invisible behavior: ${html}`)
+  console.log("ok: Arrows — all 8 non-'none' arrowhead types render structurally distinct glyphs; 'pipe' renders nothing (matches v1 source)")
+}
+
+// ============================================================================
+// 20. ZOOM-STABLE STROKE + ARROWHEAD SIZE (gap 5): an arrow's stroke-width
+//     and arrowhead scale with camera.z, exactly like a geo/note shape's own
+//     stroke (which scales for free via WorldLayer's CSS transform -- see
+//     arrowStyle's own doc comment for the v1 citation: ArrowShapeUtil.tsx's
+//     SVG lives inside that SAME world-space-transformed container). At
+//     z=1 with no props.size, strokeWidth is the OLD hardcoded default
+//     (1.5px) exactly -- RED-FIRST: before this task strokeWidth was a flat
+//     DEFAULT_STROKE_WIDTH_PX regardless of zoom, so a z=4 arrow rendered
+//     IDENTICALLY thin to a z=1 one -- this assertion (strokeWidth
+//     STRICTLY GREATER at z=4) would have failed against that code.
+// ============================================================================
+{
+  const arrowAtZ = (z: number) => {
+    const camera: Camera = { x: 0, y: 0, z }
+    const doc = docOf([arrowShape('shape:a', 0, 0, { end: { x: 100, y: 0 } })])
+    const html = renderToStaticMarkup(createElement(Arrows, { snapshot: doc, camera, viewportSize: VP, index: buildSpatialIndex(doc) }))
+    const strokeWidthMatch = html.match(/stroke-width="([\d.]+)"/)
+    assert.ok(strokeWidthMatch, `expected a stroke-width attribute: ${html}`)
+    return Number(strokeWidthMatch![1])
+  }
+  const atZ1 = arrowAtZ(1)
+  const atZ4 = arrowAtZ(4)
+  assert.equal(atZ1, 1.5, 'z=1, no props.size: strokeWidth is exactly the old hardcoded default (1.5px) -- no regression for the common case')
+  assert.equal(atZ4, 6, 'z=4: strokeWidth scales linearly with zoom (1.5 * 4 = 6), matching a geo shape\'s own zoom-stable stroke')
+  console.log('ok: Arrows — stroke-width scales with camera.z (zoom-stable, matching v1 + every other shape kind)')
+}
+
+// ============================================================================
+// 21. Arrows are page-scoped (Task 1, docs/plans/2026-09-14-canvas-ui-
+//    shared-session-plan.md): an arrow parented to another page is not
+//    drawn. ShapeLayer already filters shape bodies by page via pageIdOf;
+//    Arrows did not — this pins the same rule for the overlay.
+// ============================================================================
+{
+  const camera: Camera = { x: 0, y: 0, z: 1 }
+  const onP = arrowShape('shape:arrow-p', 10, 10, { end: { x: 100, y: 0 } })
+  const onQ: Shape = { ...arrowShape('shape:arrow-q', 10, 10, { end: { x: 100, y: 0 } }), parentId: 'page:q' } as Shape
+  const doc = makeDocument({ pages: [{ id: 'page:p', name: 'P' }, { id: 'page:q', name: 'Q' }], shapes: [onP, onQ], bindings: [] })
+  const html = renderToStaticMarkup(createElement(Arrows, {
+    snapshot: doc,
+    camera,
+    viewportSize: VP,
+    index: buildSpatialIndex(doc),
+    currentPageId: 'page:q',
+  }))
+  assert.ok(html.includes('data-shape-id="shape:arrow-q"'), `the arrow on the current page is drawn: ${html}`)
+  assert.ok(!html.includes('data-shape-id="shape:arrow-p"'), `the arrow on another page is not drawn: ${html}`)
+  console.log('ok: Arrows draws only arrows on the current page')
+}
+
+console.log('ok: overlay (selection outlines, combined bounds, handles, zoom-independence, snap guides, arrow rendering + tangent orientation + live re-routing + viewport culling + style props (color/dash/size/arrowheads) + glyph variants + zoom-stable sizing + page-scoping)')

@@ -1,0 +1,138 @@
+// Public surface of the pure contracts module. Re-exports the vocabulary and
+// aggregates every registered contract into ONE array both runners iterate.
+// Registration = adding a declaration to CONTRACTS below (no mutable global —
+// the array is the registry). Pilots append their declarations here.
+export * from './types.js'
+import { ARTIFACT_RESIZE_REWORK_CONTRACTS, ARTIFACT_RESIZE_AUDIT_CONTRACTS, RESIZE_KIND_PARITY_CONTRACTS } from './contracts/artifact-resize-gesture.js'
+export { ARTIFACT_RESIZE_REWORK_CONTRACTS, ARTIFACT_RESIZE_AUDIT_CONTRACTS, RESIZE_KIND_PARITY_CONTRACTS } from './contracts/artifact-resize-gesture.js'
+import { ARTIFACT_EDITOR_CONTRACTS } from './contracts/artifact-editor-behavior.js'
+export { ARTIFACT_EDITOR_CONTRACTS } from './contracts/artifact-editor-behavior.js'
+import { cutPreservesArtifacts } from './contracts/cut-preserves-artifacts.js'
+import type { Contract } from './types.js'
+import { armedStyleAppliesToCreatedShape } from './contracts/armed-style-applies-to-created-shape.js'
+import { githubIssueCardResizeReadable } from './contracts/github-issue-card-resize-readable.js'
+export { githubIssuePickerKeyboard } from './contracts/github-issue-picker-keyboard.js'
+export { githubIssueBodyResize } from './contracts/github-issue-body-resize.js'
+import { unlinkedGithubIssueCardResize } from './contracts/unlinked-github-issue-card-resize.js'
+import { arrowBindsToTargetShape } from './contracts/arrow-binds-to-target-shape.js'
+import { bbthreadPaneIsSolid } from './contracts/bbthread-pane-is-solid.js'
+import { bbthreadWorkspaceIsHollow } from './contracts/bbthread-workspace-is-hollow.js'
+import { bbthreadPaneDoubleClickBeginsEditing } from './contracts/bbthread-pane-double-click-begins-editing.js'
+import { bbthreadEscapeEndsEditing } from './contracts/bbthread-escape-ends-editing.js'
+import { bbthreadDividerDragResizesPane } from './contracts/bbthread-divider-drag-resizes-pane.js'
+import { bbthreadDividerIsFingerSized } from './contracts/bbthread-divider-is-finger-sized.js'
+import { pinchZoomsAboutTheMidpoint } from './contracts/pinch-zooms-about-the-midpoint.js'
+import { pinchDoesNotDragShapes } from './contracts/pinch-does-not-drag-shapes.js'
+import { selectionHandlesAreFingerSized } from './contracts/selection-handles-are-finger-sized.js'
+import { bbthreadDividerDragClampsAtTwoThirds } from './contracts/bbthread-divider-drag-clamps-at-two-thirds.js'
+import { bbthreadPaneRegionDoesNotCapture } from './contracts/bbthread-pane-region-does-not-capture.js'
+import { dragIntoFrameReparents } from './contracts/drag-into-frame-reparents.js'
+import { dragOutOfFrameReleasesToPage } from './contracts/drag-out-of-frame-releases-to-page.js'
+import { frameKeepsItsChildrenWhenMoved } from './contracts/frame-keeps-its-children-when-moved.js'
+import { shapeCreatedInsideAFrameJoinsIt } from './contracts/shape-created-inside-a-frame-joins-it.js'
+import { editingEndsOnOutsideClick } from './contracts/editing-ends-on-outside-click.js'
+import { arrowHandleDragPreviewsHover } from './contracts/arrow-handle-drag-previews-hover.js'
+import { arrowMidHandleBends } from './contracts/arrow-mid-handle-bends.js'
+import { arrowNudgeMovesSelection } from './contracts/arrow-nudge-moves-selection.js'
+import { arrowStaysOnItsPage } from './contracts/arrow-stays-on-its-page.js'
+import { arrowTerminalHandleRebinds } from './contracts/arrow-terminal-handle-rebinds.js'
+import { bringToFrontPaintsOnTop } from './contracts/bring-to-front-paints-on-top.js'
+import { crossWidgetSelection } from './contracts/cross-widget-selection.js'
+import { cursorLock } from './contracts/cursor-lock.js'
+import { drawCreatesADrawShape } from './contracts/draw-creates-a-draw-shape.js'
+import { droppingAnImageCreatesAnImageShape } from './contracts/dropping-an-image-creates-an-image-shape.js'
+import { duplicateReidsAndOffsets } from './contracts/duplicate-reids-and-offsets.js'
+import { editingIndicator } from './contracts/editing-indicator.js'
+import { enterKeyEditPreservesText } from './contracts/enter-key-edit-preserves-text.js'
+import { enterKeyEditsSelection } from './contracts/enter-key-edits-selection.js'
+import { enterOnChromeButtonDoesNotEdit } from './contracts/enter-on-chrome-button-does-not-edit.js'
+import { frameHeaderDoubleClickRenames } from './contracts/frame-header-double-click-renames.js'
+import { frameInteriorIsHollow } from './contracts/frame-interior-is-hollow.js'
+import { lineCreatesALineShape } from './contracts/line-creates-a-line-shape.js'
+import { malformedClipboardRejected } from './contracts/malformed-clipboard-rejected.js'
+import { modalityExclusivity } from './contracts/modality-exclusivity.js'
+import { noTransformWhileTyping } from './contracts/no-transform-while-typing.js'
+import { noteCreateBeginsEditing } from './contracts/note-create-begins-editing.js'
+import { noteResizeHandlesSuppressed } from './contracts/note-resize-handles-suppressed.js'
+import { pastePlacesAndSelects } from './contracts/paste-places-and-selects.js'
+import { railFlyoutFollowsTool } from './contracts/rail-flyout-follows-tool.js'
+import { scrollDirection } from './contracts/scroll-direction.js'
+import { selectAllSelectsEveryShapeOnPage } from './contracts/select-all-selects-every-shape-on-page.js'
+import { selectIgnoresOtherPages } from './contracts/select-ignores-other-pages.js'
+import { shapeGrowsToFitTypedText } from './contracts/shape-grows-to-fit-typed-text.js'
+import { shiftDragConstrainsToAxis } from './contracts/shift-drag-constrains-to-axis.js'
+import { styleAppliesToSelection } from './contracts/style-applies-to-selection.js'
+import { stylePopoverEscape } from './contracts/style-popover-escape.js'
+import { styleTriggerEnter } from './contracts/style-trigger-enter.js'
+import { styleEditArmsNextShape } from './contracts/style-edit-arms-next-shape.js'
+import { switchingPageChangesRenderedShapes } from './contracts/switching-page-changes-rendered-shapes.js'
+import { toolShortcutSwitchesAndArmsTool } from './contracts/tool-shortcut-switches-and-arms-tool.js'
+
+export const CONTRACTS: readonly Contract[] = [
+  ...ARTIFACT_RESIZE_REWORK_CONTRACTS,
+  ...ARTIFACT_RESIZE_AUDIT_CONTRACTS,
+  ...RESIZE_KIND_PARITY_CONTRACTS,
+  ...ARTIFACT_EDITOR_CONTRACTS,
+  githubIssueCardResizeReadable,
+  unlinkedGithubIssueCardResize,
+  cutPreservesArtifacts,
+  // Pilot declarations are added here, one per phase (B–F).
+  scrollDirection,
+  cursorLock,
+  crossWidgetSelection,
+  modalityExclusivity,
+  noTransformWhileTyping,
+  noteResizeHandlesSuppressed,
+  editingIndicator,
+  styleAppliesToSelection,
+  stylePopoverEscape,
+  armedStyleAppliesToCreatedShape,
+  styleEditArmsNextShape,
+  duplicateReidsAndOffsets,
+  pastePlacesAndSelects,
+  malformedClipboardRejected,
+  bringToFrontPaintsOnTop,
+  drawCreatesADrawShape,
+  lineCreatesALineShape,
+  droppingAnImageCreatesAnImageShape,
+  switchingPageChangesRenderedShapes,
+  enterKeyEditsSelection,
+  noteCreateBeginsEditing,
+  enterKeyEditPreservesText,
+  arrowBindsToTargetShape,
+  frameInteriorIsHollow,
+  bbthreadPaneIsSolid,
+  bbthreadWorkspaceIsHollow,
+  bbthreadPaneDoubleClickBeginsEditing,
+  bbthreadEscapeEndsEditing,
+  bbthreadDividerDragResizesPane,
+  // Mobile-touch task (pinch/zoom + finger-sized targets).
+  pinchZoomsAboutTheMidpoint,
+  pinchDoesNotDragShapes,
+  bbthreadDividerIsFingerSized,
+  selectionHandlesAreFingerSized,
+  bbthreadDividerDragClampsAtTwoThirds,
+  editingEndsOnOutsideClick,
+  frameHeaderDoubleClickRenames,
+  arrowNudgeMovesSelection,
+  shiftDragConstrainsToAxis,
+  toolShortcutSwitchesAndArmsTool,
+  selectAllSelectsEveryShapeOnPage,
+  shapeGrowsToFitTypedText,
+  arrowMidHandleBends,
+  arrowTerminalHandleRebinds,
+  arrowHandleDragPreviewsHover,
+  arrowStaysOnItsPage,
+  enterOnChromeButtonDoesNotEdit,
+  selectIgnoresOtherPages,
+  styleTriggerEnter,
+  railFlyoutFollowsTool,
+  // frame-membership task (docs/plans/2026-09-15-bb-thread-frame.md's
+  // "Membership"): drag-into / drag-out reparenting, its frame-moves
+  // guard-rail, and bbthread's workspace-only capture region.
+  dragIntoFrameReparents,
+  dragOutOfFrameReleasesToPage,
+  frameKeepsItsChildrenWhenMoved,
+  bbthreadPaneRegionDoesNotCapture,
+  shapeCreatedInsideAFrameJoinsIt,
+]

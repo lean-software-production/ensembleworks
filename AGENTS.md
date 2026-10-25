@@ -1,9 +1,108 @@
 # Agent notes — EnsembleWorks
 
 Multiplayer infinite-canvas team room: tldraw + tmux terminals + LiveKit spatial audio.
-Workspaces: `contracts`, `client`, `server`, `transcriber`, `cli`, `discord` (Bun
-workspaces). `discord` is the Discord bridge bot (inbound messages → frame
-stickies; outbound summaries → bound channels; internal /post on :8790).
+Workspaces: `contracts`, `canvas-model`, `canvas-doc`, `canvas-sync`,
+`canvas-editor`, `canvas-react`, `canvas-ui`, `client`, `server`, `transcriber`, `cli`,
+`discord`, `e2e` (Bun workspaces). `discord` is the Discord bridge bot (inbound
+messages → frame stickies; outbound summaries → bound channels; internal
+/post on :8790). `canvas-model` (pure typed canvas model), `canvas-doc` (Loro
+CRDT wrapper), and `canvas-sync` (Loro update exchange + presence over an
+injected transport) are the canvas-rewrite foundations — clean-room, never
+import server/tldraw/ws. `canvas-editor` (headless clean-room editor: camera/
+selection/hover/editing state + tools as pure FSMs against an injected
+clock/PRNG, no DOM) completes that clean-room set. `canvas-react` (thin,
+logic-free React renderer: CSS-transform world + one SVG overlay + the six
+ported custom HTML shapes) sits on top of `canvas-editor` and may touch the
+DOM, but holds no editor logic of its own. `canvas-ui` (host-agnostic React
+canvas chrome: session hook, surface, toolbar, style panel) is mounted by
+both the web app's v2 mount and the bb Canvas plugin; it holds no transport
+or host code.
+
+### BB Canvas plugin
+
+The first-class Canvas plugin lives at `plugins/canvas`. It intentionally keeps
+an isolated npm package and lockfile rather than joining the root Bun workspace,
+which preserves the package boundary needed for a later repository extraction.
+From that directory, verify changes with `npm run typecheck`, `npm test`,
+`npm run audit:quality:compare`, and `bb plugin build .`. The PR unit-test
+workflow runs the typecheck, test, and structural-quality gates automatically.
+
+### Dogfood rooms (canvas v2)
+
+A per-room flag mounts the new `canvas-editor`/`canvas-react` engine instead
+of the legacy tldraw one, over the Phase-2 `/sync/v2` protocol:
+
+- **Server:** set `EW_CANVAS_SYNC=1` on the deployment — this is what mounts
+  `/sync/v2/:roomId` at all (`server/src/app.ts`); flag off, that route
+  doesn't exist and every room behaves exactly as it does today.
+- **Client build:** set `VITE_CANVAS_V2_ROOMS=<comma-list>` (e.g.
+  `dogfood,design-review`) at build time — the allowlist `client/src/
+  engine.ts`'s `selectEngine` checks against the room id.
+- **Ad-hoc override:** append `?engine=v2` to a room's URL to dogfood it
+  without a client rebuild, for any room not otherwise excluded.
+- **`team` can never run v2.** `selectEngine` hard-excludes the `team` room
+  id before consulting the allowlist or the URL param — no build
+  misconfiguration or stray `?engine=v2` link can ever flip the room the
+  whole team lives in onto the new engine. See `client/src/engine.ts` and its
+  `engine.test.ts` / `scripts/exposure-audit.ts` proofs.
+
+**Phase-4 status (2026-07-16): visible parity + stability, landed on
+`canvas-phase4`.** v2 rooms now render dedicated note/frame/text/geo bodies
+(no more `BoxShape` fallback), support Delete/Backspace, local-only
+undo/redo (Ctrl+Z / Ctrl+Shift+Z — an editor-level inverse-intent stack, not
+loro-crdt's `UndoManager`; see the plan's P1 preflight verdict), total
+gesture cancellation (Escape/`pointercancel`/blur), a dispatch channel
+restoring the three embed write-path features (terminal rename, screenshare
+`stillUrl` stamp-back, file-viewer rev-bump), and a connection-state banner.
+Known, owner-accepted gap carried past Phase 4: undo is per-pointermove-
+commit granularity, not gesture-atomic (a multi-step drag needs multiple
+Ctrl+Z) — tracked as a follow-up, not re-litigated here. Full detail,
+preflight verdicts, and the four OBSERVE-straddler dated verdicts (SQLite
+`VACUUM`, lossy-repair edges, `pendingImports` re-request, reconnect delta —
+all re-deferred, no threshold tripped) live in
+`docs/plans/2026-07-15-canvas-phase4-parity.md`'s Execution notes.
+
+### Interaction contracts
+
+Every unit that touches an interaction-bearing surface —
+`canvas-editor/src/tools/`, `canvas-editor/src/session/`, `canvas-react/src/`,
+`canvas-ui/src/`, or `client/src/canvas-v2/` input/tool files — declares an interaction contract in
+`@ensembleworks/interaction-contracts`, or records `ux-contract: none —
+<reason>` in the PR body when the change genuinely has no interaction
+surface. A contract is a seeded gesture plus an invariant expressed against
+an `obs` interface; the FSM runner (`canvas-editor/src/contracts/
+fsm-runner.ts`) and the browser runner (`e2e/lib/contracts.ts`) play the same
+declaration through real tool FSMs and real Playwright input respectively, at
+two levels. `scripts/ux-contract-presence.test.ts` is the CI gate that
+enforces the declaration-or-opt-out is present (it does not judge quality —
+spec review does that; see CONTRIBUTING.md's Interaction Contract section).
+See `docs/plans/2026-07-16-ux-contracts-design.md` and
+`docs/plans/2026-07-16-ux-contracts-implementation.md` for the full design
+and the pilot-by-pilot implementation history.
+
+**Pass this down to subagents.** Work in this repo is routinely executed by
+subagents (implementers, reviewers) driven from curated task briefs, and in
+practice a brief outweighs ambient context. Any orchestrator dispatching a
+subagent to modify or test interaction-bearing code MUST carry these
+obligations into the brief explicitly:
+
+1. Declare or extend a contract in `@ensembleworks/interaction-contracts`
+   (or justify the `ux-contract: none — <reason>` opt-out in the PR body).
+2. Run the contract RED against the unfixed code BEFORE landing the fix, and
+   record the verbatim failure. If RED is unreachable, STOP and report — do
+   not force redness or skip to the fix (every "unreachable RED" during the
+   pilot build-out turned out to be a wrong belief worth catching: see the
+   plan doc's dated CHANGE NOTEs).
+3. Any `Obs` addition must be implemented in BOTH adapters —
+   `canvas-editor/src/contracts/fsm-runner.ts` and `e2e/lib/contracts.ts`
+   (throw-stub only where the observation is genuinely unavailable at that
+   level; the interface is shared, so typecheck will force this anyway).
+4. Reviewers verify the red-then-green evidence independently (revert the
+   fix, observe the failure, restore) — never accept the implementer's
+   report of it.
+
+The CI presence gate backstops (1) mechanically; (2)–(4) exist only if the
+brief carries them.
 
 ## Local dev — bin/dev
 
@@ -20,10 +119,20 @@ drives the devcontainer and forwards commands into it — you never need
 - `bin/dev logs <svc> --tail 500` / `bin/dev restart <svc>` — forwarded.
 - `bin/dev doctor` — host prerequisites (docker, the `@devcontainers/cli`),
   then the container's own doctor.
-- `bin/dev attach` — **prints** how to attach (`docker exec -it … tmux attach`)
-  plus the nested-tmux detach caveat; it never nests tmux for you.
+- `bin/dev attach` — **prints** how to attach (`docker exec -it … tmux -L
+  <session> attach`) plus the nested-tmux detach caveat; it never nests tmux
+  for you. The `-L` is required: the dev stack runs on its own tmux server so
+  its config (`deploy/tmux-dev.conf`) can't collide with the canvas terminals'
+  (`deploy/tmux-ensembleworks.conf`) — tmux's `set -g` is server-global.
 - `bin/dev down` — stops the whole devcontainer (`docker stop`).
 - `bin/dev --help` / `-h` — usage.
+- Multiple stacks per host: every dev port shifts by `ENSEMBLEWORKS_PORT_OFFSET`
+  (persisted per-checkout in `.local/port-offset`; `bin/dev up` auto-picks
+  100/200/… when the defaults are busy and narrates the edge URL). Offset
+  stacks use tmux session `workspace-<offset>` and data dir
+  `~/.local/share/ensembleworks-<offset>`. Use separate clones (not linked
+  worktrees — the controller targets the main checkout). `bin/canvas` needs
+  `CANVAS_URL=http://localhost:<8788+offset>` against an offset stack.
 
 Inside the container (the Dockerfile sets `ENSEMBLEWORKS_IN_DEVCONTAINER=1`)
 `bin/dev` is the *engine* that actually manages the tmux stack — the same
@@ -31,9 +140,13 @@ commands, run natively. `ENSEMBLEWORKS_NATIVE=1` forces engine mode on the host
 (the no-Docker path). Every call narrates on stderr which mode it picked and
 what it forwarded.
 
-State: `~/.local/share/ensembleworks`. Optional keys:
-`~/.config/ensembleworks/dev.env`. Verify changes with `bun run typecheck`
-and the smoke tests in README "Development".
+State root: `~/.local/share/ensembleworks`, holding the required storage
+triple as siblings — `data/` (DATA_DIR), `databases/` (DATABASE_DIR, live room
+SQLite), `database-backups/` (DATABASE_BACKUPS_DIR). The sync server refuses
+to start unless all three are set and non-colliding (`server/src/kernel/`
+`storage-geometry.ts`). Optional keys: `~/.config/ensembleworks/dev.env`.
+Verify changes with `bun run typecheck` and the smoke tests in README
+"Development".
 
 ## Releasing — always use the script
 
@@ -68,3 +181,4 @@ tldraw license-key requirement for prod builds.
 ## Checks
 
 - `bun run typecheck` and `bun run build` cover all three workspaces.
+@relay.md

@@ -1,0 +1,10 @@
+{
+  "namespace": "exec",
+  "capacity": {
+    "shared_clean": 1,
+    "exclusive": 1
+  },
+  "poll_timeout": 25,
+  "heartbeat_interval": 15,
+  "max_retained_failed": 3
+}

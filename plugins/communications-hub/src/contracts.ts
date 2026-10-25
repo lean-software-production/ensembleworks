@@ -1,0 +1,49 @@
+import { defineRpcContract } from '@get-bb/plugin-sdk';
+import { z } from 'zod';
+import { attachmentSchema, conversationSchema, registrantSchema, roomSchema, segmentSchema, watchSchema } from './domain';
+import { importFormatSchema } from './adapters/import';
+import { presenceViewSchema } from './presence/view';
+
+export const id=z.string().trim().min(1).max(256);
+const page=z.object({conversation:conversationSchema,segments:z.array(segmentSchema),hasMore:z.boolean(),nextCursor:z.number()});
+const channelResult=z.object({teamId:id,channelId:id,channelName:z.string(),isPrivate:z.boolean(),ts:id,threadTs:id.nullable(),authorId:id.nullable(),authorName:z.string().nullable(),text:z.string(),editedAt:id.nullable(),permalink:z.string().nullable(),truncated:z.boolean()});
+const channelPage=z.object({results:z.array(channelResult),hasMore:z.boolean(),nextCursor:id.nullable()});
+export const readInput=z.object({conversationId:id,after:z.number().int().nonnegative().optional(),limit:z.number().int().min(1).max(30).optional(),fromMs:z.number().int().nonnegative().optional(),toMs:z.number().int().nonnegative().optional()}).strict();
+export const importInput=z.object({title:z.string().trim().min(1).max(200),format:importFormatSchema,text:z.string().min(1).max(1_000_000)}).strict();
+export const rpcContract=defineRpcContract({
+  'conversations.list':{input:z.object({offset:z.number().int().nonnegative().optional(),limit:z.number().int().min(1).max(100).optional()}).strict(),output:z.object({conversations:z.array(conversationSchema),hasMore:z.boolean(),nextOffset:z.number()})},
+  'conversations.get':{input:z.object({conversationId:id}).strict(),output:conversationSchema},
+  'conversations.rename':{input:z.object({conversationId:id,title:z.string().trim().min(1).max(200)}).strict(),output:conversationSchema},
+  'transcripts.import':{input:importInput,output:conversationSchema},
+  'transcripts.read':{input:readInput,output:page},
+  'transcripts.search':{input:readInput.extend({query:z.string().trim().min(1).max(200)}),output:page},
+  'attachments.get':{input:z.object({threadId:id}).strict(),output:z.object({attachment:attachmentSchema.nullable(),conversation:conversationSchema.nullable(),room:roomSchema.nullable(),channel:z.object({teamId:id,channelId:id,name:z.string(),isPrivate:z.boolean(),lastSyncAt:z.number().nullable()}).nullable().optional()})},
+  'attachments.set':{input:z.object({threadId:id,conversationId:id}).strict(),output:attachmentSchema},
+  'attachments.setRoom':{input:z.object({threadId:id,roomId:id}).strict(),output:attachmentSchema},
+  'attachments.setChannel':{input:z.object({threadId:id,channelId:id}).strict(),output:attachmentSchema},
+  'channels.list':{input:z.null(),output:z.object({channels:z.array(z.object({teamId:id,channelId:id,name:z.string(),isPrivate:z.boolean(),lastSyncAt:z.number().nullable()}))})},
+  'channels.read':{input:z.object({channelId:id,before:id.optional(),limit:z.number().int().min(1).max(30).optional()}).strict(),output:channelPage},
+  'channels.search':{input:z.object({channelId:id,query:z.string().trim().min(1).max(200),before:id.optional(),limit:z.number().int().min(1).max(30).optional()}).strict(),output:channelPage},
+  'attachments.detach':{input:z.object({threadId:id}).strict(),output:z.object({ok:z.boolean()})},
+  'attachments.acknowledge':{input:z.object({threadId:id,conversationId:id,cursor:z.number().int().nonnegative()}).strict(),output:attachmentSchema},
+  'watch.get':{input:z.object({threadId:id}).strict(),output:z.object({watch:watchSchema.nullable()})},
+  'watch.start':{input:z.object({threadId:id}).strict(),output:watchSchema},
+  'watch.stop':{input:z.object({threadId:id}).strict(),output:z.object({ok:z.boolean()})},
+  'rooms.list':{input:z.object({includeArchived:z.boolean().optional()}).strict(),output:z.object({rooms:z.array(roomSchema)})},
+  'rooms.create':{input:z.object({name:z.string().trim().min(1).max(200)}).strict(),output:roomSchema},
+  'rooms.archive':{input:z.object({roomId:id}).strict(),output:roomSchema},
+  'rooms.renew':{input:z.object({roomId:id}).strict(),output:roomSchema},
+  'rooms.delete':{input:z.object({roomId:id}).strict(),output:roomSchema},
+  'registrants.list':{input:z.object({roomId:id}).strict(),output:z.object({registrants:z.array(registrantSchema)})},
+  'registrants.add':{input:z.object({roomId:id,name:z.string().trim().min(1).max(200),email:z.string().trim().min(3).max(320)}).strict(),output:registrantSchema},
+  'capture.stop':{input:z.object({conversationId:id}).strict(),output:conversationSchema},
+  // Presence is read-mostly and polled by the sidebar strip, so the read takes no
+  // input at all: which room a client sees is hub state a human chose, not a
+  // parameter a caller can point anywhere.
+  'presence.get':{input:z.null(),output:presenceViewSchema},
+  'presence.select':{input:z.object({roomId:id.nullable()}).strict(),output:presenceViewSchema},
+  // A still is fetched on its own so a poll carries no image bytes. The response
+  // is a data URL for one participant of a CURRENT sitting; anything else is null.
+  'presence.portrait':{input:z.object({participantId:id}).strict(),output:z.object({participantId:z.string(),capturedAt:z.number(),dataUrl:z.string()}).nullable()},
+  'sources.status':{input:z.null(),output:z.object({ensembleworks:z.object({enabled:z.boolean(),conversationId:z.string().nullable()}),canvas:z.object({enabled:z.boolean(),conversationId:z.string().nullable(),cursor:z.number()}),zoom:z.object({configured:z.boolean(),enabled:z.boolean(),canCreateRooms:z.boolean()}),webhookPath:z.string(),importReady:z.boolean()})},
+});

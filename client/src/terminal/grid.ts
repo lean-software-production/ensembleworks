@@ -9,9 +9,11 @@
  * px). Same inputs ⇒ same cols/rows ⇒ no proposer race to resolve.
  */
 
-// Padding baked into the terminal box: the container style is "10px 20px 0 12px"
-// (top right bottom left), and with scrollback:0 xterm reserves no scrollbar.
-export const TERMINAL_PAD = { x: 12 + 20, y: 10 + 0 }
+// Padding baked into the terminal box: the container style is "10px 20px 4px 12px"
+// (top right bottom left; the 4px bottom keeps last-row descenders unclipped),
+// and with scrollback:0 xterm reserves no scrollbar. KEEP IN SYNC with the
+// containerRef padding in TerminalShapeUtil.tsx — one fact, recorded twice.
+export const TERMINAL_PAD = { x: 12 + 20, y: 10 + 4 }
 
 // Floor of the grid, matching the gateway's clamp (server/src/terminal-gateway.ts).
 export const MIN_COLS = 20
