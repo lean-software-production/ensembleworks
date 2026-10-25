@@ -10,8 +10,9 @@
  *
  * TWO LEVELS AND A RETREAT, in priority order:
  *
- *   1. FOOTER — the row becomes the footer's previous sibling. This is the
- *      designed position and the one every normal route offers.
+ *   1. FOOTER — the row becomes the previous sibling of the footer REGION (see
+ *      `footerRegion`). This is the designed position and the one every normal
+ *      route offers.
  *   2. SIDEBAR END — a sidebar rendered without a footer still has a bottom, so
  *      the row becomes the last child of `[data-sidebar="sidebar"]`. Same place
  *      on screen, one fewer assumption about bb's chrome.
@@ -42,7 +43,7 @@ export type AnchorAttachment<T> =
   | { readonly kind: "sidebar"; readonly host: T };
 
 export interface AnchorInput<T> {
-  /** The footer of the sidebar we should be in, or null when it has none. */
+  /** The footer region of the sidebar we should be in, or null when it has none. */
   readonly footer: T | null;
   /** That sidebar's root element, or null when no sidebar is in the document. */
   readonly sidebar: T | null;
@@ -87,6 +88,47 @@ export function decideAnchor<T>(input: AnchorInput<T>): AnchorDecision<T> {
     return settled ? { action: "none" } : { action: "sidebar", host: input.sidebar };
   }
   return input.attached !== null || input.connected ? { action: "detach" } : { action: "none" };
+}
+
+/** What `footerRegion` needs to know about the tree, as an injected seam. */
+export interface RegionLayout<T> {
+  parent(node: T): T | null;
+  /** True when this element lays its children out side by side (a flex row). */
+  horizontal(node: T): boolean;
+  /** True when `child` is this element's only element child, ignoring our own row. */
+  onlyChild(node: T, child: T): boolean;
+  /** True when this element stacks its children on lines of their own (block flow or a flex column). */
+  vertical(node: T): boolean;
+}
+
+/**
+ * The element the row should sit immediately above: the footer plus everything
+ * bb lays out on the same line as it — or null when there is no safe line.
+ *
+ * Up to bb 0.46.0 that is the footer itself, a child of the vertical sidebar
+ * body. bb 0.46.1 put the footer inside a horizontal footer row (settings-gear
+ * rail cell + a clipped collapsible body), so "the footer's previous sibling"
+ * became a slot INSIDE that line: the row took its width and pushed every footer
+ * item past the clip. So climb from the footer while the parent is a side-by-side
+ * row or a wrapper holding nothing else, and stop at the first parent that holds
+ * other content. The climb never passes `root`, so the row cannot leave the
+ * sidebar for the app around it.
+ *
+ * The row only gets a line of its own when that parent STACKS its children
+ * vertically. bb 0.47.1 stops the climb at a CSS grid (rail | thread list over
+ * gear | footer); a sibling there is an auto-placed grid item that lands in an
+ * implicit row of the `auto` rail column, widens it to the row's width and
+ * squeezes the thread list to a sliver. Any parent that is not a vertical stack
+ * therefore answers null, and the caller decides where else (if anywhere) is safe.
+ */
+export function footerRegion<T>(footer: T, root: T, layout: RegionLayout<T>): T | null {
+  let region = footer;
+  let parent = layout.parent(region);
+  while (parent !== null && parent !== root && (layout.horizontal(parent) || layout.onlyChild(parent, region))) {
+    region = parent;
+    parent = layout.parent(region);
+  }
+  return parent !== null && layout.vertical(parent) ? region : null;
 }
 
 /** One candidate sidebar found in the document. */
