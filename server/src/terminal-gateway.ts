@@ -46,7 +46,7 @@ const TMUX_CONF =
 // the leaf pty drops privilege. A fixed host-provisioned launcher (allowed by a
 // narrow NOPASSWD sudoers rule) does the `cd $HOME` + `exec tmux …` with a box-wide
 // tmux.conf the sandbox user can read — keeping the privileged surface to one
-// binary. Unset (legacy -ash box, local dev) → shells run as the gateway user,
+// binary. Unset (local dev) → shells run as the gateway user,
 // exactly as before. See deploy/systemd/prod/ensembleworks-term.service.
 const RUN_AS = process.env.TERM_RUN_AS?.trim() ?? ''
 const TERM_LAUNCHER = process.env.TERM_LAUNCHER ?? '/usr/local/bin/ensembleworks-term-launch'

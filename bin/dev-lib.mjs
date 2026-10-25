@@ -112,8 +112,8 @@ export function livekitBrowserUrl(o, caddyPort) {
  * instead — same dev keys, shifted ports. udp_port is advertised in ICE
  * candidates, so it must equal the devcontainer-published host port (the
  * uniform offset guarantees that). bind_addresses + node_ip preserve the
- * `--dev --bind 0.0.0.0 --node-ip <ip>` behavior. Field names verified
- * against deploy/livekit-cutover-ash.sh's known-good config.
+ * `--dev --bind 0.0.0.0 --node-ip <ip>` behavior. Field names were verified
+ * against a known-good self-hosted LiveKit config.
  * @param {ReturnType<typeof portsFor>} ports
  * @param {string | null} nodeIp  advertised media IP (null -> omit; localhost-only voice)
  */

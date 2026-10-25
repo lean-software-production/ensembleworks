@@ -1,9 +1,6 @@
 # EnsembleWorks — DEV/watch Caddy edge config (Vite-fronted). Used by:
 #   - devcontainer/native dev stack: bin/dev (caddy window) runs `caddy run` against this;
 #     GitHub Codespaces forwards port 8080 over HTTPS.
-#   - ash dogfood box: bootstrap-debian-ash.sh copies this to /etc/caddy/Caddyfile;
-#     a Cloudflare Tunnel forwards the public hostname to http://localhost:8080,
-#     with a Cloudflare Access policy in front.
 # Production client boxes use deploy/Caddyfile.prod instead (static client served
 # by the sync server; no Vite), installed by deploy/deploy.sh.
 #
@@ -26,8 +23,8 @@
 # The five upstream targets below are also env-parameterized, for the same
 # ENSEMBLEWORKS_PORT_OFFSET multi-stack-per-host dev feature (bin/dev sets
 # these alongside ENSEMBLEWORKS_CADDY_SITE); their defaults are today's
-# production ports, so an unset environment (e.g. the ash dogfood box, which
-# copies this file with no env set) reproduces this file's pre-offset shape.
+# production ports, so an unset environment reproduces this file's pre-offset
+# shape.
 
 # auto_https disable_redirects: serve TLS on the site's port but don't try to
 # bind :80 for an http->https redirect (fails as non-root, and unwanted here).
