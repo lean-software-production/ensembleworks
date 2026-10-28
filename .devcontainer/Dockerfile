@@ -10,7 +10,7 @@
 FROM debian:trixie
 
 ARG CADDY_VERSION=2.10.0
-ARG LIVEKIT_VERSION=1.13.1
+ARG LIVEKIT_VERSION=1.13.11
 ARG WHISPER_TAG=v1.9.1
 
 RUN apt-get update && apt-get install -y --no-install-recommends \
