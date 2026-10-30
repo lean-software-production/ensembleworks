@@ -1,0 +1,42 @@
+Automatic transcript — not manually verified.
+Source: gather-recording-2026-10-30T09-43-09.mp4
+Clip: 00:32:41.000–00:34:58.500 in original recording.
+Timecodes below refer to the original recording.
+
+[00:32:39,780] It's all this.
+[00:32:41,940] That's my note.
+[00:32:42,940] It kind of grows on what the first two post-its are saying is that like we need to connect
+[00:32:49,380] a team better.
+[00:32:50,380] I think that with the velocity of the code going on so fast, like my main blocker is
+[00:32:55,340] trying to convince people that another person is right about something or wrong about something
+[00:33:00,460] or that's just how it is.
+[00:33:03,100] I think that's just caused the very top.
+[00:33:04,980] It's the pre-planning part.
+[00:33:06,980] Like we need to write tickets together and I think that we should get rid of notion.
+[00:33:12,260] I think we should probably get rid of ClickUp and find some kind of collaborative tool that
+[00:33:17,980] lets us do planning together.
+[00:33:21,580] So let's say we need a new table for something.
+[00:33:25,820] It should be like product person that owns it, table guy that owns it and then a dev that's
+[00:33:32,300] going to execute that owns it together.
+[00:33:34,500] Then we can create a plan together, you create the ticket, but that needs to also go a little
+[00:33:40,020] bit higher where that ticket's part of a bigger system of like let's say programs, right?
+[00:33:45,580] It should all just come down.
+[00:33:47,420] That whole huge planning part should be done collaboratively with all the parties and we
+[00:33:54,540] should be just vibe coding in the moment together.
+[00:33:57,540] Like how does this work, like let's figure this out so it's like a human experience, but
+[00:34:02,540] we're all just like throwing information at it and doing that for a couple of weeks.
+[00:34:08,180] It's like restructuring how we work completely.
+[00:34:10,300] So then once I get that ticket, it's complete.
+[00:34:16,060] And if there are small changes, I can make that decision myself.
+[00:34:19,940] I get reviewed in about the door, right?
+[00:34:22,260] You don't even need to get the ticket.
+[00:34:23,820] It's already been done.
+[00:34:26,580] So there's finessing involved usually, looking a little bit deeper into like how the code
+[00:34:32,500] looks.
+[00:34:33,500] It's still not perfect on the coding side.
+[00:34:35,700] I think we still have a lot of work to do with our like MD files and align skills and
+[00:34:42,140] review stuff.
+[00:34:43,140] So there's going to be a lot of finessing in there too, right?
+[00:34:46,980] So there's still that bottom part, even though it's kind of coded, it's more of like a ton
+[00:34:53,820] of spikes.
+[00:34:57,860] Yeah, go ahead, Derek.
