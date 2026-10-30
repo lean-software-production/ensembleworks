@@ -2,14 +2,14 @@
 # Columns: name  constraint(exact|min|present)  version(- if present)  probe...
 # The probe is run on the target; the first MAJOR.MINOR[.PATCH] of its output is
 # compared per constraint. Bumping an `exact` pin is a deliberate two-repo change
-# (here + laingville servers/<host>/bootstrap.sh) — the preflight enforces it.
+# (here + infrastructure roles/ew_box/defaults/main.yml) — the preflight enforces it.
 # Floors below reflect Debian 13 (trixie) shipping versions + our pinned installs.
 # bun is NOT required here: deploy.sh only fetches CI-precompiled `bun build
 # --compile` binaries (self-contained executables), it never runs bun on the box.
 # gh is NOT required either: ew_fetch_release uses plain `curl` against the
 # repo's public release-asset URLs (same shape deploy/install.sh uses) — the
 # assets are public, so no `gh auth login` bootstrapping is needed on the box.
-livekit-server  exact    1.13.1     livekit-server --version
+livekit-server  exact    1.13.11    livekit-server --version
 caddy           min      2.7.0      caddy version
 cloudflared     min      2024.1.0   cloudflared --version
 git             min      2.39.0     git --version
