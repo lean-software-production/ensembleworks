@@ -217,7 +217,7 @@ Add the `chat:write` **bot scope** to the same Slack app and reinstall it. If Sl
 
 The posting tool instructs BB agents to read and apply the `talking-to-humans` skill before drafting Slack text. The skill must be available in the agent's environment; the instruction guides the agent, while the channel allowlist and explicit posting request are the enforceable controls. Review drafts when wording matters.
 
-The matching CLI command is `bb communications slack-post CHANNEL_ID 'message text' [parent-ts]`. Quote message text as one argument. It applies the same channel limits and returns the same timestamp and permalink.
+Bot messages suppress link previews by default. Set `unfurlLinks: true` on `communications_slack_post` to ask Slack to show link and media previews when the destination supplies preview data. The matching CLI command is `bb communications slack-post CHANNEL_ID 'message text' [parent-ts]`. Quote message text as one argument. It applies the same channel limits and returns the same timestamp and permalink.
 
 
 ## EnsembleWorks V1 (existing LiveKit transcript)

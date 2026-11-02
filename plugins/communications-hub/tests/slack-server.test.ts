@@ -59,7 +59,7 @@ it('posts only to configured bot-member channels after an explicit tool call',as
   const host=createFakePluginHost();hosts.push(host);await plugin(host.bb);
   await host.harness.behavior.setSettings({slackReadEnabled:true,slackBotToken:'xoxb-test'});
   expect((await host.harness.behavior.runCli(['slack-sync'])).exitCode).toBe(0);
-  const call=(channelId:string,text:string,threadTs?:string)=>host.harness.behavior.callAgentTool('communications_slack_post',{channelId,text,...(threadTs?{threadTs}:{})},{threadId:'A'});
+  const call=(channelId:string,text:string,threadTs?:string,unfurlLinks?:boolean)=>host.harness.behavior.callAgentTool('communications_slack_post',{channelId,text,...(threadTs?{threadTs}:{}),...(unfurlLinks===undefined?{}:{unfurlLinks})},{threadId:'A'});
   expect(await call('G1','Hello')).toMatchObject({isError:true});
   await host.harness.behavior.setSettings({slackWriteEnabled:true,slackWriteChannels:'C1'});
   expect(await call('G1','Hello')).toMatchObject({isError:true});
@@ -68,8 +68,10 @@ it('posts only to configured bot-member channels after an explicit tool call',as
   expect(posts).toHaveLength(0);
   expect(JSON.parse(await call('G1','Hello','122.000001') as string)).toEqual({channelId:'G1',ts:'123.000001',permalink:'https://example.slack.com/archives/G1/p123000001'});
   expect(posts).toEqual([{method:'POST',body:{channel:'G1',text:'Hello',thread_ts:'122.000001',unfurl_links:false,unfurl_media:false}}]);
+  expect(JSON.parse(await call('G1','Preview link',undefined,true) as string)).toMatchObject({channelId:'G1'});
+  expect(posts[1]?.body).toMatchObject({channel:'G1',text:'Preview link',unfurl_links:true,unfurl_media:true});
   expect((await host.harness.behavior.runCli(['slack-post','C1','blocked'])).exitCode).toBe(1);
   expect((await host.harness.behavior.runCli(['slack-post','G1','CLI message'])).exitCode).toBe(0);
-  expect(posts).toHaveLength(2);
-  expect(posts[1]?.body).toMatchObject({channel:'G1',text:'CLI message'});
+  expect(posts).toHaveLength(3);
+  expect(posts[2]?.body).toMatchObject({channel:'G1',text:'CLI message'});
 });

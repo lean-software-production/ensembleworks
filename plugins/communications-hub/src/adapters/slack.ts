@@ -225,7 +225,7 @@ export function registerSlack(bb: BbPluginApi, store: SlackStore, changed: () =>
     }
     return teamId;
   }
-  async function post(channelId:string,text:string,threadTs?:string) {
+  async function post(channelId:string,text:string,threadTs?:string,unfurlLinks=false) {
     const config=await settings.get();
     if (!config.slackWriteEnabled) throw new Error('Slack message posting is disabled');
     if (!config.slackBotToken) throw new Error('Set the Slack bot token in plugin settings');
@@ -237,7 +237,7 @@ export function registerSlack(bb: BbPluginApi, store: SlackStore, changed: () =>
     const response=await request('https://slack.com/api/chat.postMessage',{
       method:'POST',headers:{Authorization:`Bearer ${config.slackBotToken}`,'Content-Type':'application/json'},
       body:JSON.stringify({channel:channelId,text,...(threadTs?{thread_ts:threadTs}:{}),
-        unfurl_links:false,unfurl_media:false}),signal:AbortSignal.timeout(30_000),redirect:'error',
+        unfurl_links:unfurlLinks,unfurl_media:unfurlLinks}),signal:AbortSignal.timeout(30_000),redirect:'error',
     });
     if (!response.ok) throw new Error(`Slack chat.postMessage returned HTTP ${response.status}; delivery is uncertain`);
     const raw=await response.text();
