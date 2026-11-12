@@ -25,6 +25,18 @@
 // measurements). Run it from a clean feature branch — a losing round is
 // discarded with `git reset --hard`.
 //
+// Stopping and carrying on. Where a run stands is recorded by the helper,
+// not by the workflow run, and every loop iteration enters through the
+// `next` node, which asks the helper where to go. So:
+//   - A stage whose agent fails (a provider error Attractor could not wait
+//     out, a crashed worker) never has its non-result judged: it routes to
+//     the "A stage failed" gate, and Resume re-enters at `next`.
+//   - A stopped or failed run can be carried on with `bb attractor resume
+//     <runId>`, or by simply running this graph again: either way it picks
+//     up at the unfinished piece, or the round still waiting for a verdict.
+//   - A usage limit is waited out by Attractor itself: the stage shows as
+//     blocked with the time it will retry, and continues on the same worker.
+//
 // Limits of this version (see the skill): pieces run one at a time in the
 // origin thread's checkout, and the critic works in that same checkout, so
 // its blindness rests on the exported arena plus its instructions, not on
@@ -35,7 +47,7 @@
 //   model_stylesheet=".builder { provider: claude-code; model: <id>; } .critic { provider: codex; model: <id>; reasoning_effort: high; }"
 digraph GauntletLoop {
   graph [goal="Build what .gauntlet/goal.md describes, to the bar in .gauntlet/bar.md",
-         max_node_visits=80]
+         max_node_visits=120]
   start [shape=Mdiamond]
   exit  [shape=Msquare]
 
@@ -62,8 +74,10 @@ digraph GauntletLoop {
   ratchet [shape=parallelogram, label="Ratchet", timeout="5m",
            script=".gauntlet/g ratchet"]
 
-  count [shape=parallelogram, label="More?", timeout="1m",
-         script=".gauntlet/g count"]
+  next [shape=parallelogram, label="Where next?", timeout="1m",
+        script=".gauntlet/g next"]
+
+  stalled [shape=hexagon, label="A stage failed. Resume from where it stopped?"]
 
   smooth [label="Smooth", class="builder", timeout="60m",
           prompt="Every piece of this Gauntlet Loop has finished; .gauntlet/progress.md lists them and how each ended. The pieces were improved separately. Read .gauntlet/goal.md and .gauntlet/bar.md, then make one pass over the whole result so it reads and behaves as one thing: consistent naming, no duplicated helpers, no seams between pieces, nothing left half-wired. Change no behaviour that a piece won on, and add no new features. Do not commit — the next stage keeps your changes only if the check command still passes. Reply with a short list of what you smoothed, or `nothing to smooth`."]
@@ -74,21 +88,41 @@ digraph GauntletLoop {
   review [label="Final review", class="critic", fidelity="truncate", timeout="45m",
           prompt="You are a fresh reviewer who has seen none of the work that led here. Read .gauntlet/goal.md and .gauntlet/bar.md, then judge the project in the working tree as it stands against that bar: run it, read it, measure it. Do not read git history or .gauntlet/progress.md first — form your own view from the artifact. Write .gauntlet/final-review.md with: a one-paragraph verdict (does it meet the bar — yes, nearly, or no); the gaps that remain, largest first, each concrete enough to act on; and what you ran or inspected to reach that view. Change no other file. Reply with the one-paragraph verdict."]
 
-  start -> plan -> approve
+  start -> next
+  next -> plan     [condition="command.output contains GO_PLAN"]
+  next -> brief    [condition="command.output contains GO_BUILD"]
+  next -> snapshot [condition="command.output contains GO_JUDGE"]
+  next -> smooth   [condition="command.output contains GO_SMOOTH"]
+  next -> review   [condition="command.output contains GO_REVIEW"]
+  next -> exit     [condition="command.output contains GO_END"]
+
+  plan -> approve [condition="outcome=succeeded"]
+  plan -> stalled [condition="outcome=failed"]
   approve -> init [label="[A] Approve"]
   approve -> plan [label="[R] Revise"]
-  init -> brief [condition="outcome=succeeded"]
-  init -> exit  [condition="outcome=failed"]
-  brief -> build -> snapshot
-  snapshot -> critic [condition="outcome=succeeded"]
-  snapshot -> count  [condition="outcome=failed"]
-  critic -> ratchet
-  ratchet -> count  [condition="outcome=succeeded"]
-  ratchet -> critic [condition="outcome=failed"]
-  count -> brief  [condition="command.output contains MORE"]
-  count -> smooth [condition="command.output contains DONE"]
-  smooth -> finish
-  finish -> review [condition="outcome=succeeded"]
-  finish -> exit   [condition="outcome=failed"]
-  review -> exit
+  init -> next [condition="outcome=succeeded"]
+  init -> exit [condition="outcome=failed"]
+
+  // One round. Only a stage that actually succeeded is ever judged: a
+  // failed builder or critic goes to the gate, never on to snapshot/ratchet.
+  brief -> build      [condition="outcome=succeeded"]
+  brief -> stalled    [condition="outcome=failed"]
+  build -> snapshot   [condition="outcome=succeeded"]
+  build -> stalled    [condition="outcome=failed"]
+  snapshot -> critic  [condition="outcome=succeeded"]
+  snapshot -> next    [condition="outcome=failed"]
+  critic -> ratchet   [condition="outcome=succeeded"]
+  critic -> stalled   [condition="outcome=failed"]
+  ratchet -> next     [condition="outcome=succeeded"]
+  ratchet -> critic   [condition="outcome=failed"]
+
+  smooth -> finish  [condition="outcome=succeeded"]
+  smooth -> stalled [condition="outcome=failed"]
+  finish -> next [condition="outcome=succeeded"]
+  finish -> exit [condition="outcome=failed"]
+  review -> next    [condition="outcome=succeeded"]
+  review -> stalled [condition="outcome=failed"]
+
+  stalled -> next [label="[R] Resume"]
+  stalled -> exit [label="[S] Stop"]
 }

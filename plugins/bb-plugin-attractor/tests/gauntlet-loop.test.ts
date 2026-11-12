@@ -116,7 +116,7 @@ describe("gauntlet-loop: init", () => {
     expect(g("init").code).toBe(0);
     expect(secretState().pieces.map((piece: { status: string }) => piece.status)).toEqual(["pending", "pending"]);
     expect(read(".gauntlet/progress.md")).toContain("| one — Greeting | pending | 0 |");
-    expect(g("count").out).toContain("pieces=2 finished=0 MORE");
+    expect(g("next").out).toContain("next=GO_BUILD pieces=2 finished=0 piece=one");
   });
 });
 
@@ -180,7 +180,7 @@ describe("gauntlet-loop: a judged round", () => {
     expect(git("status", "--porcelain")).toBe("");
     expect(git("log", "-1", "--format=%s")).toBe("gauntlet(greeting): round 1 candidate");
     expect(existsSync(join(repo, ".gauntlet/arena"))).toBe(false);
-    expect(g("count").out).toContain("finished=1 DONE");
+    expect(g("next").out).toContain("next=GO_SMOOTH pieces=1 finished=1");
     expect(g("brief").out.trim()).toBe("DONE");
   });
 
@@ -216,7 +216,7 @@ describe("gauntlet-loop: a judged round", () => {
     g("snapshot");
     judge("best");
     expect(g("ratchet").out).toContain("result=loss status=plateaued");
-    expect(g("count").out).toContain("DONE");
+    expect(g("next").out).toContain("next=GO_SMOOTH");
   });
 
   it("finishes the piece when the kept version wins and already meets the bar", () => {
@@ -287,6 +287,48 @@ describe("gauntlet-loop: a judged round", () => {
   });
 });
 
+describe("gauntlet-loop: next (where a run stands)", () => {
+  it("walks plan -> build -> judge -> smooth -> review -> end from recorded state alone", () => {
+    expect(g("next").out.trim()).toBe("next=GO_PLAN");
+    // A review left behind by an earlier run in this repository must not end a new one early.
+    write(".gauntlet/final-review.md", "stale\n");
+    writePlan();
+    g("init");
+    expect(existsSync(join(repo, ".gauntlet/final-review.md"))).toBe(false);
+    expect(g("next").out).toContain("next=GO_BUILD");
+
+    g("brief");
+    write("greet.txt", "Hello, dear friend!\n");
+    g("snapshot");
+    expect(g("next").out).toContain("next=GO_JUDGE pieces=1 finished=0 piece=greeting round=1");
+    judge("candidate", { barMet: true });
+    g("ratchet");
+    expect(g("next").out).toContain("next=GO_SMOOTH");
+
+    g("finish");
+    expect(g("next").out).toContain("next=GO_REVIEW");
+    write(".gauntlet/final-review.md", "Nearly.\n");
+    expect(g("next").out).toContain("next=GO_END");
+  });
+
+  it("voids the round once three critics in a row record no usable verdict", () => {
+    writePlan();
+    g("init");
+    g("brief");
+    write("greet.txt", "Hello, dear friend!\n");
+    g("snapshot");
+    expect(g("ratchet").code).toBe(2);
+    write(".gauntlet/arena/verdict.json", "not json");
+    expect(g("ratchet").code).toBe(2);
+    const third = g("ratchet");
+    expect(third.code).toBe(0);
+    expect(third.out).toContain("result=void status=active");
+    expect(read("greet.txt")).toBe("hi\n");
+    expect(secretState().pieces[0]).toMatchObject({ rounds: 0, voids: 1, losing_streak: 0 });
+    expect(g("next").out).toContain("next=GO_BUILD");
+  });
+});
+
 describe("gauntlet-loop: several pieces and finish", () => {
   it("moves to the next piece once one finishes", () => {
     writePlan({ pieces: [{ id: "one" }, { id: "two" }] });
@@ -296,7 +338,7 @@ describe("gauntlet-loop: several pieces and finish", () => {
     g("snapshot");
     judge("candidate", { barMet: true });
     g("ratchet");
-    expect(g("count").out).toContain("pieces=2 finished=1 MORE");
+    expect(g("next").out).toContain("next=GO_BUILD pieces=2 finished=1 piece=two");
     expect(g("brief").out).toContain("piece=two round=1");
   });
 

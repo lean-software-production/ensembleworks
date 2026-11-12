@@ -21,9 +21,13 @@
 //   verdict --winner A|B --evidence ok|bad --bar-met yes|no --gap TEXT [--why TEXT]
 //                         record the blind critic's verdict (the critic runs this)
 //   ratchet               de-blind the verdict and apply it: a winning candidate
-//                         becomes the new best, a losing one is reset away (exit 1
-//                         when no verdict was recorded)
-//   count                 print "pieces=N finished=M MORE|DONE"
+//                         becomes the new best, a losing one is reset away. With no
+//                         verdict recorded it fails so a fresh critic is asked; after
+//                         three critics in a row record nothing the round is voided
+//   next                  print where the run should go from its recorded state:
+//                         GO_PLAN | GO_BUILD | GO_JUDGE | GO_SMOOTH | GO_REVIEW | GO_END.
+//                         The graph enters through this, so starting the graph again
+//                         (or resuming a stopped run) continues instead of restarting
 //   finish                after the smoothing stage: keep its changes only if
 //                         `check` passes, then exit with the final `check` result
 //   status                print .gauntlet/progress.md
@@ -42,6 +46,7 @@ const ARENA = join(WORK, "arena");
 const OUTPUT_LIMIT = 100_000;
 const DEFAULT_LIMITS = { max_rounds: 5, plateau: 2, max_voids: 2 };
 const FINISHED = new Set(["passed", "plateaued", "capped", "blocked"]);
+const MAX_SILENT_CRITICS = 3;
 
 class UsageError extends Error {}
 
@@ -246,6 +251,8 @@ function init(args) {
       history: [],
     })),
   };
+  rmSync(join(WORK, "final-review.md"), { force: true });
+  rmSync(ARENA, { recursive: true, force: true });
   saveState(state);
   console.log(`initialised ${state.pieces.length} piece(s); limits ${JSON.stringify(limits)}; check: ${check ?? "(none)"}`);
 }
@@ -466,8 +473,22 @@ function ratchet() {
   const state = loadState();
   const { round } = state;
   if (!round) throw new UsageError("there is no round to settle");
-  const v = readVerdict();
   const piece = state.pieces.find((candidatePiece) => candidatePiece.id === round.piece);
+  let v;
+  try {
+    v = readVerdict();
+  } catch (error) {
+    if (!(error instanceof UsageError)) throw error;
+    // A critic that replied without recording anything usable: ask a fresh
+    // one, but not forever — after MAX_SILENT_CRITICS the round is voided so
+    // the loop moves on instead of spinning to the graph's visit cap.
+    round.silent_critics = (round.silent_critics ?? 0) + 1;
+    if (round.silent_critics < MAX_SILENT_CRITICS) {
+      saveState(state);
+      throw error;
+    }
+    v = { winner: "A", evidence: "bad", bar_met: false, gap: `${MAX_SILENT_CRITICS} critics in a row recorded no usable verdict`, why: error.message };
+  }
   let result;
   if (v.evidence === "bad") {
     result = "void";
@@ -489,10 +510,22 @@ function ratchet() {
   console.log(`piece=${piece.id} round=${round.n} result=${result} status=${piece.status}`);
 }
 
-function count() {
+// Where the run stands, from recorded state alone. Every loop iteration and
+// every (re)start of the graph routes through this, which is what makes a
+// run resumable: nothing about "where we were" lives in the workflow run.
+function next() {
+  if (!existsSync(statePath())) {
+    console.log("next=GO_PLAN");
+    return;
+  }
   const state = loadState();
   const finished = state.pieces.filter((piece) => FINISHED.has(piece.status)).length;
-  console.log(`pieces=${state.pieces.length} finished=${finished} ${finished < state.pieces.length ? "MORE" : "DONE"}`);
+  const summary = `pieces=${state.pieces.length} finished=${finished}`;
+  if (state.round) console.log(`next=GO_JUDGE ${summary} piece=${state.round.piece} round=${state.round.n}`);
+  else if (finished < state.pieces.length) console.log(`next=GO_BUILD ${summary} piece=${currentPiece(state).id}`);
+  else if (!state.finished) console.log(`next=GO_SMOOTH ${summary}`);
+  else if (!existsSync(join(WORK, "final-review.md"))) console.log(`next=GO_REVIEW ${summary}`);
+  else console.log(`next=GO_END ${summary}`);
 }
 
 function finish() {
@@ -521,6 +554,7 @@ function finish() {
     if (code !== 0) console.log(lastWords(final.output, 2000));
   }
   state.finish += code === 0 ? " Final check passed." : ` Final check FAILED (exit ${code}).`;
+  state.finished = true;
   saveState(state);
   console.log(state.finish);
   console.log(`commits since start: ${git("rev-list", "--count", `${state.base}..HEAD`)}`);
@@ -531,7 +565,7 @@ function status() {
   process.stdout.write(renderProgress(loadState()));
 }
 
-const COMMANDS = { setup, init, brief, snapshot, verdict, ratchet, count, finish, status };
+const COMMANDS = { setup, init, brief, snapshot, verdict, ratchet, next, finish, status };
 
 const [command, ...args] = process.argv.slice(2);
 try {

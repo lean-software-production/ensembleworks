@@ -85,6 +85,14 @@ limits are. Both files live in the skill directory, not `examples/`, so
 they ship to wherever the plugin is installed and `gauntlet-loop.mjs setup`
 can copy them into a target repository's `.gauntlet/`.
 
+The graph enters every loop iteration through a `next` command node that
+asks the helper where the run stands, so the run's position lives in the
+helper's state (under `.git/gauntlet/`), not in the workflow run: running
+the graph again, or `bb attractor resume`, carries on at the unfinished
+piece. Every agent stage routes its failed outcome to a human gate
+("A stage failed. Resume from where it stopped?") instead of onward, so a
+builder or critic that died is never judged as if it had worked.
+
 The critic and final-review stages use `fidelity="truncate"`. Without it a
 stage's prompt carries up to 400 characters of every earlier stage's reply,
 which would hand a critic the builder's own account of its work.
@@ -251,6 +259,7 @@ bb attractor status <runId>
 bb attractor stages <runId>
 bb attractor events <runId> [--since seq]
 bb attractor stop <runId>
+bb attractor resume <runId>               # carry on a failed/cancelled run from its last checkpoint
 bb attractor answer <runId> <label|text>  # answer a blocked human gate
 bb attractor --help                       # lists every command + summary
 bb attractor <command> --help             # (or `help <command>`) usage + JSON output shape
@@ -1501,3 +1510,40 @@ bb plugin build .
   (`context.response.<node_id>`) for edge conditions; only the prompt
   changes. Any other value (`full`, `summary:*`) is an `invalid-enum-value`
   diagnostic rather than a silent fallback to `compact`.
+
+- **A worker's retryable provider failure pauses its stage instead of
+  failing it (Gauntlet Loop follow-up).** The first live Gauntlet run hit
+  the account's 5-hour usage window: three agent stages failed in under a
+  second each, the graph routed on as if they had run, and the run had to
+  be rebuilt by hand. `server/backend.ts` now listens for bb's
+  `turn.failed` (which carries the failure's category and the rate-limit
+  windows) for its live workers. `server/worker-retry.ts` decides — with
+  the same rules as bb's provider-retry plugin: a subscription window with
+  a known reset no more than six hours away, an overloaded provider, a
+  dropped or 5xx connection, at most four retries — and for a retryable
+  failure the backend calls `bb.sdk.threads.retry` with the time to try
+  again and emits `agent.waiting`, so the stage and run show `blocked`
+  with "Rate limited, retrying at …" until the worker goes active again.
+  `thread.failed` no longer fails a stage on the spot: it and `turn.failed`
+  leave the same core seam in no promised order, so a failure waits
+  `failureGraceMs` (500 ms) for a retry decision first. Attractor answers
+  provider-retry's `provider-retry.v1.consent` RPC with a decline for its
+  own workers so two policies never re-run one turn; on a bb too old to
+  ask, a retry provider-retry queued first is accepted as the one to wait
+  on. A cancelled queued retry (`message.cancelled`) fails the stage.
+  Agent stages have never had a timeout of their own (`timeout` applies to
+  `command` and `human` nodes only), so a long wait is not cut short.
+
+- **`bb attractor resume <runId>` and the `run.resumed` event (Gauntlet
+  Loop follow-up).** A failed or cancelled run could not be continued; the
+  plan only resumes `running` runs after a plugin restart. `service.
+  resumeRun` reopens the run (`RunStore.reopenRun` clears its terminal
+  fields), appends `run.resumed`, and hands the stored checkpoint to the
+  same `executeRun` a plugin restart uses. A checkpoint names the node
+  about to be entered and is saved before that node's visit is counted, so
+  the stage the run stopped on is simply run again. CLI only for now —
+  there is no Resume button on the run panel.
+
+- **Non-worker threads are offered both skills.** `bb.agents.configure`
+  returned `skills: ["attractor"]`, so a thread never saw the `gauntlet`
+  skill even though bb listed it; it now returns both.

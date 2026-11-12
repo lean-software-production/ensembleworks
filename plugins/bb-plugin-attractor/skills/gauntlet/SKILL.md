@@ -87,7 +87,9 @@ set of example outputs. It does not have to be reachable.
    `.gauntlet/pieces.json` by hand before approving.
 8. **Let it run.** Do not interrupt rounds. `.gauntlet/progress.md` (or
    `.gauntlet/g status`) shows every piece's status, rounds and the last
-   verdict; the Attractor card shows the stage in flight.
+   verdict; the Attractor card shows the stage in flight. Do not build
+   your own watcher to stop the run on a usage limit — see "When a run
+   stops" below for what happens instead.
 9. **When it ends**, read `.gauntlet/final-review.md` (a fresh reviewer's
    judgement of the whole result against the bar) and
    `.gauntlet/progress.md`, and report both to the user: which pieces
@@ -98,11 +100,15 @@ set of example outputs. It does not have to be reachable.
 ## What the run does
 
 ```
-plan → approve (human) → init
-  → [ brief → build → snapshot → critic → ratchet → count ]  per round
-  → smooth → finish → review
+next ─┬─ plan → approve (human) → init ─┐
+      ├─ brief → build → snapshot → critic → ratchet ─┤   one round
+      ├─ smooth → finish ─┤
+      ├─ review ─┤
+      └─ exit            └──────────── back to next
 ```
 
+- `next` asks the helper where the run stands and routes there. Every
+  loop iteration, and every start of the graph, goes through it.
 - `init` checks the plan and requires the plan's `check` command to pass
   on the starting commit.
 - `brief` picks the current piece and writes `.gauntlet/brief.md`: the
@@ -120,6 +126,8 @@ plan → approve (human) → init
 - `ratchet` de-blinds the verdict. A winning candidate becomes the kept
   version; a losing one is reset away (it stays reachable at
   `refs/gauntlet/<piece>/r<round>`). Unusable evidence voids the round.
+  If the critic recorded nothing, a fresh critic is asked; after three in
+  a row record nothing the round is voided.
 - A piece ends as `passed` (a critic judged the kept version to meet the
   bar), `plateaued` (`plateau` candidates in a row lost), `capped`
   (`max_rounds` judged rounds spent) or `blocked` (evidence unusable
@@ -130,8 +138,37 @@ plan → approve (human) → init
 
 Round budgets live in `.gauntlet/pieces.json` under `limits`
 (`max_rounds`, default 5; `plateau`, default 2). The graph also caps any
-single stage at 80 visits (`max_node_visits`); raise it for a run with
+single stage at 120 visits (`max_node_visits`); raise it for a run with
 many pieces and a large round budget.
+
+## When a run stops
+
+A run does not have to be restarted, and stopping never costs finished
+work: where it stands is recorded by the helper under `.git/gauntlet/`,
+not in the workflow run.
+
+- **Usage limits and provider outages are waited out.** When a builder or
+  critic hits the account's usage window, or the provider is overloaded
+  or briefly unreachable, Attractor queues a retry of that same worker
+  for when it can succeed. The stage shows as blocked with the reason and
+  the retry time (for example "Rate limited, retrying at 2026-11-12 20:20
+  UTC") and then carries on. Nothing needs doing; tell the user when it
+  will resume if they ask.
+- **A stage that fails for any other reason is never judged.** The run
+  stops at the gate "A stage failed. Resume from where it stopped?". A
+  failed builder is not counted as a lost round and a failed critic is
+  not counted as a verdict. Find out why it failed (open the stage's
+  worker thread from the run card), then answer Resume — or leave that
+  to the user if the cause is theirs to fix, such as a spent credit
+  balance. Resume re-enters at the same piece, or at the round still
+  waiting for a verdict.
+- **A stopped or failed run** can be carried on with
+  `bb attractor resume <runId>`, which re-enters it at the stage it
+  stopped on. Running `.gauntlet/gauntlet-loop.dot` again does the same
+  from the helper's state: it skips the plan, the gate and every
+  finished piece.
+- **To genuinely start over**, delete `.git/gauntlet/` (and reset the
+  branch if the kept commits should go too), then run the graph again.
 
 ## Limits of this version
 
