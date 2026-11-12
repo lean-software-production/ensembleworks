@@ -144,6 +144,25 @@ bb thread interactions list <workerThreadId>
 bb thread interactions approve <interactionId> <workerThreadId>   # or: grant
 ```
 
+`blocked` with a waiting reason such as "Rate limited, retrying at
+2026-11-12 20:20 UTC" means a worker's turn failed on something that passes
+by itself — the account's usage window, an overloaded or briefly unreachable
+provider. Attractor has queued a retry of that same worker for the stated
+time and the stage continues when it runs; there is nothing to answer.
+Failures that will not pass by themselves (a spent credit balance, an
+authentication error, a reset more than six hours away, a fifth failed
+attempt) fail the stage as before.
+
+A failed stage only fails the run when the graph gives a failed outcome
+nowhere to go: an unconditional edge is followed for a failed stage too. To
+keep a failed agent's non-result from being acted on, route explicitly —
+`build -> test [condition="outcome=succeeded"]` and
+`build -> gate [condition="outcome=failed"]`.
+
+`bb attractor resume <runId>` puts a failed or cancelled run back in flight
+at the stage it stopped on, with its context and visit counts as they
+stood. A succeeded run cannot be resumed.
+
 ## From a terminal
 
 ```
@@ -153,6 +172,7 @@ bb attractor status <runId>
 bb attractor stages <runId>
 bb attractor events <runId> [--since seq]
 bb attractor stop <runId>
+bb attractor resume <runId>               # carry on a failed or cancelled run from its last checkpoint
 bb attractor answer <runId> <label|text>  # answer a blocked human gate
 bb attractor --help                       # or `<command> --help` / `help <command>`
 ```

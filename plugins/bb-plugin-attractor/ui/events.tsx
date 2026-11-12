@@ -23,6 +23,8 @@ export function describeEvent(event: EventView): string {
       return `Run failed: ${event.error}`;
     case "run.cancelled":
       return "Run cancelled";
+    case "run.resumed":
+      return `Run resumed${event.fromNodeId ? ` at ${event.fromNodeId}` : ""}`;
     case "stage.started":
       return `${event.nodeId} started (visit ${event.visit}, attempt ${event.attempt})`;
     case "stage.completed":

@@ -639,7 +639,31 @@ export function createService(deps: ServiceDeps) {
     }
   }
 
-  return { createAndStartRun, getRun, listRuns, activeRuns, getGraph, getEvents, stopRun, answerHumanGate, resumeRunningRuns };
+  // Puts a failed or cancelled run back in flight from its last checkpoint:
+  // the node it was on is run again (its visit was never counted, since a
+  // checkpoint is saved before the node it names is entered) with the
+  // context, visit counts and goal-gate outcomes exactly as they stood. For
+  // a run that stopped because something outside the graph went wrong — a
+  // worker that could not be retried, a host that went away, a human who
+  // pressed Stop — rather than because the graph ran to a failed end.
+  async function resumeRun(runId: string): Promise<{ run: Run; fromNodeId: string | null }> {
+    const run = store.getRun(runId);
+    if (controllers.has(runId)) throw new Error(`run ${runId} is still in flight`);
+    if (run.status !== "failed" && run.status !== "cancelled") {
+      throw new Error(`run ${runId} is ${run.status}; only a failed or cancelled run can be resumed`);
+    }
+    if (!run.environmentId) throw new Error(`run ${runId} has no environment to resume in`);
+    const envCtx = await resolveRunEnvironment(run.threadId, run.projectId ?? "", run.environmentId);
+    const checkpoint = store.loadCheckpoint(runId);
+    const fromNodeId = checkpoint?.nextNodeId ?? null;
+    const reopened = store.reopenRun(runId, clock.now());
+    store.appendEvent(runId, { type: "run.resumed", runId, ts: clock.now(), fromNodeId });
+    publish(reopened);
+    void executeRun(reopened, checkpoint, envCtx);
+    return { run: reopened, fromNodeId };
+  }
+
+  return { createAndStartRun, getRun, listRuns, activeRuns, getGraph, getEvents, stopRun, resumeRun, answerHumanGate, resumeRunningRuns };
 }
 
 export type Service = ReturnType<typeof createService>;

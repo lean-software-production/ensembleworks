@@ -370,6 +370,15 @@ export class RunStore {
     return this.getRun(id);
   }
 
+  /** Puts a finished (failed or cancelled) run back in flight for `service.resumeRun`: "running" again, with its terminal fields cleared. Its checkpoint, context, stages and events are kept. */
+  reopenRun(id: string, now = Date.now()): Run {
+    this.getRun(id);
+    this.#db
+      .prepare("UPDATE attractor_runs SET status='running', final_outcome_json=NULL, goal_gate_failures_json='[]', error=NULL, finished_at=NULL, updated_at=? WHERE id=?")
+      .run(now, id);
+    return this.getRun(id);
+  }
+
   /** Sets a run's status directly, without touching finishedAt/error/etc. — used for the transient "blocked" state (T6). */
   setStatus(id: string, status: RunStatus, now = Date.now()): Run {
     this.getRun(id);

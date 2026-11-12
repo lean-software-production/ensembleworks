@@ -1,3 +1,4 @@
+import type { PluginTurnFailedEvent } from "@get-bb/plugin-sdk";
 import { createFakePluginHost, makeThreadResponse } from "@get-bb/plugin-sdk/testing";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { parseWorkflowGraph } from "../../dot/graph";
@@ -646,5 +647,158 @@ describe("createThreadAgentBackend: prompt assembly", () => {
 
     const prompt = (spawnCalls[0] as { prompt: string }).prompt;
     expect(prompt).not.toContain("Parallel results");
+  });
+});
+
+describe("createThreadAgentBackend: waiting out a retryable provider failure", () => {
+  const RESET = Date.now() + 60 * 60_000;
+
+  function turnFailed(overrides: Record<string, unknown> = {}): PluginTurnFailedEvent {
+    return {
+      threadId: "worker-thread",
+      requestId: "req-1",
+      turnId: null,
+      errorInfo: { category: "rate-limit", httpStatusCode: 429, providerCode: null },
+      inputAccepted: false,
+      rateLimits: {
+        kind: "subscription-window",
+        overageReason: null,
+        overageStatus: null,
+        providerId: "anthropic",
+        reachedReason: null,
+        status: "blocked",
+        windows: [{ label: "5-hour", providerKey: null, resetsAtMs: RESET, status: "blocked" }],
+      },
+      attemptNumber: 1,
+      ...overrides,
+    } as PluginTurnFailedEvent;
+  }
+
+  function start(retry: (args: unknown) => Promise<unknown> = async () => ({ ok: true })) {
+    const host = makeHost();
+    const retryCalls: Array<{ threadId: string; turnRequestId: string; sendAt: number; reason: string }> = [];
+    host.harness.sdk.stub("threads.retry", async (args: unknown) => {
+      retryCalls.push(args as (typeof retryCalls)[number]);
+      return retry(args);
+    });
+    const backend = createThreadAgentBackend(host.bb, { failureGraceMs: 20 });
+    const emitted: Array<{ type: string; [key: string]: unknown }> = [];
+    const runPromise = backend.run(baseInput(graph(PLAN_GRAPH), "plan", (e) => emitted.push(e as (typeof emitted)[number])));
+    const settled = { done: false };
+    runPromise.then(() => { settled.done = true; }, () => { settled.done = true; });
+    const fire = host.harness.behavior.emitThreadEvent;
+    const worker = () => makeThreadResponse({ id: "worker-thread" });
+    return { host, retryCalls, emitted, runPromise, settled, fire, worker };
+  }
+
+  const wait = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
+
+  it("queues a retry for after the usage window reopens and keeps the stage waiting on the same worker", async () => {
+    const t = start();
+    await flush();
+    await t.fire("thread.failed", { thread: t.worker(), error: "You've hit your 5-hour limit" });
+    await t.fire("turn.failed", turnFailed());
+    await wait(60); // well past the failure grace: the stage must not have failed
+
+    expect(t.settled.done).toBe(false);
+    expect(t.retryCalls).toHaveLength(1);
+    expect(t.retryCalls[0]).toMatchObject({ threadId: "worker-thread", turnRequestId: "req-1", reason: "Rate limited" });
+    expect(t.retryCalls[0]!.sendAt).toBeGreaterThanOrEqual(RESET + 15_000);
+    const waiting = t.emitted.find((e) => e.type === "agent.waiting");
+    expect(waiting).toMatchObject({ threadId: "worker-thread", interactionId: "req-1" });
+    expect(String(waiting?.kind)).toMatch(/^Rate limited, retrying at \d{4}-\d\d-\d\d \d\d:\d\d UTC$/);
+
+    // The window reopens: bb re-runs the turn on the same thread, and the stage completes normally.
+    await t.fire("thread.active", { thread: t.worker() });
+    expect(t.emitted.at(-1)).toEqual({ type: "agent.resumed", threadId: "worker-thread" });
+    await t.fire("thread.idle", { thread: t.worker(), lastAssistantText: "done" });
+    await expect(t.runPromise).resolves.toMatchObject({ status: "succeeded" });
+  });
+
+  it("handles turn.failed arriving before thread.failed", async () => {
+    const t = start();
+    await flush();
+    await t.fire("turn.failed", turnFailed());
+    await t.fire("thread.failed", { thread: t.worker(), error: "limit" });
+    await wait(60);
+    expect(t.settled.done).toBe(false);
+    expect(t.retryCalls).toHaveLength(1);
+    await t.fire("thread.idle", { thread: t.worker(), lastAssistantText: "done" });
+    await expect(t.runPromise).resolves.toMatchObject({ status: "succeeded" });
+  });
+
+  it("waits again when the retried turn fails on the limit a second time", async () => {
+    const t = start();
+    await flush();
+    await t.fire("thread.failed", { thread: t.worker(), error: "limit" });
+    await t.fire("turn.failed", turnFailed());
+    await t.fire("thread.active", { thread: t.worker() });
+    await t.fire("thread.failed", { thread: t.worker(), error: "limit" });
+    await t.fire("turn.failed", turnFailed({ requestId: "req-2", attemptNumber: 2 }));
+    await wait(60);
+    expect(t.settled.done).toBe(false);
+    expect(t.retryCalls.map((call) => call.turnRequestId)).toEqual(["req-1", "req-2"]);
+  });
+
+  it("fails the stage when the failure is not one that passes by itself", async () => {
+    const t = start();
+    await flush();
+    await t.fire("thread.failed", { thread: t.worker(), error: "context window exceeded" });
+    await t.fire("turn.failed", turnFailed({ errorInfo: { category: "context-window-exceeded", httpStatusCode: null, providerCode: null } }));
+    await expect(t.runPromise).rejects.toThrow(/context window exceeded/);
+    expect(t.retryCalls).toEqual([]);
+  });
+
+  it("fails the stage when the retries are exhausted", async () => {
+    const t = start();
+    await flush();
+    await t.fire("thread.failed", { thread: t.worker(), error: "limit" });
+    await t.fire("turn.failed", turnFailed({ attemptNumber: 5 }));
+    await expect(t.runPromise).rejects.toThrow(/limit/);
+  });
+
+  it("keeps waiting when another policy already queued the retry", async () => {
+    const t = start(async () => {
+      throw new Error("a retry is already queued for this turn");
+    });
+    t.host.harness.sdk.stub("threads.queuedMessages.list", async () => [{ id: "queued-retry", threadId: "worker-thread" }]);
+    await flush();
+    await t.fire("thread.failed", { thread: t.worker(), error: "limit" });
+    await t.fire("turn.failed", turnFailed());
+    await wait(60);
+    expect(t.settled.done).toBe(false);
+    expect(t.emitted.some((e) => e.type === "agent.waiting")).toBe(true);
+    await t.fire("thread.idle", { thread: t.worker(), lastAssistantText: "done" });
+    await expect(t.runPromise).resolves.toMatchObject({ status: "succeeded" });
+  });
+
+  it("fails the stage when the retry cannot be queued", async () => {
+    const t = start(async () => {
+      throw new Error("thread has moved on");
+    });
+    t.host.harness.sdk.stub("threads.queuedMessages.list", async () => []);
+    await flush();
+    await t.fire("thread.failed", { thread: t.worker(), error: "limit" });
+    await t.fire("turn.failed", turnFailed());
+    await expect(t.runPromise).rejects.toThrow(/limit/);
+  });
+
+  it("fails the stage when someone cancels the queued retry", async () => {
+    const t = start();
+    await flush();
+    await t.fire("thread.failed", { thread: t.worker(), error: "limit" });
+    await t.fire("turn.failed", turnFailed());
+    await wait(40);
+    await t.fire("message.cancelled", { entry: { threadId: "worker-thread" } } as never);
+    await expect(t.runPromise).rejects.toThrow(/retry was cancelled/);
+  });
+
+  it("ignores a failed turn on a thread it is not waiting on", async () => {
+    const t = start();
+    await flush();
+    await t.fire("turn.failed", turnFailed({ threadId: "someone-elses-thread" }));
+    expect(t.retryCalls).toEqual([]);
+    await t.fire("thread.idle", { thread: t.worker(), lastAssistantText: "done" });
+    await t.runPromise;
   });
 });
