@@ -286,19 +286,62 @@ node id per line). An unknown path exits `1` with `no such field: <path>`
 on stderr (for an array result, that's true when *any* element lacks it).
 
 **RPC** (`server/contracts.ts`, consumed by `ui/*`/`app.tsx` via `useRpc`):
-`getRun`, `listRuns`, `getGraph`, `getEvents`, `stopRun`, `activeRuns`,
-`answerGate` — every method is scoped to the calling thread's own runs.
+`getRun`, `listRuns`, `getGraph`, `getEvents`, `stopRun`, `resumeRun`,
+`activeRuns`, `answerGate` — every method is scoped to the calling thread's
+own runs. `resumeRun` is the RPC form of `bb attractor resume`: it returns
+`{ resumed: true, fromNodeId }`, or `{ resumed: false, reason }` for a run
+that is not this thread's or cannot be resumed (still active, no
+checkpoint).
 
 **Realtime**: the `attractor-runs` channel publishes `{ runId, threadId }`
 on every event; `ui/run-panel.tsx`'s `RunPanel` and `ui/active-runs-
 banner.tsx`'s `ActiveRunsBanner` both subscribe via `useRealtime` and
 refetch.
 
-**Directive / panel**: the `attractor-run` message directive
-(`::attractor-run{run="<runId>" thread="<threadId>"}`) renders a header, the
-DAG, and an expandable stage list inline in chat; "Open in right panel"
-opens the same run in the thread side panel with the full DAG, stage list,
-event timeline, and a Stop button.
+**One attention card, three places.** `ui/attention-card.tsx` is the one
+card the chat directive, the composer banner and the top of the side panel
+all render, from one derivation (`ui/run-model.ts`'s `deriveAttention`), so
+the three can never disagree. Its states:
+
+- **Running**: the current stage, attempt and elapsed time, and progress —
+  "n of N stages" segments only when the graph has no loop, otherwise
+  elapsed time and the pass count.
+- **Needs you**: a human gate (its question, what it follows or reviews,
+  one button per option saying where it leads — "Approve → Bump · Revise →
+  back to Research" — and a free-text box when the gate allows it); a
+  worker's own prompt ("Open worker to answer" — it is answered in the
+  worker thread, not from the card); a provider pause (reason, reset time,
+  countdown). Several at once show one at a time with "1 of N" and Next,
+  gates first.
+- **Failed or stopped**: the stage and why, the output tail in the panel,
+  and "Resume from X" (the `resumeRun` RPC).
+- **Finished**: the last working stage's own output; in the panel also goal
+  gates, the gate decisions taken, and where the time went.
+
+**Directive**: the `attractor-run` message directive
+(`::attractor-run{run="<runId>" thread="<threadId>"}`) renders the card in
+chat — no graph; its › opens the run in the thread side panel.
+
+**Panel**: a header (title, status pill, elapsed time or pass count, short
+id, and Stop — or Resume once the run has failed or been stopped), the
+attention card, a "Now" list of what is in flight (fan-out branches grouped
+under their fork, with what they join into), then three accordions,
+collapsed by default and remembered (localStorage):
+
+- **Graph** — the dagre graph in theme colours, the current stage
+  emphasised, following the current stage until you pan or zoom (Follow
+  goes back, Fit shows it all), "Open large" for a full-window view, and a
+  detail card for the selected node: where each outcome routes and its
+  earlier visits.
+- **History** — grouped by pass, each pass a timeline with its worker
+  threads; or a flat newest-first list with a filter and kind chips. A pass
+  needs no graph analysis: walking the stages in order, a new pass starts
+  whenever the run re-enters a node already in the current one, so a graph
+  with no loop is one pass, shown flat.
+- **Event log** — "story" (milestones grouped by pass with clock times;
+  routing and checkpoint events hidden and counted; follows the live run
+  until you scroll up) or "raw" (every event one per line, a filter, one
+  list rather than pages, Copy and JSON export).
 
 ### Active-runs composer banner
 
@@ -310,15 +353,13 @@ id: "attractor-status", scopes: ["thread"], banners: [{ id: "active-runs",
 chrome: "bare", component: ActiveRunsBanner }] })`, the same shape BB's
 own built-in Workflows plugin uses for its composer "active runs" strip.
 
-Each row shows the run's title, coloured status word, `n/N stages`, and
-live elapsed time; a chevron ("Open in right panel") opens the run in the
-thread panel; an expand toggle reveals the same vertical DAG and stage
-list the directive/panel show. A row blocked on a **human gate** (a
-`hexagon` node) also renders its outgoing-edge options as inline answer
-buttons — clicking one calls the `answerGate` RPC (the same resolution as
-`bb attractor answer`/the `pendingInteraction` renderer, but stamped
-`actor: "ui"`) and refreshes — plus a "Reviewing: `<path>`" hint when the
-gate has a `review_target`, and an "Open thread" link when the routing
+Each row is the attention card (above), with its live elapsed time; a
+chevron ("Open in right panel") opens the run in the thread panel. A row
+blocked on a **human gate** (a `hexagon` node) renders its options as
+answer buttons — clicking one calls the `answerGate` RPC (the same
+resolution as `bb attractor answer`/the `pendingInteraction` renderer, but
+stamped `actor: "ui"`) and refreshes — plus "Reviewing `<path>`" when the
+gate has a `review_target`, and "Open <stage>’s thread" when the routing
 predecessor's worker thread is known. The banner fetches on mount, then
 refetches on `attractor-runs` realtime events (coalesced like the panel)
 and on a 5s fallback poll while any row is still active; a run drops off
@@ -627,29 +668,24 @@ T5 adds the **DAG UI**:
   worker thread by accident. The DAG box wrapper (`data-testid="dag-viewport"`)
   is `overflow: hidden`, never `overflow: auto` — the same scroll-ownership
   rule as the rest of the card.
-- `ui/stages.tsx` — the stage list: four columns (Node, Status, Duration,
-  Thread), `table-layout: fixed` with wrapping cells, so it fits inside the
-  message-directive card's `max-w-md` (28rem) without spilling sideways —
-  it used to be six columns (Node, Status, Visit, Duration, Provider,
-  Thread), which didn't. `Visit` folds into the Node column as a "×N"
-  suffix (only when `visit > 1`); the node's resolved-or-declared
-  provider/model (`formatDuration` for elapsed/fixed duration, as before)
-  renders as muted subtext under the node's name instead of its own
-  column. An "Open thread" link still appears in the Thread column when a
-  stage has a worker thread. The same four-column layout is used in both
-  the card and the wider panel — no separate `overflow-x: auto` wrapper is
-  needed at either width.
-- `ui/events.tsx` — a paged (`PAGE_SIZE = 50`), oldest-first-within-page
-  event timeline starting on the most recent page, with a one-line
-  `describeEvent` summary per `RunEvent` variant.
+- `ui/run-model.ts` — the pure read model every surface derives from:
+  pass grouping, progress wording, the attention state, "Now", route
+  wording, the story/raw event lines. No React, no DOM, so it is tested
+  directly, including against every shipped graph
+  (`tests/ui/run-model.examples.test.ts`).
+- `ui/attention-card.tsx` — the attention card (see "One attention card,
+  three places").
+- `ui/graph-section.tsx` — the panel's Graph accordion: `DagView` in
+  selection/follow mode, the node detail card, and the "Open large" overlay.
+- `ui/history.tsx` — the panel's History accordion (by pass / list).
+- `ui/events.tsx` — the panel's Event log accordion (story / raw).
+- `ui/stages.tsx` — `providerLabel` and `formatDuration`; the stage table
+  that used to live here was replaced by History.
 - `ui/run-panel.tsx` — `RunPanel`, the data-fetching component shared by
   both surfaces: `getRun`/`getGraph`/`getEvents` on mount, refetch on any
-  `attractor-runs` realtime signal (or one naming this run), a header
-  (title, status, elapsed, *visited*/total stages), and mode-specific
-  layout (`"directive"`: DAG + expandable stage list + "Open in right
-  panel"; `"panel"`: DAG + stage list + event timeline + a Stop button
-  while the run is active, inside a `h-full min-h-0 overflow-y-auto`
-  root — see "Scroll ownership" below).
+  `attractor-runs` realtime signal naming this run, and the directive
+  (attention card) or panel layout, inside a `h-full min-h-0
+  overflow-y-auto` root — see "Scroll ownership" below.
 
 #### Scroll ownership
 
@@ -670,8 +706,10 @@ Two rules, enforced by `tests/ui/scroll.test.tsx`:
   registers the panel action with `layout: "flush"`, which the SDK defines
   as "the full tab area (no padding, definite height, no host scrolling)".
   The panel root is therefore `flex h-full min-h-0 flex-col overflow-y-auto
-  p-3` — without it the pane's own definite height simply clips the stage
-  table and event log with nothing able to scroll to them.
+  p-3` — without it the pane's own definite height simply clips the
+  history and event log with nothing able to scroll to them. No accordion
+  adds a scroller of its own: the raw event log is one long list the panel
+  root scrolls, and "follows live" by scrolling that root.
 - `app.tsx` — registers the `attractor-run` `messageDirective` (renders
   `RunPanel` in `"directive"` mode, or an error when the directive's `run`
   attribute is missing/blank) and the matching `threadPanelAction`
@@ -685,8 +723,9 @@ app's esbuild bundle (`bb plugin build .`'s `dist/app.js` is ~60 KB with
 zero references to it, vs. `dist/server.js`'s ~850 KB).
 
 `tests/ui/dag.test.ts` covers `layoutGraph` directly (deterministic,
-node-environment, no DOM); `tests/ui/dag.render.test.tsx`,
-`tests/ui/stages.test.tsx` and `tests/ui/events.test.tsx` cover their
+node-environment, no DOM); `tests/ui/run-model*.test.ts` cover the read
+model; `tests/ui/dag.render.test.tsx`, `attention-card.test.tsx`,
+`history.test.tsx`, `events.test.tsx` and `stages.test.tsx` cover their
 respective components under jsdom; `tests/app.test.tsx` exercises the
 directive and panel end-to-end through `@get-bb/plugin-sdk/testing/app`'s
 `loadPluginApp`/`renderSlot` against a fake RPC (invalid/blank run id,
@@ -1541,9 +1580,42 @@ bb plugin build .
   fields), appends `run.resumed`, and hands the stored checkpoint to the
   same `executeRun` a plugin restart uses. A checkpoint names the node
   about to be entered and is saved before that node's visit is counted, so
-  the stage the run stopped on is simply run again. CLI only for now —
-  there is no Resume button on the run panel.
+  the stage the run stopped on is simply run again. (The run-panel
+  redesign later added the `resumeRun` RPC and a Resume button.)
 
 - **Non-worker threads are offered both skills.** `bb.agents.configure`
   returned `skills: ["attractor"]`, so a thread never saw the `gauntlet`
   skill even though bb listed it; it now returns both.
+
+- **Run-panel redesign (attention card + panel layout A).** Departures
+  from earlier sections, and from the redesign's own mockups:
+  - *The composer banner no longer expands into a graph.* Each row is the
+    attention card; the graph lives in the panel, one click away.
+  - *The four-column stage table is gone,* replaced by the panel's History
+    accordion; `ui/stages.tsx` keeps only `providerLabel` and
+    `formatDuration`. `describeEvent`, `EventTimeline` and `PAGE_SIZE` are
+    gone too — the raw event log is one list, not pages.
+  - *Clicking a node in the panel's graph selects it* (opening the node
+    detail card, which has "Open worker") instead of opening its worker
+    thread straight away. `DagView` keeps the old click-to-open behaviour
+    when no `onSelectNode` is passed.
+  - *The graph is drawn in theme colours* (`var(--card)` fill, status
+    strokes from `--success`/`--brand`/`--warning`/`--destructive`, edges
+    in `--border`/`--muted-foreground`), set via `style` because SVG
+    presentation attributes do not resolve CSS variables. This supersedes
+    the restyle section's white box, Graphviz-card palette and legend row.
+    A revisited node says "N passes" as subtext instead of a numeric badge.
+  - *Fit stays in the graph's zoom cluster,* with a Follow button beside
+    it, rather than in the accordion header the mockup shows.
+  - *Server data added:* `GraphView` edges carry `freeform` (so the card
+    knows a gate takes free text); stage rows carry `waitingSince`/
+    `waitingUntil` (the provider retry time, from `agent.waiting`'s new
+    `retryAt`) and `parallelGroupId`/`branchIndex` (fan-out membership,
+    from `stage.started`) — four new nullable `stages` columns, added
+    idempotently like the earlier ones.
+  - *Not built:* a gate's timeout countdown, "Open file" for a gate's
+    review target (the card shows the review target's stored summary),
+    and "Retry now" during a provider pause. Out of scope per the brief:
+    answering a worker's permission prompt from the panel (the card says
+    "Open worker to answer"), resuming from an earlier stage, explaining a
+    dead end, "Run again", the line-map graph variant.

@@ -77,6 +77,16 @@ export const stageSchema = z.object({
   waitingReason: z.string().nullable(),
   /** The gate this stage opened (blocked human stage only) — null once nothing was ever a gate, or before this follow-up shipped. */
   gateContext: stageGateContextSchema.optional(),
+  // Run-panel redesign. Optional (not just nullable) like `gateContext`, so
+  // a payload from before these existed still parses.
+  /** When the stage's current worker wait began (`agent.waiting`), null when nothing is waiting. */
+  waitingSince: z.number().nullable().optional(),
+  /** When a queued provider retry is due — set only for that kind of wait. */
+  waitingUntil: z.number().nullable().optional(),
+  /** The parallel fan-out this stage ran under (e.g. "fork@1"), null on the main walk. */
+  parallelGroupId: z.string().nullable().optional(),
+  /** The stage's branch index within `parallelGroupId`, null on the main walk. */
+  branchIndex: z.number().nullable().optional(),
   startedAt: z.number(),
   completedAt: z.number().nullable(),
 });
@@ -104,6 +114,8 @@ export const graphEdgeSchema = z.object({
   to: z.string(),
   label: z.string().nullable(),
   condition: z.string().nullable(),
+  /** The edge declared `freeform=true` (a human gate accepts free text and routes it here). Optional so an older payload still parses. */
+  freeform: z.boolean().optional(),
 });
 
 export const graphViewSchema = z.object({ rankdir: rankdirSchema, nodes: z.array(graphNodeSchema), edges: z.array(graphEdgeSchema) });
@@ -143,6 +155,11 @@ export const rpcContract = defineRpcContract({
   // ownership-scoped resolution as `bb attractor answer`/`answerHumanGate`,
   // but stamped with actor "ui" instead of "cli".
   answerGate: { input: z.object({ runId: id, threadId: id, answer: z.string().min(1).max(2000) }).strict(), output: z.object({ answered: z.boolean(), reason: z.string().optional() }) },
+  // Backs the run panel's and attention card's Resume button — the same
+  // ownership-scoped `service.resumeRun` as `bb attractor resume`. A refusal
+  // (not your run, still in flight, not failed/cancelled) is `resumed:
+  // false` with a reason, never a thrown error.
+  resumeRun: { input: selection, output: z.object({ resumed: z.boolean(), fromNodeId: z.string().nullable().optional(), reason: z.string().optional() }) },
 });
 
 // -----------------------------------------------------------------------

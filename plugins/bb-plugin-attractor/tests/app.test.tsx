@@ -182,128 +182,80 @@ describe("Attractor app", () => {
     expect(slot.inspection.rpcCalls).toContainEqual({ method: "getRun", input: { runId: "run-1", threadId: "thread-1" } });
   });
 
-  it("renders the run's header, DAG nodes, and per-node status from the RPC", async () => {
+  it("renders the directive as the chat attention card: title, status pill, current stage and progress — and no graph", async () => {
     const app = await loadPluginApp(() => import("../app"));
-    const slot = renderSlot(
-      app.messageDirectives[0]!,
-      { attributes: { run: "run-1" }, source: '::attractor-run{run="run-1"}', message: { id: "m1", threadId: "thread-1", turnId: null, projectId: null }, openWorkspaceFile: null },
-      { rpc: baseRpc() },
-    );
+    const slot = renderSlot(app.messageDirectives[0]!, { attributes: { run: "run-1" }, source: '::attractor-run{run="run-1"}', message: { id: "m1", threadId: "thread-1", turnId: null, projectId: null }, openWorkspaceFile: null }, { rpc: baseRpc() });
     await slot.findByText("Plan Implement Review");
-    expect(slot.getByText("running")).toBeTruthy();
-    expect(slot.container.querySelector('[data-node-id="plan"][data-status="running"]')).toBeTruthy();
-    expect(slot.container.querySelector('[data-node-id="start"][data-status="succeeded"]')).toBeTruthy();
+    const card = slot.getByTestId("attention-card");
+    expect(card.getAttribute("data-surface")).toBe("chat");
+    expect(card.getAttribute("data-attention")).toBe("running");
+    expect(slot.container.querySelector('[data-run-status="running"]')?.textContent).toContain("Running");
+    expect(slot.getByTestId("attention-running").textContent).toContain("Plan");
+    // No loop in this graph: one progress segment per working node, "n of N stages".
+    expect(slot.getByTestId("attractor-progress")).toBeTruthy();
+    expect(slot.container.querySelector("svg[aria-label='Workflow DAG']")).toBeNull();
+    expect(slot.queryByRole("button", { name: /show stages/i })).toBeNull();
   });
 
-  it("puts the chevron ('Open in right panel') in the card's header row, separate from the footer's 'Show stages' toggle", async () => {
+  it("renders the chat card as a BB card (rounded, bordered, at most 28rem wide)", async () => {
     const app = await loadPluginApp(() => import("../app"));
-    const slot = renderSlot(
-      app.messageDirectives[0]!,
-      { attributes: { run: "run-1" }, source: '::attractor-run{run="run-1"}', message: { id: "m1", threadId: "thread-1", turnId: null, projectId: null }, openWorkspaceFile: null },
-      { rpc: baseRpc() },
-    );
-    const showStages = await slot.findByRole("button", { name: /show stages/i });
-    const chevron = await slot.findByRole("button", { name: /open in (right )?panel/i });
-    expect(chevron).not.toBe(showStages);
-    expect(chevron.parentElement).not.toBe(showStages.parentElement);
-    // The toggle is the card's own footer row, inside the card rather than a
-    // sibling below it, so the card reads as one unit (restyle follow-up).
-    const card = slot.container.querySelector(".rounded-lg.border.border-border.bg-card")!;
-    expect(card.contains(showStages)).toBe(true);
-    expect(showStages.closest("[data-card-footer]")).toBeTruthy();
-  });
-
-  it("renders the directive as a dark BB card (rounded, bordered, max-w-md)", async () => {
-    const app = await loadPluginApp(() => import("../app"));
-    const slot = renderSlot(
-      app.messageDirectives[0]!,
-      { attributes: { run: "run-1" }, source: '::attractor-run{run="run-1"}', message: { id: "m1", threadId: "thread-1", turnId: null, projectId: null }, openWorkspaceFile: null },
-      { rpc: baseRpc() },
-    );
+    const slot = renderSlot(app.messageDirectives[0]!, { attributes: { run: "run-1" }, source: '::attractor-run{run="run-1"}', message: { id: "m1", threadId: "thread-1", turnId: null, projectId: null }, openWorkspaceFile: null }, { rpc: baseRpc() });
     await slot.findByText("Plan Implement Review");
-    const card = slot.container.querySelector(".rounded-lg.border.border-border.bg-card")!;
-    expect(card).toBeTruthy();
-    expect(card.className).toContain("max-w-md");
-    expect(card.className).toContain("shadow-sm");
+    const card = slot.getByTestId("attention-card");
+    expect(card.className).toContain("rounded-lg");
+    expect(card.className).toContain("border-border");
+    expect(card.className).toContain("bg-card");
+    expect((card as HTMLElement).style.maxWidth).toBe("28rem");
   });
 
-  it("colors the status word by run status", async () => {
+  it("words the status pill by run state on the chat card", async () => {
     const app = await loadPluginApp(() => import("../app"));
-    const cases: [string, string][] = [
-      ["running", "text-amber-600"],
-      ["blocked", "text-amber-600"],
-      ["succeeded", "text-green-600"],
-      ["failed", "text-destructive"],
-      ["cancelled", "text-muted-foreground"],
+    const cases: [RunView["status"], string][] = [
+      ["running", "Running"],
+      ["succeeded", "Succeeded"],
+      ["failed", "Failed"],
+      ["cancelled", "Stopped"],
     ];
-    for (const [status, expectedClass] of cases) {
-      const slot = renderSlot(
-        app.messageDirectives[0]!,
-        { attributes: { run: "run-1" }, source: '::attractor-run{run="run-1"}', message: { id: "m1", threadId: "thread-1", turnId: null, projectId: null }, openWorkspaceFile: null },
-        { rpc: baseRpc({ run: { ...RUN, status: status as RunView["status"] } }) },
-      );
-      await waitFor(() => expect(slot.container.querySelector("[data-run-status]")?.textContent).toBe(status));
-      expect(slot.container.querySelector("[data-run-status]")?.className).toContain(expectedClass);
+    for (const [status, word] of cases) {
+      const slot = renderSlot(app.messageDirectives[0]!, { attributes: { run: "run-1" }, source: '::attractor-run{run="run-1"}', message: { id: "m1", threadId: "thread-1", turnId: null, projectId: null }, openWorkspaceFile: null }, { rpc: baseRpc({ run: { ...RUN, status, finishedAt: status === "running" ? null : 2_000 } }) });
+      await waitFor(() => expect(slot.container.querySelector(`[data-run-status="${status}"]`)?.textContent).toContain(word));
       cleanup();
     }
   });
 
-  it("shows the first 8 characters of the run id in monospace, next to the status", async () => {
+  it("shows a finished run's last stage output on the chat card", async () => {
     const app = await loadPluginApp(() => import("../app"));
+    const done: StageView[] = [STAGES[0]!, { ...STAGES[1]!, status: "succeeded", outcomeStatus: "succeeded", completedAt: 1_900 }];
     const slot = renderSlot(
       app.messageDirectives[0]!,
       { attributes: { run: "run-1" }, source: '::attractor-run{run="run-1"}', message: { id: "m1", threadId: "thread-1", turnId: null, projectId: null }, openWorkspaceFile: null },
-      { rpc: baseRpc() },
+      { rpc: baseRpc({ run: { ...RUN, status: "succeeded", finishedAt: 2_000, currentNodeId: "exit", context: { response: { plan: "The plan is ready." } } }, stages: done }) },
     );
-    await slot.findByText("Plan Implement Review");
-    const shortId = slot.getByText(RUN.id.slice(0, 8));
-    expect(shortId.className).toContain("font-mono");
-    expect(shortId.className).toContain("text-xs");
-    expect(shortId.className).toContain("text-muted-foreground");
+    await waitFor(() => expect(slot.getByTestId("attention-finished")).toBeTruthy());
+    expect(slot.getByTestId("attention-finished").textContent).toContain("Plan");
   });
 
-  it("shows the stages/elapsed summary line and a legend with Completed/Running/Failed/Blocked/Pending", async () => {
+  it("offers Resume on a failed run's chat card and calls resumeRun", async () => {
     const app = await loadPluginApp(() => import("../app"));
+    let resumedWith: unknown = null;
+    const failed: StageView[] = [STAGES[0]!, { ...STAGES[1]!, status: "failed", outcomeStatus: "failed", completedAt: 1_900 }];
     const slot = renderSlot(
       app.messageDirectives[0]!,
       { attributes: { run: "run-1" }, source: '::attractor-run{run="run-1"}', message: { id: "m1", threadId: "thread-1", turnId: null, projectId: null }, openWorkspaceFile: null },
-      { rpc: baseRpc() },
+      {
+        rpc: {
+          ...baseRpc({ run: { ...RUN, status: "failed", finishedAt: 2_000, error: "worker crashed" }, stages: failed }),
+          resumeRun: (input: unknown) => {
+            resumedWith = input;
+            return { resumed: true, fromNodeId: "plan" };
+          },
+        },
+      },
     );
-    await slot.findByText(/Stages: \d+\/\d+/);
-    expect(slot.getByText(/Elapsed:/)).toBeTruthy();
-    expect(slot.getByText("Completed")).toBeTruthy();
-    expect(slot.getByText("Running")).toBeTruthy();
-    expect(slot.getByText("Failed")).toBeTruthy();
-    expect(slot.getByText("Blocked")).toBeTruthy();
-    expect(slot.getByText("Pending")).toBeTruthy();
-  });
-
-  it("shows a 'Waiting: <node label>' summary suffix when the run is blocked", async () => {
-    const app = await loadPluginApp(() => import("../app"));
-    const stages: StageView[] = [
-      { ...STAGES[0]!, },
-      { ...STAGES[1]!, status: "blocked" },
-    ];
-    const slot = renderSlot(
-      app.messageDirectives[0]!,
-      { attributes: { run: "run-1" }, source: '::attractor-run{run="run-1"}', message: { id: "m1", threadId: "thread-1", turnId: null, projectId: null }, openWorkspaceFile: null },
-      { rpc: baseRpc({ run: { ...RUN, status: "blocked" }, stages }) },
-    );
-    await waitFor(() => expect(slot.container.querySelector("[data-run-status]")?.textContent).toBe("blocked"));
-    expect(slot.getByText(/Waiting: Plan/)).toBeTruthy();
-  });
-
-  it("wraps the DAG's svg inside a white rounded box", async () => {
-    const app = await loadPluginApp(() => import("../app"));
-    const slot = renderSlot(
-      app.messageDirectives[0]!,
-      { attributes: { run: "run-1" }, source: '::attractor-run{run="run-1"}', message: { id: "m1", threadId: "thread-1", turnId: null, projectId: null }, openWorkspaceFile: null },
-      { rpc: baseRpc() },
-    );
-    await slot.findByText("Plan Implement Review");
-    const box = slot.container.querySelector(".bg-white.rounded-md")!;
-    expect(box).toBeTruthy();
-    expect(box.querySelector("svg")).toBeTruthy();
+    await waitFor(() => expect(slot.getByTestId("attention-failed")).toBeTruthy());
+    expect(slot.getByTestId("attention-failed").textContent).toContain("worker crashed");
+    slot.getByRole("button", { name: /resume from plan/i }).click();
+    await waitFor(() => expect(resumedWith).toEqual({ runId: "run-1", threadId: "thread-1" }));
   });
 
   it("opens the thread panel from the directive's 'Open in right panel' action", async () => {
@@ -366,7 +318,7 @@ describe("Attractor app", () => {
       { threadId: "thread-1", params: { runId: "run-1" } },
       { rpc: { ...baseRpc(), stopRun: (input: unknown) => { stopCalledWith = input; return { stopped: true }; } } },
     );
-    const stopButton = await slot.findByRole("button", { name: /stop/i });
+    const stopButton = await slot.findByRole("button", { name: /^stop$/i });
     stopButton.click();
     await waitFor(() => expect(stopCalledWith).toEqual({ runId: "run-1", threadId: "thread-1" }));
   });
@@ -378,8 +330,8 @@ describe("Attractor app", () => {
       { threadId: "thread-1", params: { runId: "run-1" } },
       { rpc: baseRpc({ run: { ...RUN, status: "blocked" } }) },
     );
-    await waitFor(() => expect(slot.container.querySelector("[data-run-status]")?.textContent).toBe("blocked"));
-    expect(slot.queryByRole("button", { name: /stop/i })).toBeTruthy();
+    await waitFor(() => expect(slot.container.querySelector('[data-run-status="blocked"]')).toBeTruthy());
+    expect(slot.queryByRole("button", { name: /^stop$/i })).toBeTruthy();
   });
 
   it("does not offer a Stop button once the run has finished", async () => {
@@ -389,8 +341,59 @@ describe("Attractor app", () => {
       { threadId: "thread-1", params: { runId: "run-1" } },
       { rpc: baseRpc({ run: { ...RUN, status: "succeeded", finishedAt: 2_000 } }) },
     );
-    await waitFor(() => expect(slot.container.querySelector("[data-run-status]")?.textContent).toBe("succeeded"));
-    expect(slot.queryByRole("button", { name: /stop/i })).toBeNull();
+    await waitFor(() => expect(slot.container.querySelector('[data-run-status="succeeded"]')).toBeTruthy());
+    expect(slot.queryByRole("button", { name: /^stop$/i })).toBeNull();
+    expect(slot.queryByRole("button", { name: /^resume$/i })).toBeNull();
+  });
+
+  it("replaces Stop with Resume in the panel header once a run has failed or been stopped, calling resumeRun", async () => {
+    const app = await loadPluginApp(() => import("../app"));
+    for (const status of ["failed", "cancelled"] as const) {
+      let resumedWith: unknown = null;
+      const slot = renderSlot(
+        app.threadPanelActions[0]!,
+        { threadId: "thread-1", params: { runId: "run-1" } },
+        { rpc: { ...baseRpc({ run: { ...RUN, status, finishedAt: 2_000 } }), resumeRun: (input: unknown) => { resumedWith = input; return { resumed: true, fromNodeId: "plan" }; } } },
+      );
+      const resume = await slot.findByRole("button", { name: /^resume$/i });
+      expect(slot.queryByRole("button", { name: /^stop$/i })).toBeNull();
+      resume.click();
+      await waitFor(() => expect(resumedWith).toEqual({ runId: "run-1", threadId: "thread-1" }));
+      cleanup();
+    }
+  });
+
+  it("reports a refused resume in the panel header", async () => {
+    const app = await loadPluginApp(() => import("../app"));
+    const slot = renderSlot(
+      app.threadPanelActions[0]!,
+      { threadId: "thread-1", params: { runId: "run-1" } },
+      { rpc: { ...baseRpc({ run: { ...RUN, status: "failed", finishedAt: 2_000 } }), resumeRun: () => ({ resumed: false, reason: "run is already active" }) } },
+    );
+    (await slot.findByRole("button", { name: /^resume$/i })).click();
+    await waitFor(() => expect(slot.getAllByRole("alert").some((el) => el.textContent?.includes("run is already active"))).toBe(true));
+  });
+
+  it("lays the panel out as header, attention card, Now, then Graph/History/Event log accordions collapsed by default, remembering open ones", async () => {
+    localStorage.clear();
+    const app = await loadPluginApp(() => import("../app"));
+    const slot = renderSlot(app.threadPanelActions[0]!, { threadId: "thread-1", params: { runId: "run-1" } }, { rpc: baseRpc() });
+    await slot.findByText("Plan Implement Review");
+    expect(slot.getByTestId("attention-card").getAttribute("data-surface")).toBe("panel");
+    const toggles = Array.from(slot.container.querySelectorAll("[data-accordion] button[aria-expanded]"));
+    expect(toggles.map((t) => t.textContent)).toEqual([expect.stringContaining("Graph"), expect.stringContaining("History"), expect.stringContaining("Event log")]);
+    expect(toggles.map((t) => t.getAttribute("aria-expanded"))).toEqual(["false", "false", "false"]);
+    expect(slot.container.querySelector("svg[aria-label='Workflow DAG']")).toBeNull();
+
+    (toggles[0] as HTMLButtonElement).click();
+    await waitFor(() => expect(slot.container.querySelector('[data-node-id="plan"][data-status="running"]')).toBeTruthy());
+    cleanup();
+
+    // Re-opening the panel keeps the graph open.
+    const again = renderSlot(app.threadPanelActions[0]!, { threadId: "thread-1", params: { runId: "run-1" } }, { rpc: baseRpc() });
+    await again.findByText("Plan Implement Review");
+    expect(again.container.querySelector('[data-node-id="plan"]')).toBeTruthy();
+    localStorage.clear();
   });
 
   it("refetches when a realtime attractor-runs signal names this run", async () => {
@@ -409,9 +412,9 @@ describe("Attractor app", () => {
         },
       },
     );
-    await waitFor(() => expect(slot.container.querySelector("[data-run-status]")?.textContent).toBe("running"));
+    await waitFor(() => expect(slot.container.querySelector('[data-run-status="running"]')).toBeTruthy());
     await slot.behavior.emitRealtime("attractor-runs", { runId: "run-1", threadId: "thread-1" });
-    await waitFor(() => expect(slot.container.querySelector("[data-run-status]")?.textContent).toBe("succeeded"));
+    await waitFor(() => expect(slot.container.querySelector('[data-run-status="succeeded"]')).toBeTruthy());
     expect(calls).toBeGreaterThan(1);
   });
 

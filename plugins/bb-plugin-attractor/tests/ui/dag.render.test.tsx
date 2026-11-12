@@ -8,7 +8,7 @@
  */
 import { cleanup, fireEvent, render } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { DagView } from "../../ui/dag";
+import { FOLLOW_MIN_WIDTH, DagView } from "../../ui/dag";
 import type { GraphView } from "../../server/contracts";
 
 // See tests/ui/events.test.tsx's identical `afterEach(cleanup)` comment.
@@ -104,30 +104,29 @@ describe("DagView", () => {
     expect(container.querySelector('[data-node-id="approve"]')?.getAttribute("data-status")).toBe("pending");
   });
 
-  it("fills/strokes each status with the Graphviz-card palette, hollow pending, and a heavier stroke on the running node", () => {
-    const { container } = render(<DagView graph={GRAPH} events={[]} />);
-    const outlineOf = (id: string) => container.querySelector(`[data-node-id="${id}"] polygon, [data-node-id="${id}"] rect, [data-node-id="${id}"] ellipse`)!;
-    const start = outlineOf("start"); // succeeded
-    expect(start.getAttribute("fill")).toBe("#dcfce7");
-    expect(start.getAttribute("stroke")).toBe("#16a34a");
-    const plan = outlineOf("plan"); // running
-    expect(plan.getAttribute("fill")).toBe("#dbeafe");
-    expect(plan.getAttribute("stroke")).toBe("#2563eb");
-    expect(plan.getAttribute("stroke-width")).toBe("2.5");
-    const build = outlineOf("build"); // failed
-    expect(build.getAttribute("fill")).toBe("#fee2e2");
-    expect(build.getAttribute("stroke")).toBe("#dc2626");
-    const approve = outlineOf("approve"); // pending — hollow
-    expect(approve.getAttribute("fill")).toBe("#ffffff");
-    expect(approve.getAttribute("stroke")).toBe("#94a3b8");
+  it("draws every node on the card background with a theme-coloured outline per status, and a heavier stroke on the current node", () => {
+    const { container } = render(<DagView graph={GRAPH} events={[]} currentNodeId="plan" />);
+    const styleOf = (id: string) => container.querySelector(`[data-node-id="${id}"] polygon, [data-node-id="${id}"] rect, [data-node-id="${id}"] ellipse`)!.getAttribute("style") ?? "";
+    // No white box: every node fills with the theme's card colour.
+    for (const id of ["start", "plan", "build", "approve"]) expect(styleOf(id)).toContain("var(--card");
+    expect(styleOf("start")).toContain("var(--success"); // succeeded
+    expect(styleOf("plan")).toContain("var(--brand"); // running
+    expect(styleOf("plan")).toContain("stroke-width: 2.75");
+    expect(styleOf("build")).toContain("var(--destructive"); // failed
+    expect(styleOf("approve")).toContain("var(--border"); // pending
+    // No hard-coded light-theme palette survives.
+    expect(container.innerHTML).not.toMatch(/#ffffff|#dcfce7|#dbeafe/);
   });
-
-  it("shows a visit badge only when visit > 1", () => {
+  it("says how many passes a revisited node has run as subtext, and nothing on a node visited once", () => {
     const { container } = render(<DagView graph={GRAPH} events={[]} />);
-    expect(container.querySelector('[data-node-id="build"] [data-visit-badge]')?.textContent).toBe("3");
+    expect(container.querySelector('[data-node-id="build"] [data-visit-badge]')?.textContent).toBe("3 passes");
     expect(container.querySelector('[data-node-id="start"] [data-visit-badge]')).toBeNull();
   });
 
+  it("words the current node's subtext as its status plus the pass it is on", () => {
+    const { container } = render(<DagView graph={GRAPH} events={[]} currentNodeId="build" />);
+    expect(container.querySelector('[data-node-id="build"] [data-visit-badge]')?.textContent).toBe("failed · pass 3");
+  });
   it("highlights the current node", () => {
     const { container } = render(<DagView graph={GRAPH} events={[]} currentNodeId="plan" />);
     expect(container.querySelector('[data-node-id="plan"]')?.getAttribute("data-current")).toBe("true");
@@ -203,23 +202,21 @@ describe("DagView", () => {
     expect(approveNode.getAttribute("data-clickable")).toBe("false");
   });
 
-  it("gives every untraversed edge a legible, solid, grey Graphviz-style stroke — not the old near-invisible light dashed line", () => {
+  it("gives every untraversed edge a solid border-coloured stroke", () => {
     const { container } = render(<DagView graph={GRAPH} events={[]} />);
     const untraversed = container.querySelector('[data-edge="approve->build"]')!;
-    expect(untraversed.getAttribute("stroke")).toBe("#94a3b8");
-    expect(untraversed.getAttribute("stroke-width")).toBe("1.25");
+    expect(untraversed.getAttribute("style")).toContain("var(--border");
+    expect(untraversed.getAttribute("style")).toContain("stroke-width: 1.2");
     expect(untraversed.getAttribute("stroke-dasharray")).toBeNull();
   });
-
-  it("keeps a traversed edge blue/2px with the traversed arrowhead, unaffected by back-edge-ness", () => {
+  it("draws a traversed edge heavier in the muted foreground colour with the traversed arrowhead", () => {
     const { container } = render(<DagView graph={GRAPH} events={EVENTS} />);
     const traversed = container.querySelector('[data-edge="start->plan"]')!;
-    expect(traversed.getAttribute("stroke")).toBe("#2563eb");
-    expect(traversed.getAttribute("stroke-width")).toBe("2");
+    expect(traversed.getAttribute("style")).toContain("var(--muted-foreground");
+    expect(traversed.getAttribute("style")).toContain("stroke-width: 1.6");
     expect(traversed.getAttribute("marker-end")).toContain("attractor-arrow-traversed");
   });
-
-  it("may dash an untraversed back edge while keeping it the same legible stroke colour/width", () => {
+  it("dashes an untraversed back edge while keeping the same stroke colour and width", () => {
     const loopGraph: GraphView = {
       rankdir: "LR",
       nodes: [node("a", { handlerKind: "agent" }), node("b", { handlerKind: "agent" })],
@@ -231,26 +228,23 @@ describe("DagView", () => {
     const { container } = render(<DagView graph={loopGraph} events={[]} />);
     const backEdge = container.querySelector('[data-edge="b->a"]')!;
     expect(backEdge.getAttribute("data-back-edge")).toBe("true");
-    expect(backEdge.getAttribute("stroke")).toBe("#94a3b8");
-    expect(backEdge.getAttribute("stroke-width")).toBe("1.25");
-    expect(backEdge.getAttribute("stroke-dasharray")).not.toBeNull();
+    expect(backEdge.getAttribute("style")).toContain("var(--border");
+    expect(backEdge.getAttribute("style")).toContain("stroke-width: 1.2");
+    expect(backEdge.getAttribute("stroke-dasharray")).toBe("4 3");
   });
-
-  it("draws an edge's DOT label on the diagram at its midpoint with a white text halo (no background rect), and keeps the title tooltip", () => {
+  it("draws an edge's DOT label at its midpoint with a card-coloured text halo (no background rect), and keeps the title tooltip", () => {
     const { container } = render(<DagView graph={GRAPH} events={EVENTS} />);
     const labelGroup = container.querySelector('[data-edge-label="plan->approve"]')!;
     expect(labelGroup).toBeTruthy();
     const text = labelGroup.querySelector("text")!;
     expect(text.textContent).toBe("[A] Approve");
     expect(text.getAttribute("paint-order")).toBe("stroke");
-    expect(text.getAttribute("stroke")).toBe("#fff");
-    expect(text.getAttribute("stroke-width")).toBe("3");
-    expect(text.getAttribute("fill")).toBe("#475569");
+    expect(text.getAttribute("style")).toContain("stroke: var(--card");
+    expect(text.getAttribute("style")).toContain("fill: var(--muted-foreground");
     expect(text.getAttribute("font-size")).toBe("11");
     expect(labelGroup.querySelector("rect")).toBeNull();
     expect(container.querySelector('[data-edge="plan->approve"] title')?.textContent).toContain("preferred_label");
   });
-
   it("falls back to a shortened routing condition as the on-diagram edge label when there is no DOT label", () => {
     const { container } = render(<DagView graph={GRAPH} events={[]} />);
     const labelGroup = container.querySelector('[data-edge-label="build->exit"]')!;
@@ -299,5 +293,37 @@ describe("DagView", () => {
     const keyWarning = errorSpy.mock.calls.some((call) => String(call[0]).includes("same key"));
     expect(keyWarning).toBe(false);
     errorSpy.mockRestore();
+  });
+});
+
+describe("DagView follow mode (run panel)", () => {
+  // A tall, narrow chain: a graph the panel can only show legibly as a window.
+  const chain: GraphView = {
+    rankdir: "TB",
+    nodes: Array.from({ length: 12 }, (_, i) => node(`n${i}`, { handlerKind: "command" })),
+    edges: Array.from({ length: 11 }, (_, i) => ({ from: `n${i}`, to: `n${i + 1}`, label: null, condition: null })),
+  };
+  const viewBox = (container: HTMLElement) => container.querySelector("svg")!.getAttribute("viewBox")!.split(" ").map(Number);
+
+  it("windows onto the followed node without magnifying a narrow graph, centred horizontally", () => {
+    const { container } = render(<DagView graph={chain} events={[]} followNodeId="n10" following onFollowingChange={() => {}} />);
+    const [x, y, w, h] = viewBox(container) as [number, number, number, number];
+    expect(w).toBeGreaterThanOrEqual(FOLLOW_MIN_WIDTH);
+    expect(x).toBeLessThan(0); // the narrow graph sits in the middle of the wider window
+    expect(y).toBeGreaterThan(0); // scrolled down towards n10
+    const n10 = container.querySelector('[data-node-id="n10"]')!.getAttribute("transform")!;
+    const nodeY = Number(/translate\([^,]+,\s*([\d.]+)\)/.exec(n10)![1]);
+    expect(nodeY).toBeGreaterThan(y);
+    expect(nodeY).toBeLessThan(y + h);
+  });
+
+  it("stops following when the user zooms, and Fit shows the whole graph", () => {
+    const onFollowingChange = vi.fn();
+    const { container, getByRole } = render(<DagView graph={chain} events={[]} followNodeId="n10" following onFollowingChange={onFollowingChange} />);
+    fireEvent.click(getByRole("button", { name: /zoom in/i }));
+    expect(onFollowingChange).toHaveBeenCalledWith(false);
+    fireEvent.click(getByRole("button", { name: /fit/i }));
+    const [, y] = viewBox(container) as [number, number];
+    expect(y).toBe(0);
   });
 });

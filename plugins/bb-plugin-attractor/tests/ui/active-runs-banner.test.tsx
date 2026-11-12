@@ -1,11 +1,11 @@
 // @vitest-environment jsdom
 /**
- * `ui/active-runs-banner.tsx`'s composer banner, per the active-runs
- * composer banner follow-up's acceptance list: "renders nothing with zero
- * active runs; renders a row with title/status/stage count; expand reveals
- * the DAG; blocked human gate renders option buttons that call answerGate
- * with the chosen label; chevron opens the panel with the run and thread
- * ids."
+ * `ui/active-runs-banner.tsx`'s composer banner. Since the run-panel
+ * redesign each row is the attention card (`surface="banner"`): the same
+ * derived state as the chat card and the panel, so a gate's options, a
+ * provider pause's reset time and a worker's prompt read the same in all
+ * three. Renders nothing with zero active runs; the chevron opens the panel
+ * with the run and thread ids; the row no longer expands into a graph.
  *
  * Rendered through the SDK's `loadPluginApp`/`renderSlot` harness, as
  * tests/app.test.tsx does for the directive/panel — the banner calls
@@ -14,7 +14,7 @@
  * after the test runtime is installed.
  */
 import { cleanup, fireEvent, waitFor } from "@testing-library/react";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it } from "vitest";
 import { loadPluginApp, renderSlot } from "@get-bb/plugin-sdk/testing/app";
 import type { GraphView, RunView, StageView } from "../../server/contracts";
 
@@ -121,38 +121,21 @@ describe("ActiveRunsBanner", () => {
     expect(slot.container.firstChild).toBeNull();
   });
 
-  it("renders a row with the run's title, status, and stage count", async () => {
+  it("renders each row as the attention card: title, status pill, the current stage and progress — and no graph", async () => {
     const slot = await renderBanner({ activeRuns: () => ({ runs: [{ run: RUN, stages: STAGES, graph: GRAPH }] }) });
     await slot.findByText("Plan Implement Review");
-    expect(slot.container.querySelector('[data-run-status="running"]')).toBeTruthy();
-    expect(slot.getByText("2/3 stages")).toBeTruthy();
-  });
-
-  it("expand reveals the DAG and stage list", async () => {
-    const slot = await renderBanner({ activeRuns: () => ({ runs: [{ run: RUN, stages: STAGES, graph: GRAPH }] }) });
-    await slot.findByText("Plan Implement Review");
+    const card = slot.getByTestId("attention-card");
+    expect(card.getAttribute("data-surface")).toBe("banner");
+    expect(card.getAttribute("data-attention")).toBe("running");
+    expect(slot.container.querySelector('[data-run-status="running"]')?.textContent).toContain("Running");
+    expect(slot.getByText("Plan")).toBeTruthy();
+    // A graph with no loop: one progress segment per node.
+    expect(slot.container.querySelectorAll('[data-testid="attractor-progress"] [data-segment]')).toHaveLength(3);
     expect(slot.queryByRole("img", { name: "Workflow DAG" })).toBeNull();
-
-    const expandButton = slot.getByRole("button", { name: /expand run details/i });
-    fireEvent.click(expandButton);
-
-    expect(await slot.findByRole("img", { name: "Workflow DAG" })).toBeTruthy();
-    expect(slot.getByTestId("attractor-stage-list")).toBeTruthy();
+    expect(slot.queryByRole("button", { name: /expand run details/i })).toBeNull();
   });
 
-  it("opens a node's worker thread when clicked in the banner's expanded DAG (the banner used to render DagView with no threadIdByNode at all, so no node was ever clickable)", async () => {
-    const slot = await renderBanner({ activeRuns: () => ({ runs: [{ run: RUN, stages: STAGES, graph: GRAPH }] }) });
-    await slot.findByText("Plan Implement Review");
-    fireEvent.click(slot.getByRole("button", { name: /expand run details/i }));
-    await slot.findByRole("img", { name: "Workflow DAG" });
-
-    const planNode = slot.container.querySelector('[data-node-id="plan"]')!;
-    expect(planNode.getAttribute("role")).toBe("button");
-    fireEvent.click(planNode);
-    expect(slot.inspection.navigateCalls).toContainEqual({ method: "toThread", threadId: "worker-thread-1" });
-  });
-
-  it("renders inline option buttons for a blocked human gate, calling answerGate with the chosen edge label", async () => {
+  it("renders a blocked human gate's options as answer buttons saying where each leads, calling answerGate with the raw edge label", async () => {
     let answerCalledWith: unknown = null;
     const slot = await renderBanner({
       activeRuns: () => ({ runs: [{ run: GATE_RUN, stages: GATE_STAGES, graph: GATE_GRAPH }] }),
@@ -162,15 +145,24 @@ describe("ActiveRunsBanner", () => {
       },
     });
     await slot.findByText("Gate run");
-
-    const approveButton = slot.getByRole("button", { name: "[A] Approve" });
-    expect(slot.getByRole("button", { name: "[R] Revise" })).toBeTruthy();
-    fireEvent.click(approveButton);
-
+    expect(slot.container.querySelector('[data-run-status="blocked"]')?.textContent).toContain("Needs you");
+    expect(slot.getByTestId("gate-routes").textContent).toBe("Approve → exit · Revise → Revise");
+    expect(slot.getByRole("button", { name: "Revise" })).toBeTruthy();
+    fireEvent.click(slot.getByRole("button", { name: "Approve" }));
     await waitFor(() => expect(answerCalledWith).toEqual({ runId: "run-2", threadId: "thread-1", answer: "[A] Approve" }));
   });
 
-  it("shows the reviewed file and an Open thread link for a blocked human gate with gate context", async () => {
+  it("reports a refused answer inline instead of failing silently", async () => {
+    const slot = await renderBanner({
+      activeRuns: () => ({ runs: [{ run: GATE_RUN, stages: GATE_STAGES, graph: GATE_GRAPH }] }),
+      answerGate: () => ({ answered: false, reason: "no pending human gate for this run" }),
+    });
+    await slot.findByText("Gate run");
+    fireEvent.click(slot.getByRole("button", { name: "Approve" }));
+    expect((await slot.findByRole("alert")).textContent).toContain("no pending human gate");
+  });
+
+  it("shows the reviewed file and opens the gate's predecessor thread", async () => {
     const stagesWithContext: StageView[] = GATE_STAGES.map((stage) =>
       stage.nodeId === "gate"
         ? {
@@ -184,11 +176,31 @@ describe("ActiveRunsBanner", () => {
     );
     const slot = await renderBanner({ activeRuns: () => ({ runs: [{ run: GATE_RUN, stages: stagesWithContext, graph: GATE_GRAPH }] }) });
     await slot.findByText("Gate run");
-
-    expect(slot.getByText(/Reviewing: PLAN\.md/)).toBeTruthy();
-    const openThread = slot.getByRole("button", { name: /open thread/i });
-    openThread.click();
+    expect(slot.getByText("PLAN.md")).toBeTruthy();
+    fireEvent.click(slot.getByRole("button", { name: /open plan’s thread/i }));
     expect(slot.inspection.navigateCalls).toContainEqual({ method: "toThread", threadId: "plan-worker-thread" });
+  });
+
+  it("shows a provider pause with its reset time and a countdown", async () => {
+    const retryAt = Date.now() + 61 * 60_000 + 30_000;
+    const paused: StageView[] = [
+      STAGES[0]!,
+      { ...STAGES[1]!, status: "blocked", waitingReason: "Rate limited, retrying at 2026-11-12 20:20 UTC", waitingSince: Date.now() - 60_000, waitingUntil: retryAt },
+    ];
+    const slot = await renderBanner({ activeRuns: () => ({ runs: [{ run: { ...RUN, status: "blocked" }, stages: paused, graph: GRAPH }] }) });
+    await slot.findByText("Plan Implement Review");
+    expect(slot.container.querySelector('[data-run-status="blocked"]')?.textContent).toContain("Paused");
+    const hh = String(new Date(retryAt).getHours()).padStart(2, "0");
+    const mm = String(new Date(retryAt).getMinutes()).padStart(2, "0");
+    expect(slot.getByTestId("attention-request").textContent).toBe(`Usage limit reached. Resumes by itself at ${hh}:${mm}, in 1h 01m.`);
+  });
+
+  it("offers 'Open worker to answer' for a worker's own prompt", async () => {
+    const waiting: StageView[] = [STAGES[0]!, { ...STAGES[1]!, status: "blocked", waitingReason: "approval", waitingSince: Date.now() }];
+    const slot = await renderBanner({ activeRuns: () => ({ runs: [{ run: { ...RUN, status: "blocked" }, stages: waiting, graph: GRAPH }] }) });
+    await slot.findByText("Plan’s worker is waiting on approval");
+    fireEvent.click(slot.getByRole("button", { name: "Open worker to answer" }));
+    expect(slot.inspection.navigateCalls).toContainEqual({ method: "toThread", threadId: "worker-thread-1" });
   });
 
   it("keeps the last known rows when an activeRuns refresh fails, so a blocked run's banner does not vanish on a transient error", async () => {

@@ -119,6 +119,7 @@ export interface GraphEdgeView {
   to: string;
   label: string | null;
   condition: string | null;
+  freeform?: boolean;
 }
 export interface GraphView {
   rankdir: WorkflowGraph["rankdir"];
@@ -145,7 +146,7 @@ function toGraphView(graph: WorkflowGraph, stages: Stage[]): GraphView {
       waitingReason: stage?.waitingReason ?? null,
     };
   });
-  const edges = graph.edges.map((edge) => ({ from: edge.from, to: edge.to, label: edge.label ?? null, condition: edge.condition ?? null }));
+  const edges = graph.edges.map((edge) => ({ from: edge.from, to: edge.to, label: edge.label ?? null, condition: edge.condition ?? null, ...(edge.freeform ? { freeform: true } : {}) }));
   return { rankdir: graph.rankdir, nodes, edges };
 }
 
@@ -186,7 +187,18 @@ function outcomeStageStatus(outcome: Outcome): Stage["status"] {
 function applyEventToStore(store: RunStore, runId: string, event: RunEvent): void {
   switch (event.type) {
     case "stage.started":
-      store.upsertStage(runId, { stageId: event.stageId, nodeId: event.nodeId, visit: event.visit, attempt: event.attempt, status: "running", outcomeStatus: null, threadId: null, startedAt: event.ts });
+      store.upsertStage(runId, {
+        stageId: event.stageId,
+        nodeId: event.nodeId,
+        visit: event.visit,
+        attempt: event.attempt,
+        status: "running",
+        outcomeStatus: null,
+        threadId: null,
+        startedAt: event.ts,
+        parallelGroupId: event.parallelGroupId ?? null,
+        branchIndex: event.branchIndex ?? null,
+      });
       return;
     case "stage.completed":
       store.upsertStage(runId, {
@@ -244,7 +256,7 @@ function applyEventToStore(store: RunStore, runId: string, event: RunEvent): voi
     case "agent.waiting": {
       const visit = parseVisitFromStageId(event.stageId, event.nodeId);
       store.setStageStatus(runId, event.nodeId, visit, "blocked");
-      store.setStageWaitingReason(runId, event.nodeId, visit, event.kind);
+      store.setStageWaitingReason(runId, event.nodeId, visit, event.kind, { since: event.ts, until: event.retryAt ?? null });
       store.setStatus(runId, "blocked");
       return;
     }

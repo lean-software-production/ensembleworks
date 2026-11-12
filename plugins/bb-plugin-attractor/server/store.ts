@@ -83,6 +83,18 @@ const STAGE_COLUMN_ADDITIONS: { column: string; ddl: string }[] = [
   // `bb attractor stages` and the run panel can show what a blocked human
   // gate is reviewing without re-reading the event log.
   { column: "gate_context_json", ddl: "ALTER TABLE attractor_stages ADD COLUMN gate_context_json TEXT" },
+  // Run-panel redesign: when a stage's current wait began, and — for a
+  // queued provider retry only — when it is due (the `agent.waiting` event's
+  // `retryAt`), so the panel can show a reset time and countdown as data
+  // rather than parsing `waiting_reason`'s text.
+  { column: "waiting_since", ddl: "ALTER TABLE attractor_stages ADD COLUMN waiting_since INTEGER" },
+  { column: "waiting_until", ddl: "ALTER TABLE attractor_stages ADD COLUMN waiting_until INTEGER" },
+  // Run-panel redesign: the parallel fan-out a stage ran under (the
+  // `stage.started` event's `parallelGroupId`, e.g. "fork@1") and its branch
+  // index, so history can indent branches under their fan-out without
+  // re-reading the event log. Null for a stage on the main walk.
+  { column: "parallel_group_id", ddl: "ALTER TABLE attractor_stages ADD COLUMN parallel_group_id TEXT" },
+  { column: "branch_index", ddl: "ALTER TABLE attractor_stages ADD COLUMN branch_index INTEGER" },
 ];
 
 function ensureStageColumns(db: Database.Database): void {
@@ -161,6 +173,14 @@ export interface Stage {
   waitingReason: string | null;
   /** The gate this stage opened (a human.requested event's context/reviewTarget summary), or null for every non-gate stage. */
   gateContext: GateContextSummary | null;
+  /** When the stage's current `agent.waiting` wait began — null when nothing is waiting. */
+  waitingSince: number | null;
+  /** When a queued provider retry is due (the `agent.waiting` event's `retryAt`) — null for any other wait, or when nothing is waiting. */
+  waitingUntil: number | null;
+  /** The parallel fan-out this stage ran under (e.g. "fork@1"), or null on the main walk. */
+  parallelGroupId: string | null;
+  /** This stage's branch index within `parallelGroupId`, or null on the main walk. */
+  branchIndex: number | null;
   startedAt: number;
   completedAt: number | null;
 }
@@ -175,6 +195,9 @@ export interface UpsertStageInput {
   threadId: string | null;
   startedAt: number;
   completedAt?: number | null;
+  /** Only `stage.started` knows these; later upserts for the same row leave them as they were. */
+  parallelGroupId?: string | null;
+  branchIndex?: number | null;
 }
 
 export interface RunPage {
@@ -217,6 +240,10 @@ type StageRow = {
   actor: string | null;
   waiting_reason: string | null;
   gate_context_json: string | null;
+  waiting_since: number | null;
+  waiting_until: number | null;
+  parallel_group_id: string | null;
+  branch_index: number | null;
   started_at: number;
   completed_at: number | null;
 };
@@ -394,13 +421,28 @@ export class RunStore {
   upsertStage(runId: string, input: UpsertStageInput): void {
     this.#db
       .prepare(
-        `INSERT INTO attractor_stages (run_id, stage_id, node_id, visit, attempt, status, outcome_status, thread_id, started_at, completed_at)
-         VALUES (?,?,?,?,?,?,?,?,?,?)
+        `INSERT INTO attractor_stages (run_id, stage_id, node_id, visit, attempt, status, outcome_status, thread_id, started_at, completed_at, parallel_group_id, branch_index)
+         VALUES (?,?,?,?,?,?,?,?,?,?,?,?)
          ON CONFLICT(run_id, node_id, visit) DO UPDATE SET
            stage_id=excluded.stage_id, attempt=excluded.attempt, status=excluded.status, outcome_status=excluded.outcome_status,
-           thread_id=coalesce(excluded.thread_id, attractor_stages.thread_id), completed_at=excluded.completed_at`,
+           thread_id=coalesce(excluded.thread_id, attractor_stages.thread_id), completed_at=excluded.completed_at,
+           parallel_group_id=coalesce(excluded.parallel_group_id, attractor_stages.parallel_group_id),
+           branch_index=coalesce(excluded.branch_index, attractor_stages.branch_index)`,
       )
-      .run(runId, input.stageId, input.nodeId, input.visit, input.attempt, input.status, input.outcomeStatus, input.threadId, input.startedAt, input.completedAt ?? null);
+      .run(
+        runId,
+        input.stageId,
+        input.nodeId,
+        input.visit,
+        input.attempt,
+        input.status,
+        input.outcomeStatus,
+        input.threadId,
+        input.startedAt,
+        input.completedAt ?? null,
+        input.parallelGroupId ?? null,
+        input.branchIndex ?? null,
+      );
   }
 
   /** Attaches a worker threadId to an already-started stage row (the `agent.thread` event). */
@@ -429,14 +471,23 @@ export class RunStore {
    */
   settleInFlightStages(runId: string, now = Date.now()): number {
     const result = this.#db
-      .prepare("UPDATE attractor_stages SET status='cancelled', completed_at=?, waiting_reason=NULL WHERE run_id=? AND status IN ('running','blocked')")
+      .prepare("UPDATE attractor_stages SET status='cancelled', completed_at=?, waiting_reason=NULL, waiting_since=NULL, waiting_until=NULL WHERE run_id=? AND status IN ('running','blocked')")
       .run(now, runId);
     return result.changes;
   }
 
-  /** Records (or clears, with `null`) a stage's waiting reason — the `agent.waiting`/`agent.resumed` events (dogfood-2 fix). */
-  setStageWaitingReason(runId: string, nodeId: string, visit: number, reason: string | null): void {
-    this.#db.prepare("UPDATE attractor_stages SET waiting_reason=? WHERE run_id=? AND node_id=? AND visit=?").run(reason, runId, nodeId, visit);
+  /**
+   * Records (or clears, with `null`) a stage's waiting reason — the
+   * `agent.waiting`/`agent.resumed` events (dogfood-2 fix). `timing` is when
+   * the wait began and, for a queued provider retry, when it is due; both
+   * are cleared along with the reason.
+   */
+  setStageWaitingReason(runId: string, nodeId: string, visit: number, reason: string | null, timing?: { since: number; until: number | null }): void {
+    const since = reason === null ? null : (timing?.since ?? null);
+    const until = reason === null ? null : (timing?.until ?? null);
+    this.#db
+      .prepare("UPDATE attractor_stages SET waiting_reason=?, waiting_since=?, waiting_until=? WHERE run_id=? AND node_id=? AND visit=?")
+      .run(reason, since, until, runId, nodeId, visit);
   }
 
   /** Records (or clears, with `null`) a stage's gate context — the `human.requested` event's context/reviewTarget summary (gate-context follow-up). */
@@ -468,6 +519,10 @@ export class RunStore {
       actor: (row.actor as StageActor | null) ?? null,
       waitingReason: row.waiting_reason ?? null,
       gateContext: row.gate_context_json ? (JSON.parse(row.gate_context_json) as GateContextSummary) : null,
+      waitingSince: row.waiting_since ?? null,
+      waitingUntil: row.waiting_until ?? null,
+      parallelGroupId: row.parallel_group_id ?? null,
+      branchIndex: row.branch_index ?? null,
       startedAt: row.started_at,
       completedAt: row.completed_at,
     }));

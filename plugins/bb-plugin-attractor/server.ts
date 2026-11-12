@@ -200,6 +200,15 @@ export default async function plugin(bb: BbPluginApi): Promise<void> {
       if (!owned(runId, threadId).run) return { answered: false, reason: "no such run" };
       return rpcContract.answerGate.output.parse(await service.answerHumanGate(runId, answer, "ui"));
     },
+    resumeRun: async ({ runId, threadId }) => {
+      if (!owned(runId, threadId).run) return { resumed: false, reason: "no such run" };
+      try {
+        const resumed = await service.resumeRun(runId);
+        return { resumed: true, fromNodeId: resumed.fromNodeId };
+      } catch (err) {
+        return { resumed: false, reason: err instanceof Error ? err.message : String(err) };
+      }
+    },
   });
 
   bb.agents.registerTool({
