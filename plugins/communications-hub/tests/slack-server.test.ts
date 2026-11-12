@@ -43,7 +43,7 @@ it('exposes bot-member channel search through CLI and agent tools only after rea
     .toMatchObject({isError:true});
 });
 
-it('posts only to configured bot-member channels after an explicit tool call',async()=>{
+it('lets Slack decide which channels the bot can post to',async()=>{
   const posts: Array<{method:string;body:unknown}>=[];
   vi.stubGlobal('fetch',async(input:RequestInfo|URL,init?:RequestInit)=>{
     const method=new URL(String(input)).pathname.split('/').at(-1)!;
@@ -51,7 +51,7 @@ it('posts only to configured bot-member channels after an explicit tool call',as
     const body=method==='auth.test'?{ok:true,team_id:'T1',url:'https://example.slack.com/'}:
       method==='users.conversations'?{ok:true,channels:[{id:'C1',name:'team',is_member:true},{id:'G1',name:'strategy',is_private:true,is_member:true}],response_metadata:{next_cursor:''}}:
       method==='conversations.history'?{ok:true,messages:[],response_metadata:{next_cursor:''}}:
-      method==='chat.postMessage'?{ok:true,channel:'G1',ts:'123.000001'}:
+      method==='chat.postMessage'?(JSON.parse(String(init?.body)).channel==='C2'?{ok:false,error:'not_in_channel'}:{ok:true,channel:JSON.parse(String(init?.body)).channel,ts:'123.000001'}):
       method==='chat.getPermalink'?{ok:true,permalink:'https://example.slack.com/archives/G1/p123000001'}:
       {ok:false,error:'unexpected_method'};
     return new Response(JSON.stringify(body),{status:200});
@@ -60,18 +60,16 @@ it('posts only to configured bot-member channels after an explicit tool call',as
   await host.harness.behavior.setSettings({slackReadEnabled:true,slackBotToken:'xoxb-test'});
   expect((await host.harness.behavior.runCli(['slack-sync'])).exitCode).toBe(0);
   const call=(channelId:string,text:string,threadTs?:string,unfurlLinks?:boolean)=>host.harness.behavior.callAgentTool('communications_slack_post',{channelId,text,...(threadTs?{threadTs}:{}),...(unfurlLinks===undefined?{}:{unfurlLinks})},{threadId:'A'});
-  expect(await call('G1','Hello')).toMatchObject({isError:true});
-  await host.harness.behavior.setSettings({slackWriteEnabled:true,slackWriteChannels:'C1'});
-  expect(await call('G1','Hello')).toMatchObject({isError:true});
-  await host.harness.behavior.setSettings({slackWriteChannels:'G1'});
   await expect(call('D1','Hello')).rejects.toThrow(/arguments are invalid/);
   expect(posts).toHaveLength(0);
   expect(JSON.parse(await call('G1','Hello','122.000001') as string)).toEqual({channelId:'G1',ts:'123.000001',permalink:'https://example.slack.com/archives/G1/p123000001'});
   expect(posts).toEqual([{method:'POST',body:{channel:'G1',text:'Hello',thread_ts:'122.000001',unfurl_links:false,unfurl_media:false}}]);
   expect(JSON.parse(await call('G1','Preview link',undefined,true) as string)).toMatchObject({channelId:'G1'});
   expect(posts[1]?.body).toMatchObject({channel:'G1',text:'Preview link',unfurl_links:true,unfurl_media:true});
-  expect((await host.harness.behavior.runCli(['slack-post','C1','blocked'])).exitCode).toBe(1);
+  expect(await call('C2','blocked')).toMatchObject({isError:true});
+  expect((await host.harness.behavior.runCli(['slack-post','C1','allowed'])).exitCode).toBe(0);
   expect((await host.harness.behavior.runCli(['slack-post','G1','CLI message'])).exitCode).toBe(0);
-  expect(posts).toHaveLength(3);
-  expect(posts[2]?.body).toMatchObject({channel:'G1',text:'CLI message'});
+  expect(posts).toHaveLength(5);
+  expect(posts[3]?.body).toMatchObject({channel:'C1',text:'allowed'});
+  expect(posts[4]?.body).toMatchObject({channel:'G1',text:'CLI message'});
 });

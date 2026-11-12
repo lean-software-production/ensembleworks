@@ -9,7 +9,7 @@ A persistent conversation library for one BB instance. Import a transcript or ca
 - Independent thread attachments and explicit reading cursors.
 - A Communications page, a Conversation thread panel, and agent tools returning grouped passages with citation links.
 - A Zoom RTMS source adapter, enabled separately after app/webhook configuration.
-- A Slack channel index and separately enabled posting action. The index searches public and private channels the bot has joined, never DMs.
+- A Slack channel index and posting action. The index searches public and private channels the bot has joined, never DMs. Slack decides which channels accept the bot's posts.
 - A 36px room-presence row above the sidebar footer: one selected room, a status dot, up to three faces, and a popover with names, the Zoom link and the current conversation. See [room presence](#room-presence-in-the-sidebar).
 
 Read the [canonical glossary](docs/glossary.md), [MVP spec](docs/superpowers/specs/2026-09-10-communications-hub.md), and [Zoom setup](docs/zoom-setup.md). Repository instructions in [AGENTS.md](AGENTS.md) require future agents to use these terms.
@@ -77,7 +77,7 @@ For `current`, `attach`, `detach`, and `acknowledge`, the thread ID may be omitt
 | `communications_search` | Search the attached transcript or channel; explicit target IDs select another source. |
 | `communications_read` | Read the attached transcript as speaker blocks or the attached channel as messages. |
 | `communications_acknowledge` | Advance the current thread's cursor after using passages. |
-| `communications_slack_post` | Post the final text requested by the BB user to a configured Slack channel. |
+| `communications_slack_post` | Post the final text requested by the BB user to a Slack channel the bot can access. |
 
 Read/search default to the attached conversation or Slack channel. Explicit `conversationId` or `channelId` permits an intentional read of another target. Transcript pages use `after` (ingestion sequence); channel pages use `before` (Slack message timestamp). Reads do not implicitly acknowledge content. Transcript acknowledgement is monotonic and checked against both the current attachment and available sequences. Channels do not yet have an acknowledgement cursor or automatic watch.
 
@@ -213,9 +213,9 @@ The first sync imports all history Slack makes available in each joined channel,
 
 ### Posting
 
-Add the `chat:write` **bot scope** to the same Slack app and reinstall it. If Slack rotates the bot token, update **Slack bot token** in plugin settings and run `bb communications slack-sync` again. Set **Slack posting channel IDs** to a comma-separated list of channel IDs, then turn on **Enable Slack message posting**. Posting is off by default, and the channel must also be in the bot's current indexed membership. DMs are not accepted. The `communications_slack_post` agent tool requires a channel ID and final message text (up to 4,000 characters); `threadTs` optionally replies to a parent message. It returns the posted timestamp and permalink. The agent may call it only when the BB user explicitly asks to send that message. A Slack message, transcript, or channel attachment does not authorize a post. If the request times out or the response is unclear, check Slack before retrying to avoid a duplicate.
+Add the `chat:write` **bot scope** to the same Slack app and reinstall it. If Slack rotates the bot token, update **Slack bot token** in plugin settings and run `bb communications slack-sync` again. Invite the bot to any channel where it should post. Slack checks the bot's membership and permissions on each post, so a newly joined channel does not need an allowlist update or an index sync before posting. DMs are not accepted. The `communications_slack_post` agent tool requires a channel ID and final message text (up to 4,000 characters); `threadTs` optionally replies to a parent message. It returns the posted timestamp and permalink. The agent may call it only when the BB user explicitly asks to send that message. A Slack message, transcript, or channel attachment does not authorize a post. If the request times out or the response is unclear, check Slack before retrying to avoid a duplicate.
 
-The posting tool instructs BB agents to read and apply the `talking-to-humans` skill before drafting Slack text. The skill must be available in the agent's environment; the instruction guides the agent, while the channel allowlist and explicit posting request are the enforceable controls. Review drafts when wording matters.
+The posting tool instructs BB agents to read and apply the `talking-to-humans` skill before drafting Slack text. The skill must be available in the agent's environment; the instruction guides the agent, while Slack permissions and an explicit posting request govern posting. Review drafts when wording matters.
 
 Bot messages suppress link previews by default. Set `unfurlLinks: true` on `communications_slack_post` to ask Slack to show link and media previews when the destination supplies preview data. The matching CLI command is `bb communications slack-post CHANNEL_ID 'message text' [parent-ts]`. Quote message text as one argument. It applies the same channel limits and returns the same timestamp and permalink.
 
