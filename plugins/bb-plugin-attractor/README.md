@@ -70,6 +70,30 @@ and opens a draft PR so partial work survives.
 
 Validate a graph without running it: `bb attractor validate <path>`.
 
+### Gauntlet Loop
+
+`skills/gauntlet/` packages a sixth graph as a skill of its own: a
+[Gauntlet Loop](https://somethingbig.ai/gauntlet-loop), in which builders
+improve one piece of a goal at a time and a fresh, blind critic judges each
+candidate against a concrete bar. `skills/gauntlet/gauntlet-loop.dot` is
+the graph; `skills/gauntlet/gauntlet-loop.mjs` is the helper its command
+nodes run (the same division of labour as `dependency-updates.queue.mjs`:
+the agents build and judge, the script commits, exports the unlabelled A/B
+pair, de-blinds the verdict, keeps or resets, and decides when to stop);
+`skills/gauntlet/SKILL.md` tells an agent how to set one up and what its
+limits are. Both files live in the skill directory, not `examples/`, so
+they ship to wherever the plugin is installed and `gauntlet-loop.mjs setup`
+can copy them into a target repository's `.gauntlet/`.
+
+The critic and final-review stages use `fidelity="truncate"`. Without it a
+stage's prompt carries up to 400 characters of every earlier stage's reply,
+which would hand a critic the builder's own account of its work.
+
+`tests/gauntlet-loop.test.ts` drives the helper against a throwaway git
+repository; `tests/gauntlet-loop.e2e.test.ts` runs the graph through the
+real engine and handler adapters with the real helper as its command
+nodes, and only the agents scripted.
+
 ### Dialect at a glance
 
 | Shape | `type=` | Handler | Needs | Notes |
@@ -102,7 +126,11 @@ auto-approves within the workspace);
 BB may still cap a spawned worker at the origin thread's own permission
 ceiling regardless of what is requested here), `max_parallel`,
 `question_type`, `join_policy` (`all`\|`any`\|`first` — v1 implements `all`),
-`stdin_source`, `review_target` (a `human` gate's workspace-relative file
+`stdin_source`, `fidelity` (`compact`\|`truncate` — how much run history an
+`agent`/`prompt` stage's prompt carries: `compact`, the default, is the goal,
+a summary of every prior stage and the node's prompt; `truncate` is the goal
+and the node's prompt only — see "Gauntlet Loop" below),
+`review_target` (a `human` gate's workspace-relative file
 path to show alongside its question — see "Human gates" below; note this is
 **not** Fabro's `review_target`, see "Deviations from the plan").
 
@@ -1462,3 +1490,14 @@ bb plugin build .
   traversed-edge emphasis/selection-reason tooltips the way the directive/
   panel's DAG does. Opening the run in the right panel (the chevron) shows
   the full picture.
+
+- **`fidelity` node attribute, `compact`|`truncate` only (Gauntlet Loop
+  follow-up).** The plan lists Fabro's `fidelity=full` as a v1 non-goal and
+  fixes prompt assembly at `compact`. `truncate` is added because a blind
+  critic stage must not receive prior stages' replies: `assemblePrompt`
+  skips both the "Prior stages:" and "Parallel results" sections for a
+  `fidelity="truncate"` node, leaving the goal and the node's own prompt.
+  The full text of every earlier stage is still in the run context
+  (`context.response.<node_id>`) for edge conditions; only the prompt
+  changes. Any other value (`full`, `summary:*`) is an `invalid-enum-value`
+  diagnostic rather than a silent fallback to `compact`.
