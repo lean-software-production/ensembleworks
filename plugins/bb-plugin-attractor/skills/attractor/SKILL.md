@@ -51,7 +51,10 @@ for me** mode, which auto-approves within the workspace) — **a spawned worker
 still inherits the origin thread's own permission ceiling**, so a node asking
 for more than that thread allows gets capped, not upgraded, `output_schema="routing"` (the stage must call the
 `attractor_result` tool with a structured routing decision instead of just
-answering in text).
+answering in text), `fidelity="truncate"` (the stage's prompt carries only
+the graph goal and its own `prompt`, with no summary of prior stages — for
+a reviewer that must judge an artifact without the author's account of it;
+the default, `compact`, includes that summary).
 
 Edges route by `condition="outcome=succeeded"` (see the full grammar in the
 plan doc), by label (a human gate, or an agent's `preferred_next_label`), or

@@ -456,6 +456,36 @@ describe("createThreadAgentBackend: structured results (output_schema=routing)",
 });
 
 describe("createThreadAgentBackend: prompt assembly", () => {
+  it("omits prior stages and parallel results for a fidelity=truncate node, keeping only the goal and its own prompt", async () => {
+    const host = makeHost();
+    const spawnCalls: unknown[] = [];
+    host.harness.sdk.stub("threads.spawn", async (args: unknown) => {
+      spawnCalls.push(args);
+      return makeThreadResponse({ id: "worker-thread" });
+    });
+    const backend = createThreadAgentBackend(host.bb);
+    const g = graph(`digraph G {
+      graph [goal="Ship it"]
+      start [shape=Mdiamond]
+      exit  [shape=Msquare]
+      build  [label="Build", prompt="Build it."]
+      critic [label="Critic", prompt="Judge the artifact.", fidelity="truncate"]
+      start -> build -> critic -> exit
+    }`);
+    const context = createContext({
+      response: { build: "I chose approach X because it is clearly the best" },
+      stage_status: { build: "succeeded" },
+      parallel: { branch_count: 1, results: [{ id: "lens", index: 0, status: "succeeded", text: "branch said things" }] },
+    });
+    const runPromise = backend.run({ ...baseInput(g, "critic"), context });
+    await flush();
+    await host.harness.behavior.emitThreadEvent("thread.idle", { thread: makeThreadResponse({ id: "worker-thread" }), lastAssistantText: "done" });
+    await runPromise;
+
+    const prompt = (spawnCalls[0] as { prompt: string }).prompt;
+    expect(prompt).toBe("Goal: Ship it\n\nJudge the artifact.");
+  });
+
   it("includes each prior stage's node id, label, and status alongside its response preview", async () => {
     const host = makeHost();
     const spawnCalls: unknown[] = [];

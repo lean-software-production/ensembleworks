@@ -130,8 +130,13 @@ function summarizeParallelResults(context: Context): string {
 
 function assemblePrompt(node: WorkflowNode, graph: WorkflowGraph, context: Context): string {
   const goal = graph.goal ? `Goal: ${graph.goal}\n\n` : "";
-  const history = summarizePriorStages(context, graph);
-  const parallelResults = summarizeParallelResults(context);
+  // `fidelity="truncate"`: the stage sees only the goal and its own prompt —
+  // no prior-stage summaries, no parallel results. A blind critic uses this
+  // so an earlier stage's reply (a builder defending its own work) never
+  // reaches it through the prompt. See README "Deviations from the plan".
+  const truncate = node.fidelity === "truncate";
+  const history = truncate ? "" : summarizePriorStages(context, graph);
+  const parallelResults = truncate ? "" : summarizeParallelResults(context);
   const body = node.prompt ?? "";
   const schemaInstruction = node.outputSchema
     ? `\n\nWhen you are done, call the attractor_result tool exactly once with your JSON result value.`

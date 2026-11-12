@@ -184,4 +184,16 @@ describe("dot/validate", () => {
       'digraph G { start[shape=Mdiamond] exit[shape=Msquare] gate[shape=hexagon, review_target="PLAN.md"] start->gate gate->exit[label="[A] Approve"] }';
     expect(codes(source)).not.toContain("invalid-review-target");
   });
+
+  it("accepts fidelity=compact and fidelity=truncate", () => {
+    for (const mode of ["compact", "truncate"]) {
+      const source = `digraph G { start[shape=Mdiamond] exit[shape=Msquare] n[prompt="p", fidelity="${mode}"] start->n->exit }`;
+      expect(codes(source)).not.toContain("invalid-enum-value");
+    }
+  });
+
+  it("flags an unsupported fidelity mode (e.g. Fabro's fidelity=full)", () => {
+    const source = 'digraph G { start[shape=Mdiamond] exit[shape=Msquare] n[prompt="p", fidelity="full"] start->n->exit }';
+    expect(codes(source)).toContain("invalid-enum-value");
+  });
 });
