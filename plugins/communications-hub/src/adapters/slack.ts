@@ -24,8 +24,6 @@ export function registerSlack(bb: BbPluginApi, store: SlackStore, changed: () =>
   const settings = bb.settings.define({
     slackReadEnabled:{type:'boolean',label:'Enable Slack channel reading',default:false},
     slackBotToken:{type:'string',label:'Slack bot token',secret:true},
-    slackWriteEnabled:{type:'boolean',label:'Enable Slack message posting',default:false},
-    slackWriteChannels:{type:'string',label:'Slack posting channel IDs (comma separated)'},
   });
   let teamId: string | null = null;
   let tokenDigest: string | null = null;
@@ -227,12 +225,8 @@ export function registerSlack(bb: BbPluginApi, store: SlackStore, changed: () =>
   }
   async function post(channelId:string,text:string,threadTs?:string,unfurlLinks=false) {
     const config=await settings.get();
-    if (!config.slackWriteEnabled) throw new Error('Slack message posting is disabled');
     if (!config.slackBotToken) throw new Error('Set the Slack bot token in plugin settings');
-    const allowed=(config.slackWriteChannels??'').split(',').map(value=>value.trim()).filter(Boolean);
-    if (!allowed.includes(channelId)) throw new Error('Slack channel is not allowed for posting');
     const auth=await api(config.slackBotToken,'auth.test',{},authResponse);
-    if (!store.space(auth.team_id,channelId)) throw new Error('Slack channel is not in the bot membership snapshot; run slack-sync');
     // A post is not retried: an uncertain HTTP result could otherwise create two messages.
     const response=await request('https://slack.com/api/chat.postMessage',{
       method:'POST',headers:{Authorization:`Bearer ${config.slackBotToken}`,'Content-Type':'application/json'},
