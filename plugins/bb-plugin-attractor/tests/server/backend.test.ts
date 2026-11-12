@@ -707,6 +707,8 @@ describe("createThreadAgentBackend: waiting out a retryable provider failure", (
     const waiting = t.emitted.find((e) => e.type === "agent.waiting");
     expect(waiting).toMatchObject({ threadId: "worker-thread", interactionId: "req-1" });
     expect(String(waiting?.kind)).toMatch(/^Rate limited, retrying at \d{4}-\d\d-\d\d \d\d:\d\d UTC$/);
+    // The retry time is also data on the event, not only inside the text reason.
+    expect(waiting).toMatchObject({ retryAt: t.retryCalls[0]!.sendAt });
 
     // The window reopens: bb re-runs the turn on the same thread, and the stage completes normally.
     await t.fire("thread.active", { thread: t.worker() });

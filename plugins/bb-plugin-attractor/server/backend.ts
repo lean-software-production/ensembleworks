@@ -335,6 +335,7 @@ export function createThreadAgentBackend(bb: BbPluginApi, options: ThreadAgentBa
       interactionId: failure.requestId,
       kind: describeWorkerRetry(decision.reason, decision.sendAt),
       title: decision.reason,
+      retryAt: decision.sendAt,
     });
   });
   // A human (or another plugin) deleted the queued retry: nothing will ever

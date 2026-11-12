@@ -115,7 +115,7 @@ describe("attractor server plugin", () => {
   it("loads and registers rpc, cli, tools, and the background service", async () => {
     const host = makeHost();
     await plugin(host.bb);
-    expect(host.harness.inspection.registrations.rpcMethods.sort()).toEqual(["activeRuns", "answerGate", "getEvents", "getGraph", "getRun", "listRuns", "provider-retry.v1.consent", "stopRun"]);
+    expect(host.harness.inspection.registrations.rpcMethods.sort()).toEqual(["activeRuns", "answerGate", "getEvents", "getGraph", "getRun", "listRuns", "provider-retry.v1.consent", "resumeRun", "stopRun"]);
     expect(host.harness.inspection.registrations.cli?.name).toBe("attractor");
     expect(host.harness.inspection.registrations.agentTools.map((t) => t.name).sort()).toEqual(["attractor_inspect", "attractor_result", "attractor_run"]);
     expect(host.harness.inspection.registrations.services.map((s) => s.name)).toContain("attractor-runs");
@@ -396,6 +396,38 @@ describe("attractor server plugin", () => {
     const again = await host.harness.behavior.runCli(["resume", ran.runId], { threadId: "thread-1" });
     expect(again.exitCode).toBe(1);
     expect(again.stderr).toContain("only a failed or cancelled run can be resumed");
+  });
+
+  it("RPC: resumeRun (the panel's and attention card's Resume button) re-enters a failed run, scoped to its owning thread, and refuses with a reason rather than throwing", async () => {
+    const host = makeHost();
+    let spawns = 0;
+    host.harness.sdk.stub("threads.spawn", async () => {
+      spawns += 1;
+      const first = spawns === 1;
+      setTimeout(() => {
+        void host.harness.behavior.emitThreadEvent(
+          first ? "thread.failed" : "thread.idle",
+          first ? { thread: makeThreadResponse({ id: "worker-thread" }), error: "provider exploded" } : { thread: makeThreadResponse({ id: "worker-thread" }), lastAssistantText: "done" },
+        );
+      }, 0);
+      return makeThreadResponse({ id: "worker-thread" });
+    });
+    await plugin(host.bb);
+    const source = 'digraph G {\n  start [shape=Mdiamond]\n  exit [shape=Msquare]\n  plan [prompt="do it"]\n  start -> plan\n  plan -> exit [condition="outcome=succeeded"]\n}';
+    const { runId } = toolJson(await host.harness.behavior.callAgentTool("attractor_run", { source }, { threadId: "thread-1", projectId: "project-1" }));
+    const runStatus = async () => ((await host.harness.behavior.callRpc("getRun", { runId, threadId: "thread-1" })) as { run: { status: string } }).run.status;
+    await vi.waitFor(async () => expect(await runStatus()).toBe("failed"), { timeout: 3000 });
+
+    expect(await host.harness.behavior.callRpc("resumeRun", { runId, threadId: "another-thread" })).toEqual({ resumed: false, reason: "no such run" });
+    expect(await runStatus()).toBe("failed");
+
+    expect(await host.harness.behavior.callRpc("resumeRun", { runId, threadId: "thread-1" })).toEqual({ resumed: true, fromNodeId: "plan" });
+    await vi.waitFor(async () => expect(await runStatus()).toBe("succeeded"), { timeout: 3000 });
+    expect(spawns).toBe(2);
+
+    const again = (await host.harness.behavior.callRpc("resumeRun", { runId, threadId: "thread-1" })) as { resumed: boolean; reason?: string };
+    expect(again.resumed).toBe(false);
+    expect(again.reason).toContain("only a failed or cancelled run can be resumed");
   });
 
   it("declines provider-retry for its own worker threads and allows it for any other thread", async () => {

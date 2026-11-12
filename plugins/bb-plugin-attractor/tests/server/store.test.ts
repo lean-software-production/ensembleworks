@@ -127,6 +127,33 @@ describe("RunStore", () => {
     expect(store.listStages("run-1")[0]).toMatchObject({ waitingReason: null });
   });
 
+  it("records when a wait began and, for a queued provider retry, when it is due — cleared with the reason", () => {
+    const store = makeStore();
+    store.createRun({ id: "run-1", threadId: "t", projectId: null, environmentId: null, title: null, source: "digraph G{}", graph, initialContext: {} });
+    store.upsertStage("run-1", { stageId: "build@1", nodeId: "build", visit: 1, attempt: 1, status: "running", outcomeStatus: null, threadId: null, startedAt: 1 });
+    expect(store.listStages("run-1")[0]).toMatchObject({ waitingSince: null, waitingUntil: null });
+    store.setStageWaitingReason("run-1", "build", 1, "Rate limited, retrying at …", { since: 10, until: 99 });
+    expect(store.listStages("run-1")[0]).toMatchObject({ waitingSince: 10, waitingUntil: 99 });
+    store.setStageWaitingReason("run-1", "build", 1, "permission", { since: 20, until: null });
+    expect(store.listStages("run-1")[0]).toMatchObject({ waitingSince: 20, waitingUntil: null });
+    store.setStageWaitingReason("run-1", "build", 1, null);
+    expect(store.listStages("run-1")[0]).toMatchObject({ waitingReason: null, waitingSince: null, waitingUntil: null });
+    store.setStageWaitingReason("run-1", "build", 1, "Rate limited", { since: 30, until: 40 });
+    store.settleInFlightStages("run-1", 50);
+    expect(store.listStages("run-1")[0]).toMatchObject({ status: "cancelled", waitingSince: null, waitingUntil: null });
+  });
+
+  it("records a stage's parallel group and branch from stage.started, and keeps them through later upserts", () => {
+    const store = makeStore();
+    store.createRun({ id: "run-1", threadId: "t", projectId: null, environmentId: null, title: null, source: "digraph G{}", graph, initialContext: {} });
+    store.upsertStage("run-1", { stageId: "fork@1", nodeId: "fork", visit: 1, attempt: 1, status: "running", outcomeStatus: null, threadId: null, startedAt: 1 });
+    store.upsertStage("run-1", { stageId: "security@1", nodeId: "security", visit: 1, attempt: 1, status: "running", outcomeStatus: null, threadId: null, startedAt: 2, parallelGroupId: "fork@1", branchIndex: 2 });
+    store.upsertStage("run-1", { stageId: "security@1", nodeId: "security", visit: 1, attempt: 1, status: "succeeded", outcomeStatus: "succeeded", threadId: null, startedAt: 2, completedAt: 5 });
+    const [fork, security] = store.listStages("run-1");
+    expect(fork).toMatchObject({ parallelGroupId: null, branchIndex: null });
+    expect(security).toMatchObject({ status: "succeeded", parallelGroupId: "fork@1", branchIndex: 2 });
+  });
+
   it("opening an existing (pre-migration) database adds the new stage columns idempotently", () => {
     const db = new Database(":memory:");
     // Simulate the table as it looked before this migration.
@@ -138,7 +165,7 @@ describe("RunStore", () => {
     const store = new RunStore(db);
     store.createRun({ id: "run-1", threadId: "t", projectId: null, environmentId: null, title: null, source: "digraph G{}", graph, initialContext: {} });
     store.upsertStage("run-1", { stageId: "plan@1", nodeId: "plan", visit: 1, attempt: 1, status: "running", outcomeStatus: null, threadId: null, startedAt: 1 });
-    expect(store.listStages("run-1")[0]).toMatchObject({ providerId: null, model: null, reasoningLevel: null, actor: null, waitingReason: null, gateContext: null });
+    expect(store.listStages("run-1")[0]).toMatchObject({ providerId: null, model: null, reasoningLevel: null, actor: null, waitingReason: null, gateContext: null, waitingSince: null, waitingUntil: null, parallelGroupId: null, branchIndex: null });
     // And re-opening the now-migrated database a second time is a no-op, not an error.
     expect(() => new RunStore(db)).not.toThrow();
   });

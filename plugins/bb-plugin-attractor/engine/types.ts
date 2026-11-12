@@ -109,7 +109,12 @@ export type StageScopedEvent =
   // its header comment) so the run visibly shows "blocked", not "running
   // forever", while a human answers it. `agent.resumed` clears it once the
   // thread goes active/idle again.
-  | { type: "agent.waiting"; threadId: string; interactionId: string; kind: string; title: string | null }
+  //
+  // `retryAt` (run-panel redesign): set only when the wait is a queued
+  // provider retry (server/backend.ts's `turn.failed` handler) — the epoch ms
+  // the retry is due, so the UI can show a reset time and countdown without
+  // parsing it back out of `kind`'s text. Absent for an interaction prompt.
+  | { type: "agent.waiting"; threadId: string; interactionId: string; kind: string; title: string | null; retryAt?: number }
   | { type: "agent.resumed"; threadId: string };
 
 export type RunEvent =
@@ -163,7 +168,7 @@ export type RunEvent =
       reason: EdgeSelectedReason;
     }
   | { type: "agent.thread"; runId: string; ts: number; stageId: string; nodeId: string; threadId: string; provider: string; model: string; reasoningLevel: string | null }
-  | { type: "agent.waiting"; runId: string; ts: number; stageId: string; nodeId: string; threadId: string; interactionId: string; kind: string; title: string | null }
+  | { type: "agent.waiting"; runId: string; ts: number; stageId: string; nodeId: string; threadId: string; interactionId: string; kind: string; title: string | null; retryAt?: number }
   | { type: "agent.resumed"; runId: string; ts: number; stageId: string; nodeId: string; threadId: string }
   | {
       type: "human.requested";

@@ -76,6 +76,13 @@ describe("engine/events: stage-scoped event emitter", () => {
     ]);
   });
 
+  it("carries a queued provider retry's retryAt through, as data", () => {
+    const events: RunEvent[] = [];
+    const emit = createStageEmitter({ runId: "run-1", stageId: "build@9", nodeId: "build", now: () => 9, onEvent: (e) => events.push(e) });
+    emit({ type: "agent.waiting", threadId: "worker-1", interactionId: "req-1", kind: "Rate limited, retrying at 2026-11-12 20:20 UTC", title: "Rate limited", retryAt: 1_000 });
+    expect(events[0]).toMatchObject({ type: "agent.waiting", retryAt: 1_000 });
+  });
+
   it("stamps agent.resumed with the worker threadId", () => {
     const events: RunEvent[] = [];
     const emit = createStageEmitter({

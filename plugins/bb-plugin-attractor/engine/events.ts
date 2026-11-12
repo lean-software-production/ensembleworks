@@ -28,7 +28,7 @@ export function createStageEmitter(opts: StageEmitterOptions): (event: StageScop
         onEvent({ type: "agent.thread", runId, ts, stageId, nodeId, threadId: event.threadId, provider: event.provider, model: event.model, reasoningLevel: event.reasoningLevel });
         return;
       case "agent.waiting":
-        onEvent({ type: "agent.waiting", runId, ts, stageId, nodeId, threadId: event.threadId, interactionId: event.interactionId, kind: event.kind, title: event.title });
+        onEvent({ type: "agent.waiting", runId, ts, stageId, nodeId, threadId: event.threadId, interactionId: event.interactionId, kind: event.kind, title: event.title, ...(event.retryAt !== undefined ? { retryAt: event.retryAt } : {}) });
         return;
       case "agent.resumed":
         onEvent({ type: "agent.resumed", runId, ts, stageId, nodeId, threadId: event.threadId });
