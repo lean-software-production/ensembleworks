@@ -22,6 +22,7 @@
  */
 
 import { useCallback, useEffect, useRef, useState } from "react";
+import { TOKENS } from "./primitives";
 import type * as React from "react";
 import * as dagre from "@dagrejs/dagre";
 import type { GraphEdgeView, GraphNodeView, GraphView } from "../server/contracts";
@@ -94,7 +95,7 @@ function svgClientScale(svg: SVGSVGElement, viewWidth: number, viewHeight: numbe
  * falls back to the bounding rect's origin plus the viewBox/rendered-size
  * ratio, treating a zero/undefined rendered size as no scaling.
  */
-function clientPointToViewBox(svg: SVGSVGElement, clientX: number, clientY: number, viewWidth: number, viewHeight: number): { x: number; y: number } {
+function clientPointToViewBox(svg: SVGSVGElement, clientX: number, clientY: number, viewWidth: number, viewHeight: number, viewY = 0, viewX = 0): { x: number; y: number } {
   const ctm = svg.getScreenCTM?.();
   if (ctm) {
     const point = svg.createSVGPoint();
@@ -106,7 +107,7 @@ function clientPointToViewBox(svg: SVGSVGElement, clientX: number, clientY: numb
   const rect = svg.getBoundingClientRect();
   const scaleX = rect.width ? viewWidth / rect.width : 1;
   const scaleY = rect.height ? viewHeight / rect.height : 1;
-  return { x: (clientX - rect.left) * scaleX, y: (clientY - rect.top) * scaleY };
+  return { x: viewX + (clientX - rect.left) * scaleX, y: viewY + (clientY - rect.top) * scaleY };
 }
 
 /** Zooms `state` by `factor` around the viewBox point `pivot`, keeping that point stationary on screen. */
@@ -232,36 +233,47 @@ export function layoutGraph(graph: GraphView, direction: LayoutDirection = DEFAU
   return { width, height, nodes, edges };
 }
 
+
 // ---------------------------------------------------------------------------
 // Visual mapping
 // ---------------------------------------------------------------------------
 
 export type NodeStatus = GraphNodeView["status"];
 
-const STATUS_COLOR: Record<NonNullable<NodeStatus> | "pending", { fill: string; stroke: string }> = {
-  // Hollow: a plain white fill, same grey outline as an untraversed edge —
-  // a pending node reads as "not yet reached" rather than a flat grey box.
-  pending: { fill: "#ffffff", stroke: "#94a3b8" },
-  running: { fill: "#dbeafe", stroke: "#2563eb" },
-  // T6: a human gate waiting on its answer — distinct from "running" so the
-  // DAG visibly flags where a run is stuck on a person, not just busy.
-  blocked: { fill: "#fef3c7", stroke: "#d97706" },
-  succeeded: { fill: "#dcfce7", stroke: "#16a34a" },
-  failed: { fill: "#fee2e2", stroke: "#dc2626" },
-  skipped: { fill: "#f5f5f4", stroke: "#a8a29e" },
+// Run-panel redesign: theme colours, no fixed light palette. Every node has
+// the card's own fill; its outline carries the status. Pending (not yet
+// reached) is the faint border colour so untaken parts of the graph recede.
+const STATUS_STROKE: Record<NonNullable<NodeStatus> | "pending", string> = {
+  pending: TOKENS.border,
+  running: TOKENS.brand,
+  // A human gate or a worker waiting on something — distinct from "running"
+  // so the graph visibly flags where a run is stuck.
+  blocked: TOKENS.warning,
+  succeeded: TOKENS.success,
+  failed: TOKENS.destructive,
+  skipped: TOKENS.mutedFg,
   // The stage a run was stopped in: settled by the finish path rather than
-  // by a stage event, so it reads as "abandoned" (grey, dashed like skipped)
-  // rather than failed.
-  cancelled: { fill: "#f5f5f4", stroke: "#a8a29e" },
+  // by a stage event, so it reads as "abandoned" rather than failed.
+  cancelled: TOKENS.mutedFg,
 };
 
+const STATUS_WORD: Record<NonNullable<NodeStatus>, string> = {
+  running: "running",
+  blocked: "waiting",
+  succeeded: "done",
+  failed: "failed",
+  skipped: "skipped",
+  cancelled: "stopped",
+};
+
+/** A node's fill and outline colour (CSS colour values, theme variables with fallbacks). */
 export function statusColor(status: NodeStatus): { fill: string; stroke: string } {
-  return STATUS_COLOR[status ?? "pending"];
+  return { fill: TOKENS.card, stroke: STATUS_STROKE[status ?? "pending"] };
 }
 
-/** Node outline stroke width by status (a running node's border reads slightly heavier, per the restyle), before any current-node emphasis is applied. */
+/** Node outline stroke width by status, before any current-node emphasis is applied. */
 function statusStrokeWidth(status: NodeStatus): number {
-  return status === "running" ? 2.5 : 1.5;
+  return status === "running" || status === "blocked" ? 2 : 1.5;
 }
 
 type ShapeKind = "polygon" | "ellipse" | "rect";
@@ -308,17 +320,13 @@ function shapePoints(handlerKind: string, w: number, h: number): string | null {
       // Plain diamond — distinct from `start`'s clipped-tip Mdiamond above.
       return `${cx},0 ${w},${cy} ${cx},${h} 0,${cy}`;
     case "exit": {
-      // Msquare: a rectangle with each of its 4 corners clipped diagonally —
-      // Graphviz's actual rendering of this shape, and (unlike a plain rect)
-      // an outline distinct from `agent`/`prompt`'s below.
+      // Msquare: a rectangle with each of its 4 corners clipped diagonally.
       const clip = Math.min(w, h) * 0.22;
       return `${clip},0 ${w - clip},0 ${w},${clip} ${w},${h - clip} ${w - clip},${h} ${clip},${h} 0,${h - clip} 0,${clip}`;
     }
     case "parallel":
     case "parallel.fan_in":
-      // Octagon (tripleoctagon simplified to a single cut-corner octagon).
-      // Uses proportionally larger corner cuts than `exit`'s Msquare above,
-      // so the two octagon-ish shapes stay visually and structurally distinct.
+      // Octagon, with proportionally larger corner cuts than `exit`'s Msquare.
       return `${w * 0.25},0 ${w * 0.75},0 ${w},${h * 0.25} ${w},${h * 0.75} ${w * 0.75},${h} ${w * 0.25},${h} 0,${h * 0.75} 0,${h * 0.25}`;
     default:
       return null; // agent, prompt: rounded rect.
@@ -347,9 +355,7 @@ function latestEdgeSelections(events: readonly RunEvent[]): Map<string, EdgeSele
 /**
  * A smoothed SVG path through dagre's routed points — a "Q" (quadratic)
  * command per intermediate point, midpoint-smoothed between consecutive
- * points, then a final "L" into the last point — rather than the old sharp
- * polyline, so an edge reads like a Graphviz spline instead of a ruler-drawn
- * dogleg. Two (or fewer) points have nothing to smooth and stay a straight line.
+ * points, then a final "L" into the last point.
  */
 function pathFor(points: { x: number; y: number }[]): string {
   if (points.length === 0) return "";
@@ -358,16 +364,14 @@ function pathFor(points: { x: number; y: number }[]): string {
   for (let i = 1; i < points.length - 1; i++) {
     const current = points[i]!;
     const next = points[i + 1]!;
-    const midX = (current.x + next.x) / 2;
-    const midY = (current.y + next.y) / 2;
-    d += ` Q${current.x},${current.y} ${midX},${midY}`;
+    d += ` Q${current.x},${current.y} ${(current.x + next.x) / 2},${(current.y + next.y) / 2}`;
   }
   const last = points[points.length - 1]!;
   d += ` L${last.x},${last.y}`;
   return d;
 }
 
-/** The point at (approximately) half the polyline's total length — used to place an edge's label. Falls back to the midpoint of a 2-point (or shorter) path. */
+/** The point at (approximately) half the polyline's total length — used to place an edge's label. */
 function midpointOf(points: { x: number; y: number }[]): { x: number; y: number } | null {
   if (points.length === 0) return null;
   if (points.length === 1) return points[0]!;
@@ -391,77 +395,152 @@ function midpointOf(points: { x: number; y: number }[]): { x: number; y: number 
 
 const MAX_CONDITION_LABEL_LENGTH = 30;
 
-/** The DOT-declared edge label if present, else a shortened form of its routing condition, else null (no on-diagram text — the `<title>` tooltip still carries the full detail). */
+/** The DOT-declared edge label if present, else a shortened form of its routing condition, else null. */
 function edgeDisplayLabel(edge: Pick<GraphEdgeView, "label" | "condition">): string | null {
   if (edge.label) return edge.label;
   if (edge.condition) return edge.condition.length > MAX_CONDITION_LABEL_LENGTH ? `${edge.condition.slice(0, MAX_CONDITION_LABEL_LENGTH - 1)}…` : edge.condition;
   return null;
 }
 
+/** Follow mode shows a window this many times the graph's width tall, centred on the followed node. */
+const FOLLOW_WINDOW_ASPECT = 0.8;
+/**
+ * Follow mode's window is at least this wide (viewBox units). The window
+ * fills the panel's width, so a window only as wide as a narrow
+ * top-to-bottom graph magnified it several times over; a floor keeps a
+ * followed graph near its natural size, centred horizontally.
+ */
+export const FOLLOW_MIN_WIDTH = 480;
+
 export interface DagViewProps {
   graph: GraphView;
   /** All events recorded for the run so far — used to find traversed edges and their selection reason. */
   events: readonly RunEvent[];
-  /** The run's current/most-recently-entered node, per `Run.currentNodeId`; highlighted distinctly. */
+  /** The run's current/most-recently-entered node, per `Run.currentNodeId`; emphasised with a heavier outline. */
   currentNodeId?: string | null;
   /** nodeId -> the worker threadId of its latest stage, when known (from `getRun`'s stages). */
   threadIdByNode?: Record<string, string | null | undefined>;
-  /** Called when an agent/prompt node with a known worker thread is clicked. */
+  /** Called when an agent/prompt node with a known worker thread is clicked — only when `onSelectNode` is not given. */
   onOpenThread?: (threadId: string) => void;
-  /** Rank direction for `layoutGraph` — defaults to "TB" (vertical, Fabro-style), regardless of the graph's own declared `rankdir` (see the module doc). */
+  /** Rank direction for `layoutGraph` — defaults to "TB" (vertical), regardless of the graph's own declared `rankdir`. */
   direction?: LayoutDirection;
+  /** Selection mode (run panel): every node is clickable and selects itself instead of opening a thread. */
+  selectedNodeId?: string | null;
+  onSelectNode?: (nodeId: string) => void;
+  /**
+   * Follow mode (run panel): when set and `following` is true, the view is a
+   * window onto the graph centred on this node, moving as it changes. Any
+   * pan or zoom by the user calls `onFollowingChange(false)`; "Fit" shows the
+   * whole graph and stops following too.
+   */
+  followNodeId?: string | null;
+  following?: boolean;
+  onFollowingChange?: (following: boolean) => void;
+  /** Caps the rendered height (px). Defaults to 520; the large view passes more. */
+  maxHeight?: number;
 }
 
 /** dagre-laid-out SVG rendering of a workflow graph with a live execution overlay. */
-export function DagView({ graph, events, currentNodeId, threadIdByNode, onOpenThread, direction = DEFAULT_DIRECTION }: DagViewProps) {
+export function DagView({
+  graph,
+  events,
+  currentNodeId,
+  threadIdByNode,
+  onOpenThread,
+  direction = DEFAULT_DIRECTION,
+  selectedNodeId,
+  onSelectNode,
+  followNodeId,
+  following = false,
+  onFollowingChange,
+  maxHeight = 520,
+}: DagViewProps) {
   const laidOut = layoutGraph(graph, direction);
   const selections = latestEdgeSelections(events);
-  const viewWidth = Math.max(laidOut.width, NODE_WIDTH);
-  const viewHeight = Math.max(laidOut.height, NODE_HEIGHT);
+  const fullWidth = Math.max(laidOut.width, NODE_WIDTH);
+  const fullHeight = Math.max(laidOut.height, NODE_HEIGHT);
+
+  // The viewBox: the whole graph, or (follow mode) a window onto it. Once
+  // following stops the window stays where it was, so a pan is relative to
+  // what the user was looking at; "Fit" switches back to the whole graph.
+  const followCapable = followNodeId !== undefined;
+  const windowWidth = Math.max(fullWidth, FOLLOW_MIN_WIDTH);
+  const windowHeight = Math.max(NODE_HEIGHT * 3, Math.round(windowWidth * FOLLOW_WINDOW_ASPECT));
+  const [wholeGraph, setWholeGraph] = useState(!following);
+  const lastWindowY = useRef(0);
+  const followed = followNodeId ? laidOut.nodes.find((n) => n.id === followNodeId) : undefined;
+  let viewX = 0;
+  let viewY = 0;
+  let viewWidth = fullWidth;
+  let viewHeight = fullHeight;
+  if (followCapable && !wholeGraph && fullHeight > windowHeight) {
+    if (following && followed) lastWindowY.current = Math.min(Math.max(0, followed.y - windowHeight / 2), fullHeight - windowHeight);
+    viewX = -(windowWidth - fullWidth) / 2;
+    viewY = lastWindowY.current;
+    viewWidth = windowWidth;
+    viewHeight = windowHeight;
+  }
 
   const [zoom, setZoom] = useState<ZoomState>(DEFAULT_ZOOM);
   const svgRef = useRef<SVGSVGElement | null>(null);
   const dragState = useRef<{ pointerId: number; lastX: number; lastY: number; startX: number; startY: number; panning: boolean } | null>(null);
   // Set when a drag actually panned, so the `click` the browser synthesises
-  // at the end of that drag does not also open the node the drag happened to
-  // start on. Cleared by the click it suppresses, or by the next pointerdown.
+  // at the end of that drag does not also act on the node it started on.
   const suppressNextClick = useRef(false);
 
-  const center = { x: viewWidth / 2, y: viewHeight / 2 };
-  const zoomIn = useCallback(() => setZoom((z) => zoomAround(z, ZOOM_STEP, center)), [viewWidth, viewHeight]);
-  const zoomOut = useCallback(() => setZoom((z) => zoomAround(z, 1 / ZOOM_STEP, center)), [viewWidth, viewHeight]);
-  const fit = useCallback(() => setZoom(DEFAULT_ZOOM), []);
+  // Starting to follow (again) recentres: no leftover pan/zoom, windowed view.
+  useEffect(() => {
+    if (!following) return;
+    setZoom(DEFAULT_ZOOM);
+    setWholeGraph(false);
+  }, [following]);
+
+  const userMoved = useCallback(() => {
+    if (following) onFollowingChange?.(false);
+  }, [following, onFollowingChange]);
+
+  const center = { x: viewX + viewWidth / 2, y: viewY + viewHeight / 2 };
+  const zoomIn = () => {
+    userMoved();
+    setZoom((z) => zoomAround(z, ZOOM_STEP, center));
+  };
+  const zoomOut = () => {
+    userMoved();
+    setZoom((z) => zoomAround(z, 1 / ZOOM_STEP, center));
+  };
+  const fit = () => {
+    if (following) onFollowingChange?.(false);
+    setWholeGraph(true);
+    setZoom(DEFAULT_ZOOM);
+  };
 
   // A plain wheel must reach the host untouched (the thread/panel scroll
   // container underneath) — only ctrl/meta+wheel (pinch-zoom or an explicit
   // zoom gesture) is ours to intercept. React attaches its synthetic wheel
-  // listener passively, so `preventDefault()` from an `onWheel` prop would be
-  // silently ignored by the browser; a manual non-passive listener is
-  // required to actually stop the page from also scrolling/zooming.
+  // listener passively, so a manual non-passive listener is required to
+  // actually stop the page from also scrolling/zooming.
+  const userMovedRef = useRef(userMoved);
+  userMovedRef.current = userMoved;
   useEffect(() => {
     const svg = svgRef.current;
     if (!svg) return;
     const handler = (event: WheelEvent) => {
       if (!event.ctrlKey && !event.metaKey) return; // let the host scroll normally
       event.preventDefault();
+      userMovedRef.current();
       const factor = event.deltaY < 0 ? ZOOM_STEP : 1 / ZOOM_STEP;
-      const pivot = clientPointToViewBox(svg, event.clientX, event.clientY, viewWidth, viewHeight);
+      const pivot = clientPointToViewBox(svg, event.clientX, event.clientY, viewWidth, viewHeight, viewY, viewX);
       setZoom((z) => zoomAround(z, factor, pivot));
     };
     svg.addEventListener("wheel", handler, { passive: false });
     return () => svg.removeEventListener("wheel", handler);
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [viewWidth, viewHeight]);
+  }, [viewWidth, viewHeight, viewY, viewX]);
 
   const onPointerDown = (event: React.PointerEvent<SVGSVGElement>) => {
-    // Only a plain, unmodified primary-button drag pans, and this never
-    // interferes with a modifier+wheel zoom (a different event type entirely).
-    // Note what is deliberately NOT done here: no `setPointerCapture`. A press
-    // that turns out to be an ordinary node click must stay an ordinary node
-    // click, and capturing the pointer up front re-targets the browser's
-    // synthesised `click` to the capturing <svg>, which would stop a node's
-    // own onClick from ever firing. Capture is taken in onPointerMove, once
-    // the pointer has travelled far enough to be a pan rather than a click.
+    // Only a plain primary-button drag pans. No `setPointerCapture` here: a
+    // press that turns out to be an ordinary node click must stay one, and
+    // capturing up front re-targets the synthesised `click` to the <svg>.
+    // Capture is taken in onPointerMove, once the press has become a pan.
     if (event.button !== 0) return;
     suppressNextClick.current = false;
     dragState.current = { pointerId: event.pointerId, lastX: event.clientX, lastY: event.clientY, startX: event.clientX, startY: event.clientY, panning: false };
@@ -470,11 +549,10 @@ export function DagView({ graph, events, currentNodeId, threadIdByNode, onOpenTh
     const drag = dragState.current;
     if (!drag || drag.pointerId !== event.pointerId) return;
     if (!drag.panning) {
-      // Below the slop threshold this is still a click in progress — a human
-      // pressing a node always wobbles a pixel or two before releasing.
       if (Math.hypot(event.clientX - drag.startX, event.clientY - drag.startY) < DRAG_THRESHOLD_PX) return;
       drag.panning = true;
       event.currentTarget.setPointerCapture?.(event.pointerId);
+      userMoved();
     }
     const dx = event.clientX - drag.lastX;
     const dy = event.clientY - drag.lastY;
@@ -489,14 +567,13 @@ export function DagView({ graph, events, currentNodeId, threadIdByNode, onOpenTh
     if (drag?.pointerId !== event.pointerId) return;
     if (drag.panning) {
       event.currentTarget.releasePointerCapture?.(event.pointerId);
-      // A pan that started on a node ends with a `click` on that node; swallow it.
       suppressNextClick.current = true;
     }
     dragState.current = null;
   };
 
   return (
-    <div data-testid="dag-viewport" style={{ position: "relative", overflow: "hidden" }}>
+    <div data-testid="dag-viewport" data-following={followCapable ? String(following) : undefined} style={{ position: "relative", overflow: "hidden" }}>
       <div style={{ position: "absolute", top: 4, right: 4, zIndex: 1, display: "flex", flexDirection: "column", gap: 2 }}>
         <ZoomButton label="Zoom in" onClick={zoomIn}>
           +
@@ -512,175 +589,172 @@ export function DagView({ graph, events, currentNodeId, threadIdByNode, onOpenTh
         ref={svgRef}
         role="img"
         aria-label="Workflow DAG"
-        viewBox={`0 0 ${viewWidth} ${viewHeight}`}
+        viewBox={`${viewX} ${viewY} ${viewWidth} ${viewHeight}`}
         preserveAspectRatio="xMidYMid meet"
-        style={{ width: "100%", height: "auto", maxHeight: 520, display: "block", touchAction: "none" }}
+        style={{ width: "100%", height: "auto", maxHeight, display: "block", touchAction: "none" }}
         onPointerDown={onPointerDown}
         onPointerMove={onPointerMove}
         onPointerUp={endDrag}
         onPointerCancel={endDrag}
       >
-      <defs>
-        <marker id="attractor-arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
-          <path d="M0,0 L10,5 L0,10 z" fill="#94a3b8" />
-        </marker>
-        <marker id="attractor-arrow-traversed" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
-          <path d="M0,0 L10,5 L0,10 z" fill="#2563eb" />
-        </marker>
-        {/* A clickable node's hover/focus highlight, driven by CSS
-            `:hover`/`:focus` on the node's own `<g>` — no JS hover state —
-            per the "thicker stroke or a subtle glow" affordance. */}
-        <style>{`
-          .attractor-node--clickable:hover polygon,
-          .attractor-node--clickable:hover ellipse,
-          .attractor-node--clickable:hover rect,
-          .attractor-node--clickable:focus polygon,
-          .attractor-node--clickable:focus ellipse,
-          .attractor-node--clickable:focus rect {
-            stroke-width: 3;
-            filter: drop-shadow(0 0 3px rgba(37, 99, 235, 0.55));
-          }
-        `}</style>
-      </defs>
-      <g data-testid="dag-zoom-group" transform={`translate(${zoom.tx}, ${zoom.ty}) scale(${zoom.scale})`}>
-      <g>
-        {laidOut.edges.map((edge) => {
-          const selection = selections.get(`${edge.from} ${edge.to}`);
-          const traversed = Boolean(selection);
-          const label = edgeDisplayLabel(edge);
-          const midpoint = label ? midpointOf(edge.points) : null;
-          // Untraversed edges are always solid #94a3b8/1.25px (the same grey
-          // as a pending node's hollow outline) — legible on their own —
-          // except a back edge (a loop like `approve -> plan`) may also dash
-          // to visually flag it as "not the forward path". A traversed edge
-          // stays blue/2px regardless of back-edge-ness (unchanged).
-          const stroke = traversed ? "#2563eb" : "#94a3b8";
-          const strokeWidth = traversed ? 2 : 1.25;
-          const strokeDasharray = !traversed && edge.isBackEdge ? "6 4" : undefined;
-          return (
-            <g key={`${edge.from}->${edge.to}#${edge.edgeIndex}`}>
-              <path
-                data-edge={`${edge.from}->${edge.to}`}
-                data-traversed={traversed}
-                data-back-edge={edge.isBackEdge}
-                d={pathFor(edge.points)}
-                fill="none"
-                stroke={stroke}
-                strokeWidth={strokeWidth}
-                strokeDasharray={strokeDasharray}
-                markerEnd={`url(#${traversed ? "attractor-arrow-traversed" : "attractor-arrow"})`}
-              >
-                <title>{selection ? `${edge.from} → ${edge.to} (${selection.reason}${selection.edgeLabel ? `: ${selection.edgeLabel}` : ""})` : `${edge.from} → ${edge.to}`}</title>
-              </path>
-              {label && midpoint ? (
-                <g data-edge-label={`${edge.from}->${edge.to}`} transform={`translate(${midpoint.x}, ${midpoint.y})`}>
-                  {/* No background rect (per the restyle): a white text-stroke halo
-                      (paint-order="stroke") keeps the label legible over a crossing
-                      edge/node without a boxy background. */}
-                  <text textAnchor="middle" y={4} fontSize={11} fill="#475569" paintOrder="stroke" stroke="#fff" strokeWidth={3}>
+        <defs>
+          <marker id="attractor-arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+            <path d="M0,0 L10,5 L0,10 z" style={{ fill: TOKENS.border }} />
+          </marker>
+          <marker id="attractor-arrow-traversed" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+            <path d="M0,0 L10,5 L0,10 z" style={{ fill: TOKENS.mutedFg }} />
+          </marker>
+          {/* A clickable node's hover/focus highlight, driven by CSS
+              `:hover`/`:focus` on the node's own `<g>` — no JS hover state. */}
+          <style>{`
+            .attractor-node--clickable:hover polygon,
+            .attractor-node--clickable:hover ellipse,
+            .attractor-node--clickable:hover rect,
+            .attractor-node--clickable:focus polygon,
+            .attractor-node--clickable:focus ellipse,
+            .attractor-node--clickable:focus rect {
+              stroke-width: 3;
+            }
+            .attractor-node--clickable:focus { outline: none; }
+          `}</style>
+        </defs>
+        <g data-testid="dag-zoom-group" transform={`translate(${zoom.tx}, ${zoom.ty}) scale(${zoom.scale})`}>
+          <g>
+            {laidOut.edges.map((edge) => {
+              const selection = selections.get(`${edge.from} ${edge.to}`);
+              const traversed = Boolean(selection);
+              const label = edgeDisplayLabel(edge);
+              const midpoint = label ? midpointOf(edge.points) : null;
+              // Untaken routes are faint (the border colour); a taken route
+              // is the stronger muted-foreground. An untaken back edge (a
+              // loop) also dashes, to read as "not the forward path".
+              const stroke = traversed ? TOKENS.mutedFg : TOKENS.border;
+              const strokeWidth = traversed ? 1.6 : 1.2;
+              const strokeDasharray = !traversed && edge.isBackEdge ? "4 3" : undefined;
+              return (
+                <g key={`${edge.from}->${edge.to}#${edge.edgeIndex}`}>
+                  <path
+                    data-edge={`${edge.from}->${edge.to}`}
+                    data-traversed={traversed}
+                    data-back-edge={edge.isBackEdge}
+                    d={pathFor(edge.points)}
+                    fill="none"
+                    style={{ stroke, strokeWidth }}
+                    strokeDasharray={strokeDasharray}
+                    markerEnd={`url(#${traversed ? "attractor-arrow-traversed" : "attractor-arrow"})`}
+                  >
+                    <title>{selection ? `${edge.from} → ${edge.to} (${selection.reason}${selection.edgeLabel ? `: ${selection.edgeLabel}` : ""})` : `${edge.from} → ${edge.to}`}</title>
+                  </path>
+                  {label && midpoint ? (
+                    <g data-edge-label={`${edge.from}->${edge.to}`} transform={`translate(${midpoint.x}, ${midpoint.y})`}>
+                      {/* A card-coloured text-stroke halo (paint-order="stroke")
+                          keeps the label legible over a crossing edge/node. */}
+                      <text textAnchor="middle" y={4} fontSize={11} paintOrder="stroke" style={{ fill: TOKENS.mutedFg, stroke: TOKENS.card, strokeWidth: 3 }}>
+                        {label}
+                      </text>
+                    </g>
+                  ) : null}
+                </g>
+              );
+            })}
+          </g>
+          <g>
+            {laidOut.nodes.map((node) => {
+              const color = statusColor(node.status);
+              const isCurrent = node.id === currentNodeId;
+              const isSelected = onSelectNode !== undefined && node.id === selectedNodeId;
+              const threadId = threadIdByNode?.[node.id] ?? null;
+              const selectable = onSelectNode !== undefined;
+              const opensThread = !selectable && opensWorkerThread(node.handlerKind) && Boolean(threadId) && Boolean(onOpenThread);
+              const clickable = selectable || opensThread;
+              const shapeKind = shapeKindFor(node.handlerKind);
+              const points = shapeKind === "polygon" ? shapePoints(node.handlerKind, node.width, node.height) : null;
+              const strokeWidth = isCurrent ? 2.75 : statusStrokeWidth(node.status);
+              const outlineStyle = { fill: color.fill, stroke: color.stroke, strokeWidth, strokeDasharray: node.status === "skipped" || node.status === "cancelled" ? "3 2" : undefined };
+              const x = node.x - node.width / 2;
+              const y = node.y - node.height / 2;
+              const activate = () => {
+                if (suppressNextClick.current) {
+                  suppressNextClick.current = false;
+                  return;
+                }
+                if (selectable) onSelectNode!(node.id);
+                else onOpenThread!(threadId!);
+              };
+              // A second line under the label: where the run is on the
+              // current node ("waiting · pass 9"), or how many times a loop
+              // body has run ("9 passes") instead of a badge on every node.
+              const sub = isCurrent && node.status ? `${STATUS_WORD[node.status]}${node.visit > 1 ? ` · pass ${node.visit}` : ""}` : node.visit > 1 ? `${node.visit} passes` : null;
+              const subColor = isCurrent && node.status === "blocked" ? TOKENS.warningText : isCurrent && node.status === "failed" ? TOKENS.destructiveText : TOKENS.mutedFg;
+              const label = node.label ?? node.id;
+              return (
+                <g
+                  key={node.id}
+                  data-node-id={node.id}
+                  data-handler-kind={node.handlerKind}
+                  data-status={node.status ?? "pending"}
+                  data-current={isCurrent}
+                  data-selected={selectable ? isSelected : undefined}
+                  data-clickable={clickable}
+                  className={clickable ? "attractor-node--clickable" : undefined}
+                  role={clickable ? "button" : undefined}
+                  tabIndex={clickable ? 0 : undefined}
+                  aria-pressed={selectable ? isSelected : undefined}
+                  aria-label={selectable ? `Select ${label}` : opensThread ? `Open worker thread for ${label}` : undefined}
+                  onClick={clickable ? activate : undefined}
+                  onKeyDown={
+                    clickable
+                      ? (event) => {
+                          if (event.key === "Enter" || event.key === " ") {
+                            event.preventDefault();
+                            if (selectable) onSelectNode!(node.id);
+                            else onOpenThread!(threadId!);
+                          }
+                        }
+                      : undefined
+                  }
+                  style={{ cursor: clickable ? "pointer" : "default" }}
+                  transform={`translate(${x}, ${y})`}
+                >
+                  {node.status === "blocked" && node.waitingReason ? (
+                    <title>{`Waiting: ${node.waitingReason} in worker thread`}</title>
+                  ) : opensThread ? (
+                    <title>{`Open worker thread ${threadId}`}</title>
+                  ) : null}
+                  {isSelected ? <rect x={-4} y={-4} width={node.width + 8} height={node.height + 8} rx={10} fill="none" style={{ stroke: TOKENS.ring, strokeWidth: 1.5 }} strokeDasharray="3 2" data-selection-ring /> : null}
+                  {shapeKind === "polygon" && points ? (
+                    <polygon points={points} style={outlineStyle} />
+                  ) : shapeKind === "ellipse" ? (
+                    <ellipse cx={node.width / 2} cy={node.height / 2} rx={node.width / 2} ry={node.height / 2} style={outlineStyle} />
+                  ) : (
+                    <rect width={node.width} height={node.height} rx={8} style={outlineStyle} />
+                  )}
+                  <text
+                    x={node.width / 2}
+                    y={sub ? node.height / 2 - 1 : node.height / 2 + 4}
+                    textAnchor="middle"
+                    fontSize={12}
+                    fontWeight={isCurrent ? 600 : undefined}
+                    textDecoration={opensThread ? "underline" : undefined}
+                    style={{ fill: node.status === null ? TOKENS.mutedFg : TOKENS.cardFg }}
+                  >
                     {label}
                   </text>
+                  {sub ? (
+                    <text data-visit-badge={node.visit} x={node.width / 2} y={node.height / 2 + 11} textAnchor="middle" fontSize={9} style={{ fill: subColor }}>
+                      {sub}
+                    </text>
+                  ) : null}
+                  {opensThread ? (
+                    <text data-open-thread-glyph x={4} y={12} fontSize={10} style={{ fill: TOKENS.brand }}>
+                      ↗
+                    </text>
+                  ) : null}
                 </g>
-              ) : null}
-            </g>
-          );
-        })}
-      </g>
-      <g>
-        {laidOut.nodes.map((node) => {
-          const color = statusColor(node.status);
-          const isCurrent = node.id === currentNodeId;
-          const threadId = threadIdByNode?.[node.id] ?? null;
-          const clickable = opensWorkerThread(node.handlerKind) && Boolean(threadId) && Boolean(onOpenThread);
-          const shapeKind = shapeKindFor(node.handlerKind);
-          const points = shapeKind === "polygon" ? shapePoints(node.handlerKind, node.width, node.height) : null;
-          const strokeWidth = isCurrent ? 3 : statusStrokeWidth(node.status);
-          const x = node.x - node.width / 2;
-          const y = node.y - node.height / 2;
-          return (
-            <g
-              key={node.id}
-              data-node-id={node.id}
-              data-handler-kind={node.handlerKind}
-              data-status={node.status ?? "pending"}
-              data-current={isCurrent}
-              data-clickable={clickable}
-              className={clickable ? "attractor-node--clickable" : undefined}
-              role={clickable ? "button" : undefined}
-              tabIndex={clickable ? 0 : undefined}
-              aria-label={clickable ? `Open worker thread for ${node.label ?? node.id}` : undefined}
-              onClick={
-                clickable
-                  ? () => {
-                      if (suppressNextClick.current) {
-                        suppressNextClick.current = false;
-                        return;
-                      }
-                      onOpenThread!(threadId!);
-                    }
-                  : undefined
-              }
-              onKeyDown={
-                clickable
-                  ? (event) => {
-                      if (event.key === "Enter" || event.key === " ") onOpenThread!(threadId!);
-                    }
-                  : undefined
-              }
-              style={{ cursor: clickable ? "pointer" : "default" }}
-              transform={`translate(${x}, ${y})`}
-            >
-              {/* Dogfood-2 fix: a blocked agent/prompt node (waiting on a worker's
-                  own pending interaction, as opposed to a human-gate "blocked"
-                  with no waitingReason) gets a tooltip naming what it's stuck on.
-                  A clickable node with no such wait gets an "Open worker thread"
-                  tooltip instead — the affordance a hover/focus glow alone (see
-                  the `.attractor-node--clickable` rule in <defs>'s <style>,
-                  driven purely by CSS `:hover`/`:focus`, no JS hover state)
-                  can't convey to a keyboard or screen-reader user. */}
-              {node.status === "blocked" && node.waitingReason ? (
-                <title>{`Waiting: ${node.waitingReason} in worker thread`}</title>
-              ) : clickable ? (
-                <title>{`Open worker thread ${threadId}`}</title>
-              ) : null}
-              {shapeKind === "polygon" && points ? (
-                <polygon points={points} fill={color.fill} stroke={color.stroke} strokeWidth={strokeWidth} />
-              ) : shapeKind === "ellipse" ? (
-                <ellipse cx={node.width / 2} cy={node.height / 2} rx={node.width / 2} ry={node.height / 2} fill={color.fill} stroke={color.stroke} strokeWidth={strokeWidth} />
-              ) : (
-                <rect width={node.width} height={node.height} rx={8} fill={color.fill} stroke={color.stroke} strokeWidth={strokeWidth} />
-              )}
-              {isCurrent ? <rect width={node.width} height={node.height} rx={8} fill="none" stroke="#1d4ed8" strokeWidth={1} strokeDasharray="2 2" /> : null}
-              <text
-                x={node.width / 2}
-                y={node.height / 2 + 4}
-                textAnchor="middle"
-                fontSize={12}
-                fill="#0f172a"
-                textDecoration={clickable ? "underline" : undefined}
-              >
-                {node.label ?? node.id}
-              </text>
-              {clickable ? (
-                // A small "open thread" glyph, top-left of the node — the
-                // affordance a sighted mouse user sees without hovering.
-                <text data-open-thread-glyph x={4} y={12} fontSize={10} fill="#2563eb">
-                  ↗
-                </text>
-              ) : null}
-              {node.visit > 1 ? (
-                <g transform={`translate(${node.width - 12}, -4)`} data-visit-badge={node.visit}>
-                  <circle r={9} fill="#1d4ed8" />
-                  <text textAnchor="middle" y={4} fontSize={10} fill="#fff">
-                    {node.visit}
-                  </text>
-                </g>
-              ) : null}
-            </g>
-          );
-        })}
-      </g>
-      </g>
+              );
+            })}
+          </g>
+        </g>
       </svg>
     </div>
   );
@@ -706,9 +780,9 @@ function ZoomButton({ label, onClick, children }: ZoomButtonProps) {
         lineHeight: "20px",
         padding: 0,
         borderRadius: 4,
-        border: "1px solid #cbd5e1",
-        background: "#ffffff",
-        color: "#334155",
+        border: `1px solid ${TOKENS.border}`,
+        background: TOKENS.card,
+        color: TOKENS.mutedFg,
         cursor: "pointer",
         fontSize: 13,
       }}

@@ -22,11 +22,13 @@
  *    the panel root has to be the scroll container itself.
  */
 import { cleanup, fireEvent, waitFor } from "@testing-library/react";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { loadPluginApp, renderSlot } from "@get-bb/plugin-sdk/testing/app";
 import type { GraphView, RunView, StageView } from "../../server/contracts";
 
 afterEach(cleanup);
+// The panel remembers its open sections in localStorage; start each test from the default (all closed).
+beforeEach(() => localStorage.clear());
 
 const RUN: RunView = {
   id: "run-1",
@@ -96,15 +98,14 @@ function wheelReachesHost(root: HTMLElement): boolean {
 }
 
 describe("scroll ownership: chat and composer surfaces never trap the wheel", () => {
-  it("the expanded message-directive card has no bounded scroll container and cancels no wheel event", async () => {
+  it("the message-directive card has no bounded scroll container and cancels no wheel event", async () => {
     const app = await loadPluginApp(() => import("../../app"));
     const slot = renderSlot(
       app.messageDirectives[0]!,
       { attributes: { run: "run-1" }, source: '::attractor-run{run="run-1"}', message: { id: "m1", threadId: "thread-1", turnId: null, projectId: null }, openWorkspaceFile: null },
       { rpc: baseRpc() as never },
     );
-    fireEvent.click(await slot.findByRole("button", { name: /show stages/i }));
-    expect(slot.getByTestId("attractor-stage-list")).toBeTruthy();
+    expect(await slot.findByTestId("attention-card")).toBeTruthy();
 
     expect(boundedVerticalScrollers(slot.container).map((el) => el.tagName)).toEqual([]);
     expect(wheelReachesHost(slot.container)).toBe(true);
@@ -152,13 +153,12 @@ describe("scroll ownership: chat and composer surfaces never trap the wheel", ()
     expect(text.style.whiteSpace).toBe("pre-wrap");
   });
 
-  it("the expanded active-runs composer banner has no bounded scroll container and cancels no wheel event", async () => {
+  it("the active-runs composer banner has no bounded scroll container and cancels no wheel event", async () => {
     const app = await loadPluginApp(() => import("../../app"));
     const banner = app.composerCustomizations[0]!.banners![0]!;
     const slot = renderSlot(banner, {}, { rpc: baseRpc() as never, composer: { scope: { kind: "thread", threadId: "thread-1" } } });
     await slot.findByText("Plan Implement Review");
-    fireEvent.click(slot.getByRole("button", { name: /expand run details/i }));
-    expect(await slot.findByRole("img", { name: "Workflow DAG" })).toBeTruthy();
+    expect(slot.getByTestId("attention-card")).toBeTruthy();
 
     expect(boundedVerticalScrollers(slot.container).map((el) => el.tagName)).toEqual([]);
     expect(wheelReachesHost(slot.container)).toBe(true);
@@ -181,8 +181,16 @@ describe("scroll ownership: the flush thread panel scrolls itself", () => {
     for (const className of ["h-full", "min-h-0", "overflow-y-auto", "flex", "flex-col"]) {
       expect(root.className.split(/\s+/)).toContain(className);
     }
-    // …and the content that used to be clipped is inside that scroller.
-    await waitFor(() => expect(root.querySelector('[data-testid="attractor-stage-list"]')).toBeTruthy());
-    expect(root.querySelector('[data-testid="attractor-event-timeline"]')).toBeTruthy();
+    // …and every section, opened, is inside that one scroller rather than
+    // a bounded scroller of its own (the event log follows the live run by
+    // scrolling this root, never an inner box).
+    for (const name of [/^graph/i, /^history/i, /^event log/i]) fireEvent.click(slot.getByRole("button", { name }));
+    await waitFor(() => expect(root.querySelector('[data-testid="graph-section"]')).toBeTruthy());
+    expect(root.querySelector('[data-testid="history-section"]')).toBeTruthy();
+    expect(root.querySelector('[data-testid="attractor-event-log"]')).toBeTruthy();
+    expect(boundedVerticalScrollers(root).map((el) => el.tagName)).toEqual([]);
+    fireEvent.click(slot.getByRole("button", { name: "Raw" }));
+    expect(root.querySelector('[data-testid="event-raw"]')).toBeTruthy();
+    expect(boundedVerticalScrollers(root).map((el) => el.tagName)).toEqual([]);
   });
 });
