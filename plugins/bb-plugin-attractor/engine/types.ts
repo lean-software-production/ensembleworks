@@ -117,6 +117,8 @@ export type RunEvent =
   | { type: "run.completed"; runId: string; ts: number; status: "succeeded" | "failed"; goalGateFailures: string[] }
   | { type: "run.failed"; runId: string; ts: number; error: string }
   | { type: "run.cancelled"; runId: string; ts: number }
+  /** A failed or cancelled run was put back in flight from its last checkpoint (`bb attractor resume`); `fromNodeId` is the node it re-enters, null when it never got past the start. Written by server/service.ts, not the engine. */
+  | { type: "run.resumed"; runId: string; ts: number; fromNodeId: string | null }
   | {
       type: "stage.started";
       runId: string;

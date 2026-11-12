@@ -201,3 +201,25 @@ export type HumanGateValue = z.infer<typeof humanGateValueSchema>;
 export type HumanGateContextView = z.infer<typeof humanGateContextSchema>;
 export type HumanGateReviewTargetView = z.infer<typeof humanGateReviewTargetSchema>;
 export type StageGateContextView = z.infer<typeof stageGateContextSchema>;
+
+// bb's provider-retry plugin asks the plugin that sent a failed turn before
+// it re-runs that turn. Attractor queues the retry for its own worker
+// threads itself (server/backend.ts), so it declines for those and allows
+// everything else. The method name and shapes are provider-retry's contract.
+export const RETRY_CONSENT_METHOD = "provider-retry.v1.consent";
+export const retryConsentSchema = z.discriminatedUnion("kind", [
+  z.object({ kind: z.literal("allow") }),
+  z.object({ kind: z.literal("decline"), reason: z.string().min(1) }),
+]);
+export type RetryConsent = z.infer<typeof retryConsentSchema>;
+export const retryConsentContract = defineRpcContract({
+  [RETRY_CONSENT_METHOD]: {
+    input: z.object({
+      threadId: z.string().min(1),
+      requestId: z.string().min(1),
+      reason: z.string(),
+      sendAt: z.number().int().nonnegative(),
+    }),
+    output: retryConsentSchema,
+  },
+});

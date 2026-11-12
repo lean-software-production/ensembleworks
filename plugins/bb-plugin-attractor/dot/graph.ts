@@ -24,6 +24,8 @@ export type HandlerKind =
 export type OnFailurePolicy = "route" | "exit" | "succeed";
 export type ReasoningEffort = "low" | "medium" | "high";
 export type JoinPolicy = "all" | "any" | "first";
+/** How much run history an agent/prompt stage's prompt carries: `compact` (default) = goal + prior-stage summaries + the node prompt; `truncate` = goal + the node prompt only. */
+export type Fidelity = "compact" | "truncate";
 export type Rankdir = "TB" | "LR" | "BT" | "RL";
 export type PermissionMode = "accept-edits" | "workspace-write" | "auto" | "full" | "readonly";
 
@@ -54,6 +56,8 @@ export interface WorkflowNode {
   questionType?: string;
   joinPolicy?: JoinPolicy;
   stdinSource?: string;
+  /** Prompt-assembly mode for an agent/prompt stage (see `Fidelity`); unset means `compact`. */
+  fidelity?: Fidelity;
   /** A workspace-relative file path (e.g. "PLAN.md") a `human` gate should show alongside its question — the gate-context follow-up's `review_target` (README "Deviations from the plan": Fabro's `review_target` is a boolean with different semantics; ours is a path). */
   reviewTarget?: string;
   /** Every attribute as written on the node, after basic scalar coercion. Includes unknown/unsupported attributes (e.g. `selection`). */
@@ -270,6 +274,7 @@ function createOrUpdateNode(
   if (explicit.has("question_type")) node.questionType = coerceScalar(explicit.get("question_type")!.value) as string;
   if (explicit.has("join_policy")) node.joinPolicy = coerceScalar(explicit.get("join_policy")!.value) as JoinPolicy;
   if (explicit.has("stdin_source")) node.stdinSource = coerceScalar(explicit.get("stdin_source")!.value) as string;
+  if (explicit.has("fidelity")) node.fidelity = coerceScalar(explicit.get("fidelity")!.value) as Fidelity;
   if (explicit.has("review_target")) node.reviewTarget = coerceScalar(explicit.get("review_target")!.value) as string;
   if (explicit.has("class")) {
     const raw = coerceScalar(explicit.get("class")!.value);

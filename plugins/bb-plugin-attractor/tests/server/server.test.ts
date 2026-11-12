@@ -90,7 +90,7 @@ function makeHost() {
     // Matches skills/attractor/SKILL.md's frontmatter `name: attractor` — an
     // undeclared skill id in bb.agents.configure()'s return fails the whole
     // selection closed (empty tools/skills), per the SDK's own rule.
-    agentSkillIds: ["attractor"],
+    agentSkillIds: ["attractor", "gauntlet"],
   });
   applyBaseSdkStubs(host);
   hosts.push(host);
@@ -115,7 +115,7 @@ describe("attractor server plugin", () => {
   it("loads and registers rpc, cli, tools, and the background service", async () => {
     const host = makeHost();
     await plugin(host.bb);
-    expect(host.harness.inspection.registrations.rpcMethods.sort()).toEqual(["activeRuns", "answerGate", "getEvents", "getGraph", "getRun", "listRuns", "stopRun"]);
+    expect(host.harness.inspection.registrations.rpcMethods.sort()).toEqual(["activeRuns", "answerGate", "getEvents", "getGraph", "getRun", "listRuns", "provider-retry.v1.consent", "stopRun"]);
     expect(host.harness.inspection.registrations.cli?.name).toBe("attractor");
     expect(host.harness.inspection.registrations.agentTools.map((t) => t.name).sort()).toEqual(["attractor_inspect", "attractor_result", "attractor_run"]);
     expect(host.harness.inspection.registrations.services.map((s) => s.name)).toContain("attractor-runs");
@@ -170,7 +170,7 @@ describe("attractor server plugin", () => {
     await plugin(host.bb);
     const origin = await host.harness.behavior.resolveAgentConfiguration(agentConfigContext("thread-1"));
     expect(origin.tools.map((t) => t.name)).toEqual(["attractor_run", "attractor_inspect"]);
-    expect(origin.skills).toEqual(["attractor"]);
+    expect(origin.skills).toEqual(["attractor", "gauntlet"]);
   });
 
   it("gates a spawned worker thread to no tools while it holds no output_schema, and to attractor_result while it does", async () => {
@@ -344,6 +344,69 @@ describe("attractor server plugin", () => {
     const finalStatus = JSON.parse((await host.harness.behavior.runCli(["status", ran.runId], { threadId: "thread-1" })).stdout).status;
     expect(finalStatus).toBe("cancelled");
     expect(stopCalls).toEqual([{ threadId: "worker-thread" }]);
+  });
+
+  it("bb attractor resume re-enters a failed run at the stage it failed on, with a fresh worker", async () => {
+    const host = makeHost();
+    // First worker fails outright; the second (after resume) completes.
+    let spawns = 0;
+    host.harness.sdk.stub("threads.spawn", async () => {
+      spawns += 1;
+      const first = spawns === 1;
+      setTimeout(() => {
+        void host.harness.behavior.emitThreadEvent(
+          first ? "thread.failed" : "thread.idle",
+          first ? { thread: makeThreadResponse({ id: "worker-thread" }), error: "provider exploded" } : { thread: makeThreadResponse({ id: "worker-thread" }), lastAssistantText: "done" },
+        );
+      }, 0);
+      return makeThreadResponse({ id: "worker-thread" });
+    });
+    // A failed plan stage is a dead end here, so the run itself fails (with the
+    // default `plan -> exit` edge a failed stage would just route on to exit).
+    host.harness.sdk.stub("files.read", async () => ({
+      content: 'digraph G {\n  start [shape=Mdiamond]\n  exit [shape=Msquare]\n  plan [prompt="do it"]\n  start -> plan\n  plan -> exit [condition="outcome=succeeded"]\n}',
+      contentEncoding: "utf8" as const,
+      sha256: "x",
+      sizeBytes: 1,
+    }));
+    await plugin(host.bb);
+    const status = async (runId: string) => JSON.parse((await host.harness.behavior.runCli(["status", runId], { threadId: "thread-1" })).stdout);
+
+    const ran = JSON.parse((await host.harness.behavior.runCli(["run", "workflows/plan.dot"], { threadId: "thread-1", projectId: "project-1" })).stdout);
+    await vi.waitFor(async () => expect((await status(ran.runId)).status).toBe("failed"), { timeout: 3000 });
+
+    // Not this thread's run: refused. A run that is not failed/cancelled: refused (below).
+    const foreign = await host.harness.behavior.runCli(["resume", ran.runId], { threadId: "another-thread" });
+    expect(foreign.exitCode).toBe(1);
+    expect(foreign.stderr).toContain("no such run");
+
+    const resumed = await host.harness.behavior.runCli(["resume", ran.runId], { threadId: "thread-1" });
+    expect(resumed.exitCode).toBe(0);
+    expect(JSON.parse(resumed.stdout)).toEqual({ resumed: true, status: "running", fromNodeId: "plan" });
+
+    await vi.waitFor(async () => expect((await status(ran.runId)).status).toBe("succeeded"), { timeout: 3000 });
+    expect(spawns).toBe(2);
+    const finished = await status(ran.runId);
+    expect(finished.error).toBeNull();
+    const events = JSON.parse((await host.harness.behavior.runCli(["events", ran.runId], { threadId: "thread-1" })).stdout) as Array<{ type: string; fromNodeId?: string }>;
+    expect(events.find((event) => event.type === "run.resumed")).toMatchObject({ fromNodeId: "plan" });
+    const stages = JSON.parse((await host.harness.behavior.runCli(["stages", ran.runId], { threadId: "thread-1" })).stdout) as Array<{ nodeId: string; status: string }>;
+    expect(stages.filter((stage) => stage.nodeId === "plan").map((stage) => stage.status)).toEqual(["succeeded"]);
+
+    const again = await host.harness.behavior.runCli(["resume", ran.runId], { threadId: "thread-1" });
+    expect(again.exitCode).toBe(1);
+    expect(again.stderr).toContain("only a failed or cancelled run can be resumed");
+  });
+
+  it("declines provider-retry for its own worker threads and allows it for any other thread", async () => {
+    const host = makeHost();
+    host.harness.sdk.stub("threads.get", async (args: { threadId: string }) =>
+      makeThreadResponse({ id: args.threadId, originPluginId: args.threadId === "a-worker" ? host.bb.pluginId : null }),
+    );
+    await plugin(host.bb);
+    const ask = (threadId: string) => host.harness.behavior.callRpc("provider-retry.v1.consent", { threadId, requestId: "req-1", reason: "Rate limited", sendAt: 1 });
+    expect(await ask("a-worker")).toEqual({ kind: "decline", reason: "Attractor retries its own worker threads" });
+    expect(await ask("a-users-thread")).toEqual({ kind: "allow" });
   });
 
   it("attractor_inspect and every CLI runId subcommand are scoped to the owning thread", async () => {

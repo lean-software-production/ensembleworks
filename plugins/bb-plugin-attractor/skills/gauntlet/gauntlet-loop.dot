@@ -1,0 +1,128 @@
+// A Gauntlet Loop (Matt Shumer's builder-versus-blind-critic method,
+// https://somethingbig.ai/gauntlet-loop) as an Attractor workflow.
+//
+// A lead stage splits the goal into pieces and a human approves the split.
+// Then, one piece at a time: a builder improves the piece; a command node
+// commits the result as a candidate, gates it on the plan's `check` command,
+// and exports the candidate and the currently kept version as an unlabelled
+// A/B pair; a FRESH critic thread (a new one every round, with
+// fidelity="truncate" so no earlier stage's reply reaches its prompt) picks
+// the better one against the bar; and a command node de-blinds the verdict
+// and ratchets — a winning candidate becomes the kept version, a losing one
+// is reset away. A piece ends when a critic judges the kept version to meet
+// the bar, when candidates keep losing (plateau), or when its round budget
+// is spent. A smoothing stage and a final review against the bar close the
+// run.
+//
+// The agents only ever build and judge. Everything an agent could batch,
+// skip or misreport — which piece is current, committing, the A/B order,
+// keeping or resetting, counting, stopping — is done by
+// .gauntlet/gauntlet-loop.mjs (installed, with this file, by
+// `node <skill dir>/gauntlet-loop.mjs setup`; see skills/gauntlet/SKILL.md).
+//
+// Before running: write .gauntlet/goal.md (what to build) and
+// .gauntlet/bar.md (the concrete, inspectable bar: reference files, URLs,
+// measurements). Run it from a clean feature branch — a losing round is
+// discarded with `git reset --hard`.
+//
+// Stopping and carrying on. Where a run stands is recorded by the helper,
+// not by the workflow run, and every loop iteration enters through the
+// `next` node, which asks the helper where to go. So:
+//   - A stage whose agent fails (a provider error Attractor could not wait
+//     out, a crashed worker) never has its non-result judged: it routes to
+//     the "A stage failed" gate, and Resume re-enters at `next`.
+//   - A stopped or failed run can be carried on with `bb attractor resume
+//     <runId>`, or by simply running this graph again: either way it picks
+//     up at the unfinished piece, or the round still waiting for a verdict.
+//   - A usage limit is waited out by Attractor itself: the stage shows as
+//     blocked with the time it will retry, and continues on the same worker.
+//
+// Limits of this version (see the skill): pieces run one at a time in the
+// origin thread's checkout, and the critic works in that same checkout, so
+// its blindness rests on the exported arena plus its instructions, not on
+// isolation.
+//
+// To put builders and critics on different models, add to the graph
+// attributes, e.g.:
+//   model_stylesheet=".builder { provider: claude-code; model: <id>; } .critic { provider: codex; model: <id>; reasoning_effort: high; }"
+digraph GauntletLoop {
+  graph [goal="Build what .gauntlet/goal.md describes, to the bar in .gauntlet/bar.md",
+         max_node_visits=120]
+  start [shape=Mdiamond]
+  exit  [shape=Msquare]
+
+  plan [label="Split into pieces", max_visits=4, timeout="30m",
+        prompt="You are the lead of a Gauntlet Loop. Read .gauntlet/goal.md (the goal) and .gauntlet/bar.md (the bar the result must be judged against), then explore this repository enough to decide HOW to reach the goal. The goal says what, not how: the architecture is your call.\n\nSplit the work into the smallest pieces that can each be improved and judged on their own — typically 2 to 6. Order them so each builds on the ones before it: they run one at a time, each starting from the previous pieces' kept result. Do not write any product code yourself.\n\nWrite two files.\n\n(1) .gauntlet/pieces.json, a JSON object:\n{\n  \"check\": \"<one shell command, run from the repo root, that must pass for any candidate to be judged at all — the repo's typecheck and tests; it must pass right now>\",\n  \"limits\": {\"max_rounds\": 5, \"plateau\": 2},\n  \"pieces\": [\n    {\"id\": \"<lowercase-dashed-id>\", \"title\": \"<short title>\", \"brief\": \"<what the builder must produce or improve for this piece, and where>\", \"bar\": \"<what, concretely, the bar means for this piece: the reference to beat and how a critic can tell>\", \"evidence\": \"<one shell command whose output shows this piece actually working — a test run, a CLI invocation, a rendered page dumped to text. A blind critic sees this output for both versions, so make it show behaviour, not claims>\"}\n  ]\n}\nmax_rounds caps the judged rounds per piece; plateau is how many candidates in a row may lose before the piece stops.\n\n(2) .gauntlet/plan.md: a short plan a human will approve — the approach you chose and why, a table of the pieces (id, what it delivers, how it is evidenced), the check command, and anything about the bar you found vague or unverifiable. If the bar gives a critic nothing concrete to compare against, say so plainly at the top.\n\nReply with one line: how many pieces, and the check command."]
+
+  approve [shape=hexagon, label="Approve the pieces?", review_target=".gauntlet/plan.md"]
+
+  init [shape=parallelogram, label="Baseline", timeout="35m",
+        script=".gauntlet/g init"]
+
+  brief [shape=parallelogram, label="Next piece", timeout="15m",
+         script=".gauntlet/g brief"]
+
+  build [label="Build", class="builder", timeout="60m",
+         prompt="You are a builder in a Gauntlet Loop. Read .gauntlet/brief.md and do exactly what it says: it names the one piece you are improving, the bar, what blind critics said about earlier rounds, and the rules. Do not commit. When you are finished, reply with the single line `candidate ready` and nothing else."]
+
+  snapshot [shape=parallelogram, label="Candidate", timeout="45m",
+            script=".gauntlet/g snapshot"]
+
+  critic [label="Blind critic", class="critic", fidelity="truncate", timeout="45m",
+          prompt="You are a blind critic. Read .gauntlet/arena/BRIEF.md and follow it exactly: compare the two unlabelled versions in .gauntlet/arena/A and .gauntlet/arena/B against the bar, then record your verdict with the one command it gives you. Look at nothing outside .gauntlet/arena/. Reply with one line when the verdict is recorded."]
+
+  ratchet [shape=parallelogram, label="Ratchet", timeout="5m",
+           script=".gauntlet/g ratchet"]
+
+  next [shape=parallelogram, label="Where next?", timeout="1m",
+        script=".gauntlet/g next"]
+
+  stalled [shape=hexagon, label="A stage failed. Resume from where it stopped?"]
+
+  smooth [label="Smooth", class="builder", timeout="60m",
+          prompt="Every piece of this Gauntlet Loop has finished; .gauntlet/progress.md lists them and how each ended. The pieces were improved separately. Read .gauntlet/goal.md and .gauntlet/bar.md, then make one pass over the whole result so it reads and behaves as one thing: consistent naming, no duplicated helpers, no seams between pieces, nothing left half-wired. Change no behaviour that a piece won on, and add no new features. Do not commit — the next stage keeps your changes only if the check command still passes. Reply with a short list of what you smoothed, or `nothing to smooth`."]
+
+  finish [shape=parallelogram, label="Final check", goal_gate=true, timeout="45m",
+          script=".gauntlet/g finish"]
+
+  review [label="Final review", class="critic", fidelity="truncate", timeout="45m",
+          prompt="You are a fresh reviewer who has seen none of the work that led here. Read .gauntlet/goal.md and .gauntlet/bar.md, then judge the project in the working tree as it stands against that bar: run it, read it, measure it. Do not read git history or .gauntlet/progress.md first — form your own view from the artifact. Write .gauntlet/final-review.md with: a one-paragraph verdict (does it meet the bar — yes, nearly, or no); the gaps that remain, largest first, each concrete enough to act on; and what you ran or inspected to reach that view. Change no other file. Reply with the one-paragraph verdict."]
+
+  start -> next
+  next -> plan     [condition="command.output contains GO_PLAN"]
+  next -> brief    [condition="command.output contains GO_BUILD"]
+  next -> snapshot [condition="command.output contains GO_JUDGE"]
+  next -> smooth   [condition="command.output contains GO_SMOOTH"]
+  next -> review   [condition="command.output contains GO_REVIEW"]
+  next -> exit     [condition="command.output contains GO_END"]
+
+  plan -> approve [condition="outcome=succeeded"]
+  plan -> stalled [condition="outcome=failed"]
+  approve -> init [label="[A] Approve"]
+  approve -> plan [label="[R] Revise"]
+  init -> next [condition="outcome=succeeded"]
+  init -> exit [condition="outcome=failed"]
+
+  // One round. Only a stage that actually succeeded is ever judged: a
+  // failed builder or critic goes to the gate, never on to snapshot/ratchet.
+  brief -> build      [condition="outcome=succeeded"]
+  brief -> stalled    [condition="outcome=failed"]
+  build -> snapshot   [condition="outcome=succeeded"]
+  build -> stalled    [condition="outcome=failed"]
+  snapshot -> critic  [condition="outcome=succeeded"]
+  snapshot -> next    [condition="outcome=failed"]
+  critic -> ratchet   [condition="outcome=succeeded"]
+  critic -> stalled   [condition="outcome=failed"]
+  ratchet -> next     [condition="outcome=succeeded"]
+  ratchet -> critic   [condition="outcome=failed"]
+
+  smooth -> finish  [condition="outcome=succeeded"]
+  smooth -> stalled [condition="outcome=failed"]
+  finish -> next [condition="outcome=succeeded"]
+  finish -> exit [condition="outcome=failed"]
+  review -> next    [condition="outcome=succeeded"]
+  review -> stalled [condition="outcome=failed"]
+
+  stalled -> next [label="[R] Resume"]
+  stalled -> exit [label="[S] Stop"]
+}

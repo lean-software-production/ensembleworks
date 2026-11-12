@@ -284,3 +284,17 @@ describe("dot/graph: review_target (gate context)", () => {
     expect(graph.nodes.get("gate")?.reviewTarget).toBeUndefined();
   });
 });
+
+describe("dot/graph: fidelity (prompt assembly mode)", () => {
+  it("parses a node's fidelity attribute", () => {
+    const graph = parseWorkflowGraph(
+      'digraph G { start[shape=Mdiamond] exit[shape=Msquare] critic[prompt="p", fidelity="truncate"] start->critic->exit }',
+    );
+    expect(graph.nodes.get("critic")?.fidelity).toBe("truncate");
+  });
+
+  it("leaves fidelity undefined when not set", () => {
+    const graph = parseWorkflowGraph('digraph G { start[shape=Mdiamond] exit[shape=Msquare] n[prompt="p"] start->n->exit }');
+    expect(graph.nodes.get("n")?.fidelity).toBeUndefined();
+  });
+});

@@ -12,7 +12,7 @@ import { z } from "zod";
 import { hostContract } from "./host-contract";
 import { createThreadAgentBackend } from "./server/backend";
 import { createThreadHumanInterviewer } from "./server/human";
-import { rpcContract } from "./server/contracts";
+import { RETRY_CONSENT_METHOD, retryConsentContract, rpcContract, type RetryConsent } from "./server/contracts";
 import { createService, decodeFileContent, resolveWorkflowPath } from "./server/service";
 import { RunStore } from "./server/store";
 
@@ -163,6 +163,28 @@ export default async function plugin(bb: BbPluginApi): Promise<void> {
     return { run, stages };
   }
 
+  // Decline bb's provider-retry plugin for this plugin's own worker threads:
+  // server/backend.ts queues their retries itself, so a second policy must
+  // not also re-run the turn. `experimental_discoverable` is how
+  // provider-retry finds this handler; the pinned SDK typings predate the
+  // option (an older bb simply ignores the third argument, and backend.ts
+  // tolerates a retry that provider-retry queued first).
+  const registerDiscoverable = bb.rpc.register.bind(bb.rpc) as (
+    contract: typeof retryConsentContract,
+    handlers: { [RETRY_CONSENT_METHOD]: (input: { threadId: string }) => Promise<RetryConsent> },
+    options: { experimental_discoverable: boolean; experimental_description: string },
+  ) => void;
+  registerDiscoverable(
+    retryConsentContract,
+    {
+      [RETRY_CONSENT_METHOD]: async ({ threadId }) =>
+        agentBackend.isWorkerThread(threadId) || (await bb.sdk.threads.get({ threadId })).originPluginId === bb.pluginId
+          ? { kind: "decline", reason: "Attractor retries its own worker threads" }
+          : { kind: "allow" },
+    },
+    { experimental_discoverable: true, experimental_description: "Declines provider-retry for Attractor's worker threads, which Attractor retries itself." },
+  );
+
   bb.rpc.register(rpcContract, {
     getRun: ({ runId, threadId }) => rpcContract.getRun.output.parse(owned(runId, threadId)),
     listRuns: ({ threadId, after }) => rpcContract.listRuns.output.parse(service.listRuns({ threadId, after })),
@@ -233,11 +255,11 @@ export default async function plugin(bb: BbPluginApi): Promise<void> {
         instructions: WORKER_INSTRUCTIONS,
       };
     }
-    return { tools: ["attractor_run", "attractor_inspect"], skills: ["attractor"] };
+    return { tools: ["attractor_run", "attractor_inspect"], skills: ["attractor", "gauntlet"] };
   });
 
   const usage =
-    "bb attractor validate <path> | run <path> [--input k=v ...] [--title t] | status <runId> | stages <runId> | events <runId> [--since seq] | stop <runId> | answer <runId> <label|text>\n" +
+    "bb attractor validate <path> | run <path> [--input k=v ...] [--title t] | status <runId> | stages <runId> | events <runId> [--since seq] | stop <runId> | resume <runId> | answer <runId> <label|text>\n" +
     "Every command takes an optional --field <dot.path> to print one value instead of the full JSON (one line per element for an array result).\n" +
     "Run within the originating BB thread.";
 
@@ -255,6 +277,7 @@ export default async function plugin(bb: BbPluginApi): Promise<void> {
     stages: `JSON output: Stage[] (per-node status, visit, provider, thread id). ${FIELD_FLAG_NOTE}`,
     events: `JSON output: Event[] (each stamped with a seq). ${FIELD_FLAG_NOTE}`,
     stop: `JSON output: { stopped: true, status: "cancelled" } on success. ${FIELD_FLAG_NOTE}`,
+    resume: `JSON output: { resumed: true, status: "running", fromNodeId: string | null } on success. ${FIELD_FLAG_NOTE}`,
     answer: `JSON output: { answered: boolean, reason?: string }. ${FIELD_FLAG_NOTE}`,
   };
 
@@ -265,6 +288,7 @@ export default async function plugin(bb: BbPluginApi): Promise<void> {
     { name: "stages", summary: "List a run's stages", usage: "bb attractor stages <runId>" },
     { name: "events", summary: "List a run's events", usage: "bb attractor events <runId> [--since seq]" },
     { name: "stop", summary: "Stop a running run", usage: "bb attractor stop <runId>" },
+    { name: "resume", summary: "Resume a failed or cancelled run from its last checkpoint", usage: "bb attractor resume <runId>" },
     { name: "answer", summary: "Answer a run's blocked human gate", usage: "bb attractor answer <runId> <label|text>" },
   ];
 
@@ -363,6 +387,10 @@ export default async function plugin(bb: BbPluginApi): Promise<void> {
           if (run.status !== "running" && run.status !== "blocked") throw new Error(`run ${rest[0]} is not running`);
           const updated = service.stopRun(rest[0]);
           result = { stopped: true, status: updated.status };
+        } else if (command === "resume" && rest[0]) {
+          if (!owned(rest[0], ctx.threadId).run) throw new Error(`no such run: ${rest[0]}`);
+          const resumed = await service.resumeRun(rest[0]);
+          result = { resumed: true, status: resumed.run.status, fromNodeId: resumed.fromNodeId };
         } else if (command === "answer" && rest[0] && rest.length > 1) {
           if (!owned(rest[0], ctx.threadId).run) throw new Error(`no such run: ${rest[0]}`);
           const answer = await service.answerHumanGate(rest[0], rest.slice(1).join(" "));

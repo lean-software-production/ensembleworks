@@ -36,6 +36,7 @@
 import type { BbPluginApi } from "@get-bb/plugin-sdk";
 import { parseStylesheet, resolveStyle } from "../dot/stylesheet";
 import type { Context, Outcome, StageScopedEvent, WorkflowGraph, WorkflowNode } from "../engine/types";
+import { decideWorkerRetry, describeWorkerRetry } from "./worker-retry";
 
 export interface AgentRunInput {
   node: WorkflowNode;
@@ -130,8 +131,13 @@ function summarizeParallelResults(context: Context): string {
 
 function assemblePrompt(node: WorkflowNode, graph: WorkflowGraph, context: Context): string {
   const goal = graph.goal ? `Goal: ${graph.goal}\n\n` : "";
-  const history = summarizePriorStages(context, graph);
-  const parallelResults = summarizeParallelResults(context);
+  // `fidelity="truncate"`: the stage sees only the goal and its own prompt —
+  // no prior-stage summaries, no parallel results. A blind critic uses this
+  // so an earlier stage's reply (a builder defending its own work) never
+  // reaches it through the prompt. See README "Deviations from the plan".
+  const truncate = node.fidelity === "truncate";
+  const history = truncate ? "" : summarizePriorStages(context, graph);
+  const parallelResults = truncate ? "" : summarizeParallelResults(context);
   const body = node.prompt ?? "";
   const schemaInstruction = node.outputSchema
     ? `\n\nWhen you are done, call the attractor_result tool exactly once with your JSON result value.`
@@ -169,7 +175,23 @@ function outcomeFromRouting(result: RoutingResult, text: string | null): Outcome
   };
 }
 
-export function createThreadAgentBackend(bb: BbPluginApi): AgentBackend {
+export interface ThreadAgentBackendOptions {
+  /**
+   * How long a worker's `thread.failed` waits for the `turn.failed` that
+   * explains it before the stage is failed. Both come from the same core
+   * seam, in no promised order, so this only has to cover event dispatch.
+   */
+  failureGraceMs?: number;
+  now?: () => number;
+  random?: () => number;
+}
+
+const DEFAULT_FAILURE_GRACE_MS = 500;
+
+export function createThreadAgentBackend(bb: BbPluginApi, options: ThreadAgentBackendOptions = {}): AgentBackend {
+  const failureGraceMs = options.failureGraceMs ?? DEFAULT_FAILURE_GRACE_MS;
+  const now = options.now ?? Date.now;
+  const random = options.random ?? Math.random;
   // Each entry is a `finish` callback that is idempotent and self-removing
   // (see waitForCompletion): whichever of an event, an abort, or a manual
   // reconcile-driven settle happens first wins, and the other becomes a
@@ -221,6 +243,41 @@ export function createThreadAgentBackend(bb: BbPluginApi): AgentBackend {
     return typeof record.payload?.title === "string" ? record.payload.title : null;
   }
 
+  // Workers with a provider retry queued (or being queued): their thread
+  // sits in `error` until bb re-runs the turn, which is not a stage failure.
+  const retryingWorkers = new Set<string>();
+  const failureTimers = new Map<string, ReturnType<typeof setTimeout>>();
+  const lastWorkerError = new Map<string, string | null>();
+
+  function cancelFailureTimer(threadId: string): void {
+    const timer = failureTimers.get(threadId);
+    if (timer === undefined) return;
+    clearTimeout(timer);
+    failureTimers.delete(threadId);
+  }
+
+  // A worker's thread landed in `error`. Do not fail the stage yet: the
+  // `turn.failed` handler below may decide this failure is worth waiting
+  // out. It gets `failureGraceMs` to say so (it may also already have).
+  function workerFailed(threadId: string, error: string | null): void {
+    if (!waiters.has(threadId)) return;
+    lastWorkerError.set(threadId, error);
+    if (retryingWorkers.has(threadId)) return;
+    // A worker that fails while parked on a prompt is no longer waiting on
+    // it — clear that waiting reason now, not after the grace period.
+    maybeEmitResumed(threadId);
+    if (failureTimers.has(threadId)) return;
+    failureTimers.set(
+      threadId,
+      setTimeout(() => {
+        failureTimers.delete(threadId);
+        if (retryingWorkers.has(threadId)) return;
+        maybeEmitResumed(threadId);
+        waiters.get(threadId)?.({ kind: "failed", error: lastWorkerError.get(threadId) ?? null });
+      }, failureGraceMs),
+    );
+  }
+
   function maybeEmitResumed(threadId: string): void {
     if (!waitingWorkers.has(threadId)) return;
     waitingWorkers.delete(threadId);
@@ -228,6 +285,8 @@ export function createThreadAgentBackend(bb: BbPluginApi): AgentBackend {
   }
 
   bb.events.on("thread.idle", (payload) => {
+    retryingWorkers.delete(payload.thread.id);
+    cancelFailureTimer(payload.thread.id);
     maybeEmitResumed(payload.thread.id);
     waiters.get(payload.thread.id)?.({ kind: "idle", text: payload.lastAssistantText });
   });
@@ -235,10 +294,59 @@ export function createThreadAgentBackend(bb: BbPluginApi): AgentBackend {
   // waiting on it either — clear the stage's waiting reason before the
   // completion settles, so the row never keeps a stale "waiting: …".
   bb.events.on("thread.failed", (payload) => {
-    maybeEmitResumed(payload.thread.id);
-    waiters.get(payload.thread.id)?.({ kind: "failed", error: payload.error });
+    workerFailed(payload.thread.id, payload.error);
+  });
+  // Which turn failed and why. A failure that passes by itself (a spent
+  // usage window, an overloaded or briefly unreachable provider) must not
+  // fail the stage: the run would then route on without the work having been
+  // done — and a fresh worker would only hit the same limit. Instead queue a
+  // retry of the same turn for when it can succeed, and keep the stage
+  // waiting on the same worker, shown as "blocked" with the reason and time.
+  bb.events.on("turn.failed", async (failure) => {
+    const threadId = failure.threadId;
+    if (!waiters.has(threadId)) return;
+    const decision = decideWorkerRetry(failure, now(), random());
+    if (decision.kind === "fail") {
+      bb.log.info(`attractor: worker thread ${threadId} failed and will not be retried (${decision.why})`);
+      return; // workerFailed's grace timer (already armed, or about to be) fails the stage.
+    }
+    retryingWorkers.add(threadId);
+    cancelFailureTimer(threadId);
+    try {
+      await bb.sdk.threads.retry({ threadId, turnRequestId: failure.requestId, sendAt: decision.sendAt, reason: decision.reason });
+    } catch (err) {
+      // Core keeps one live retry per turn. If another policy (bb's
+      // provider-retry plugin, on a bb too old to ask this plugin for
+      // consent) queued it first, that retry will wake the worker just the
+      // same — only give up when nothing is queued at all.
+      const queued = await bb.sdk.threads.queuedMessages.list({ threadId }).catch(() => []);
+      if (queued.length === 0) {
+        bb.log.warn(`attractor: could not queue a retry for worker thread ${threadId}: ${err instanceof Error ? err.message : String(err)}`);
+        retryingWorkers.delete(threadId);
+        waiters.get(threadId)?.({ kind: "failed", error: lastWorkerError.get(threadId) ?? null });
+        return;
+      }
+    }
+    if (!waiters.has(threadId)) return; // the stage settled (e.g. the run was stopped) while the retry was being queued.
+    waitingWorkers.add(threadId);
+    emitByWorkerThread.get(threadId)?.({
+      type: "agent.waiting",
+      threadId,
+      interactionId: failure.requestId,
+      kind: describeWorkerRetry(decision.reason, decision.sendAt),
+      title: decision.reason,
+    });
+  });
+  // A human (or another plugin) deleted the queued retry: nothing will ever
+  // wake this worker again, so stop waiting for it.
+  bb.events.on("message.cancelled", ({ entry }) => {
+    if (!retryingWorkers.delete(entry.threadId)) return;
+    maybeEmitResumed(entry.threadId);
+    waiters.get(entry.threadId)?.({ kind: "failed", error: "the queued provider retry was cancelled" });
   });
   bb.events.on("thread.deleted", (payload) => {
+    retryingWorkers.delete(payload.thread.id);
+    cancelFailureTimer(payload.thread.id);
     maybeEmitResumed(payload.thread.id);
     waiters.get(payload.thread.id)?.({ kind: "deleted" });
   });
@@ -254,6 +362,9 @@ export function createThreadAgentBackend(bb: BbPluginApi): AgentBackend {
     emit({ type: "agent.waiting", threadId: thread.id, interactionId: interaction.id, kind: interactionKind(interaction), title: interactionTitle(interaction) });
   });
   bb.events.on("thread.active", (payload) => {
+    // Also the moment a queued provider retry starts running.
+    retryingWorkers.delete(payload.thread.id);
+    cancelFailureTimer(payload.thread.id);
     maybeEmitResumed(payload.thread.id);
   });
 
@@ -309,7 +420,7 @@ export function createThreadAgentBackend(bb: BbPluginApi): AgentBackend {
     const stillPending = waiters.get(threadId);
     if (stillPending) {
       if (immediate.status === "idle") stillPending({ kind: "idle", text: null });
-      else if (immediate.status === "error") stillPending({ kind: "failed", error: null });
+      else if (immediate.status === "error") workerFailed(threadId, null);
     }
     return completionPromise;
   }
@@ -393,6 +504,9 @@ export function createThreadAgentBackend(bb: BbPluginApi): AgentBackend {
       return await resolveStructured(workerThreadId, completion, signal);
     } finally {
       waiters.delete(workerThreadId);
+      retryingWorkers.delete(workerThreadId);
+      cancelFailureTimer(workerThreadId);
+      lastWorkerError.delete(workerThreadId);
       workerThreads.delete(workerThreadId);
       emitByWorkerThread.delete(workerThreadId);
       waitingWorkers.delete(workerThreadId);
