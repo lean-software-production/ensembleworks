@@ -148,7 +148,7 @@ thread it writes `threadId -> { starter, via }` to its own KV storage:
   person in the directory (`origin: app`, or none);
 - `via: agent` — the same, from `origin: cli`/`sdk`; or a dispatch with no identity
   of its own that inherited a **lineage** thread's starter
-  (`startedOnBehalfOf.senderThreadId`, a queued message's `senderThreadId`, the hook's
+  (`senderThreadId` on newer BB releases, `startedOnBehalfOf.senderThreadId`, a queued message's `senderThreadId`, the hook's
   or the thread's `parentThreadId`, or a fork's `sourceThreadId`, in that order);
 - `via: plugin` — a plugin-origin dispatch (an automation, a scheduled send) with no
   identity and no lineage;
@@ -159,8 +159,12 @@ thread it writes `threadId -> { starter, via }` to its own KV storage:
 dispatch never rewrites it, so a follow-up from someone else cannot take a thread over.
 A thread that started with no starter at all (a `bb thread spawn` from a shell carries
 no identity) is upgraded by the first dispatch that does name a person — typically its
-owner's first browser prompt. Agents spawning threads should pass `--parent-self` so
-the new thread inherits its parent's starter instead of starting anonymous. Attribution and audit swallow
+owner's first browser prompt. Identity tells agents to pass `--parent-self` for threads
+they spawn on behalf of the current conversation. On this BB version, that carries
+lineage but also makes the new thread a child with parent notifications. On a BB release
+whose dispatch hook carries `senderThreadId` for independent CLI spawns, Identity uses
+that field directly. An independent spawn on the current BB version can still be
+unattributed. Attribution and audit swallow
 their own errors; only the separately configured machine guardrail can reject a dispatch.
 
 Read it back with `identity_thread_starter` (RPC) or

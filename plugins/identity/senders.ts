@@ -242,3 +242,10 @@ export function senderInstructions(people: readonly StarterSummary[]): string | 
     + "More than one person may be prompting you here, so address them by name and keep each person's "
     + "questions distinct. Call identity_recent_senders to see who sent each recent prompt.";
 }
+
+export function spawnAttributionInstructions(): string {
+  return "When you create a new BB thread from this agent thread with `bb thread spawn`, "
+    + "include `--parent-self` so Identity can inherit this thread's recorded starter. This also makes the new thread "
+    + "a child and enables parent notifications; if the user requires an independent thread, "
+    + "say that its starter may be unrecorded on this BB version.";
+}

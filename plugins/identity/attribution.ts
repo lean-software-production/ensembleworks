@@ -172,6 +172,8 @@ export type DispatchContextLike = {
   origin: DispatchOrigin | "mixed";
   originPluginId: string | "mixed" | null;
   startedOnBehalfOf?: { senderThreadId: string } | null;
+  /** BB releases that carry an independent CLI spawn origin expose it here. */
+  senderThreadId?: string | "mixed" | null;
   parentThreadId: string | null;
   queuedMessage?: { senderThreadId: string | null } | null;
   queuedMessages?: readonly { id: string; senderThreadId: string | null }[];
@@ -202,7 +204,8 @@ export function factsFromDispatch(
       // The hook context's own parent, falling back to the thread row's.
       parentThreadId: context.parentThreadId ?? context.thread.parentThreadId,
       sourceThreadId: context.thread.sourceThreadId,
-      senderThreadIds: [context.startedOnBehalfOf?.senderThreadId, context.queuedMessage?.senderThreadId,
+      senderThreadIds: [context.senderThreadId === "mixed" ? null : context.senderThreadId,
+        context.startedOnBehalfOf?.senderThreadId, context.queuedMessage?.senderThreadId,
         ...(context.queuedMessages ?? []).map((row) => row.senderThreadId)],
     }),
     host: context.host === null ? null : { id: context.host.id, name: context.host.name },

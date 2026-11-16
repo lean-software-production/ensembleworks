@@ -38,7 +38,7 @@ import {
 import { parseDirectory, resolveRequester, type Person, type ResolvedIdentity } from "./people.js";
 import { identityMutationAllowed, mintSelection, readNamedCookie, SELECTION_COOKIE, SelectionCommitStore, selectionCookie, selectionCookieName, verifySelection } from "./selection.js";
 import { MAX_QUEUED_REQUESTERS, QueuedRequesterLedger, digestQueuedContent } from "./queued-requester.js";
-import { SenderLedger, formatRecentSenders, senderInstructions, textOfBlocks } from "./senders.js";
+import { SenderLedger, formatRecentSenders, senderInstructions, spawnAttributionInstructions, textOfBlocks } from "./senders.js";
 import { PersonColorStore, SeenPeople } from "./person-store.js";
 import { buildRoster, SEEN_UNKNOWN_CAVEAT } from "./roster.js";
 import {
@@ -1292,7 +1292,9 @@ export default async function plugin(bb: BbPluginApi) {
         return entry ? { fullName: entry.fullName ?? null, email: entry.emails[0] ?? null } : null;
       }),
   });
-  bb.agents.contributeInstructions(({ threadId: id }) => senderInstructions(senders.peopleOf(id)));
+  bb.agents.contributeInstructions(({ threadId: id }) =>
+    [senderInstructions(senders.peopleOf(id)), spawnAttributionInstructions()]
+      .filter((line): line is string => line !== null).join("\n"));
 
   /**
    * Boot self-test: prove the ALS patch is live in THIS process, by driving one request

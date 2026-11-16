@@ -8,6 +8,7 @@ import {
   digestMessageText,
   formatRecentSenders,
   senderInstructions,
+  spawnAttributionInstructions,
   textOfBlocks,
 } from "./senders.js";
 
@@ -228,6 +229,12 @@ describe("senderInstructions", () => {
   it("contributes nothing when nobody is known", () => {
     expect(senderInstructions([])).toBeNull();
   });
+});
+
+it("tells agents how to preserve spawn attribution on this BB version", () => {
+  expect(spawnAttributionInstructions()).toContain("`bb thread spawn`");
+  expect(spawnAttributionInstructions()).toContain("`--parent-self`");
+  expect(spawnAttributionInstructions()).toContain("makes the new thread a child");
 });
 
 describe("textOfBlocks", () => {

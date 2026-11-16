@@ -313,6 +313,25 @@ describe("factsFromDispatch", () => {
       parentThreadId: null,
     }, { email: null, person: null }, 7).lineage).toEqual(["thr_thread_parent", "thr_fork_source"]);
   });
+
+  it("inherits an independent CLI spawn's sender thread when BB supplies it", () => {
+    const facts = factsFromDispatch({
+      ...dispatch,
+      thread: { id: "thr_new", parentThreadId: null, sourceThreadId: null },
+      senderThreadId: "thr_origin",
+      startedOnBehalfOf: null,
+      queuedMessage: null,
+      parentThreadId: null,
+    }, { email: null, person: null }, 7);
+    expect(facts.lineage).toEqual(["thr_origin"]);
+    expect(decideAttribution(facts, () => record({ starter: matt, email: "matt@example.com" })))
+      .toMatchObject({ starter: matt, via: "agent", inheritedFrom: "thr_origin" });
+  });
+
+  it("never treats a mixed sender sentinel as a thread ID", () => {
+    expect(factsFromDispatch({ ...dispatch, senderThreadId: "mixed" }, identity, 7).lineage)
+      .not.toContain("mixed");
+  });
 });
 
 describe("AttributionLedger cache bounds", () => {
