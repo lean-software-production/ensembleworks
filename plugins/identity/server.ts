@@ -40,6 +40,7 @@ import { identityMutationAllowed, mintSelection, readNamedCookie, SELECTION_COOK
 import { MAX_QUEUED_REQUESTERS, QueuedRequesterLedger, digestQueuedContent } from "./queued-requester.js";
 import { SenderLedger, formatRecentSenders, senderInstructions, spawnAttributionInstructions, textOfBlocks } from "./senders.js";
 import { PersonColorStore, SeenPeople } from "./person-store.js";
+import { inheritedStarterRepair } from "./repair.js";
 import { buildRoster, SEEN_UNKNOWN_CAVEAT } from "./roster.js";
 import {
   ACCESS_EMAIL_HEADER,
@@ -986,6 +987,39 @@ export default async function plugin(bb: BbPluginApi) {
 
   // ── Attribution (step 3): observe and record who started each thread. ─────────────
   const ledger = new AttributionLedger(bb.storage.kv);
+  bb.cli.register({
+    name: "identity",
+    summary: "Inspect and repair Identity thread attribution",
+    commands: [{ name: "repair-starter", summary: "Inherit an unidentified thread's starter from a verified source thread",
+      usage: "bb identity repair-starter <target-thread-id> <source-thread-id>" }],
+    run: async (argv) => {
+      if (argv.length !== 3 || argv[0] !== "repair-starter"
+        || !threadId.safeParse(argv[1]).success || !threadId.safeParse(argv[2]).success) {
+        return { exitCode: 2, stderr: "Usage: bb identity repair-starter <target-thread-id> <source-thread-id>" };
+      }
+      const targetId = argv[1]!;
+      const sourceId = argv[2]!;
+      try {
+        await Promise.all([bb.sdk.threads.get({ threadId: targetId }), bb.sdk.threads.get({ threadId: sourceId })]);
+      } catch {
+        return { exitCode: 1, stderr: "Both threads must exist and be readable." };
+      }
+      const repair = inheritedStarterRepair({
+        targetId, sourceId, target: await ledger.get(targetId), source: await ledger.get(sourceId), now: Date.now(),
+      });
+      if (repair === null) {
+        return { exitCode: 1, stderr: "Repair refused: target already identified, source unidentified, or thread IDs match." };
+      }
+      const result = await ledger.record(repair);
+      const stored = await new AttributionLedger(bb.storage.kv).get(targetId);
+      if (!result.recorded || !stored?.starter || stored.starter.person !== repair.starter?.person
+        || stored.inheritedFrom !== sourceId) {
+        return { exitCode: 1, stderr: "Starter repair was not confirmed; read the thread before retrying." };
+      }
+      bb.log.info(`Identity starter repaired: ${targetId} inherited from ${sourceId}`);
+      return { exitCode: 0, stdout: `${targetId}: ${stored.starter.displayName} (inherited from ${sourceId})` };
+    },
+  });
   const queuedRequesters = new QueuedRequesterLedger(bb.storage.kv);
   /**
    * Who sent EACH prompt — the starter ledger above records only the first. This is what

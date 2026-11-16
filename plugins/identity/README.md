@@ -167,6 +167,13 @@ that field directly. An independent spawn on the current BB version can still be
 unattributed. Attribution and audit swallow
 their own errors; only the separately configured machine guardrail can reject a dispatch.
 
+When a specific old thread's origin is established from BB's thread history, repair its
+unknown starter with `bb identity repair-starter <target-thread-id> <source-thread-id>`.
+The command requires both threads to exist, requires an identified source, refuses to
+overwrite an identified target, and reads storage back after writing. Verify the source
+conversation's creation request before invoking it; the command cannot infer that
+historical link from an independent CLI spawn.
+
 Read it back with `identity_thread_starter` (RPC) or
 `GET /api/v1/plugins/identity/http/thread-starter?threadId=<id>`, both of which return
 `{ threadId, starter, via, inheritedFrom, recordedAt, host }` or `null` — `host` being the
