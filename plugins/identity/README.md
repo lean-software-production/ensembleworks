@@ -232,8 +232,10 @@ delay or alter a dispatch. What refuses is the guardrail, below.
   machine named `<box>-<person>` whose last segment matches a directory `person` or
   `github` is that person's, and is pinned to them on first sight. Anything else is
   **unclaimed** — never silently folded into "team".
-- **Thread rows** show who started the thread ("Started by David · team machine"), except
-  while someone is viewing or typing — **presence wins** that glyph.
+- **Thread rows** always show who started the thread ("Started by David · team machine").
+  Named people currently viewing or typing appear beside the starter, with green or amber
+  rings. Anonymous viewers follow as a count. Ownership reads are batched below the RPC's
+  500-thread limit so large sidebars retain their starter badges.
 - **The thread header** reads "Started by David · runs as ensembleworks-agent on
   `<machine>` (team machine)". The machine appears only when it is not the starter's own.
   An unrecorded starter reads "Starter not recorded", muted — never alarming, never blank.

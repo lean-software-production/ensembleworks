@@ -46,6 +46,35 @@ export type StackedPerson = {
   ring: string;
 };
 
+/** Stay below the ownership RPC's 500-ID input limit. */
+export function ownershipBatches(ids: readonly string[]): string[][] {
+  const batches: string[][] = [];
+  for (let at = 0; at < ids.length; at += 400) batches.push(ids.slice(at, at + 400));
+  return batches;
+}
+
+/** Keep the recorded starter visible before the live viewer circles. */
+export function mergeSidebarStatuses(
+  ownership: Map<string, ThreadStatus>, presence: Map<string, ThreadStatus>,
+): Map<string, ThreadStatus> {
+  const merged = new Map(ownership);
+  for (const [threadId, live] of presence) {
+    const starter = merged.get(threadId);
+    if (!starter) { merged.set(threadId, live); continue; }
+    merged.set(threadId, {
+      ...live,
+      label: `${starter.label} · ${live.label}`,
+      stack: [{
+        avatarUrl: starter.avatarUrl ?? null, badge: starter.badge,
+        color: starter.badgeColor, ink: starter.badgeInk ?? "white",
+        ring: "var(--sidebar-background, var(--background))",
+      }, ...(live.stack ?? [])],
+      overflow: live.overflow ?? (live.stack?.length ? 0 : Number(live.badge)),
+    });
+  }
+  return merged;
+}
+
 export type ThreadStatusSetter = (threadId: string, status: NativeThreadStatus | null) => void;
 
 const BADGE_ATTRIBUTE = "data-bb-presence-badge";
@@ -114,19 +143,14 @@ function reconcileFallbackDots(): void {
     const row = anchor.closest<HTMLElement>("[data-parent-card]") ?? anchor.parentElement ?? anchor;
     const existing = row.querySelector<HTMLElement>("[" + BADGE_ATTRIBUTE + "]");
     const badgeHost = badgeHostFor(anchor);
-    const nativeRendered = status ? hasNativeStatus(row, status.label) : false;
 
     if (!status || badgeHost === null) {
       existing?.remove();
       continue;
     }
 
-    if (nativeRendered) {
-      // BB already positioned this status in its own row chrome.
-      existing?.remove();
-      continue;
-    }
-
+    // The native row status is one icon; keep the people badge beside the title
+    // so the durable starter and current viewers remain visible together.
     const badge = existing instanceof HTMLElement ? existing : createBadge(document);
     badge.setAttribute("aria-label", status.label);
     badge.setAttribute("title", status.label);
@@ -152,12 +176,6 @@ function reconcileFallbackDots(): void {
 /** BB's full-row link is an empty absolute overlay; its next sibling owns title layout. */
 function badgeHostFor(anchor: HTMLElement): HTMLElement | null {
   return anchor.nextElementSibling instanceof HTMLElement ? anchor.nextElementSibling : null;
-}
-
-function hasNativeStatus(row: HTMLElement, label: string): boolean {
-  return [...row.querySelectorAll<HTMLElement>("[aria-label]")].some((element) => (
-    !element.hasAttribute(BADGE_ATTRIBUTE) && element.getAttribute("aria-label") === label
-  ));
 }
 
 function createBadge(document: Document): HTMLSpanElement {

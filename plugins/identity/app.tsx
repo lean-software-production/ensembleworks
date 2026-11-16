@@ -33,6 +33,8 @@ import {
 } from "./person-colors.js";
 import {
   mountThreadStatusFallback,
+  mergeSidebarStatuses,
+  ownershipBatches,
   replaceThreadStatuses,
   type ThreadStatus,
 } from "./sidebar-fallback.js";
@@ -119,11 +121,7 @@ function PresenceCoordinator() {
     }).catch(() => undefined);
   }, [locationKey, ownTabId, ownViewerId, rpc]);
 
-  /**
-   * The two glyph sources, kept apart and merged on every paint: PRESENCE WINS.
-   * A thread someone is looking at (or typing in) shows that; every other row falls
-   * back to who started it.
-   */
+  /** Durable starter and live viewers are kept apart, then shown together. */
   const ownershipRef = useRef(new Map<string, ThreadStatus>());
   // The directory, for dealing per-person colours. A ref, not state: it only ever feeds
   // the next paint, and a change of roster must not re-run the ownership fetch.
@@ -132,9 +130,7 @@ function PresenceCoordinator() {
   const colorsRef = useRef<Readonly<Record<string, string>>>({});
   const presenceRef = useRef(new Map<string, ThreadStatus>());
   const paint = useCallback(() => {
-    const merged = new Map(ownershipRef.current);
-    for (const [threadId, status] of presenceRef.current) merged.set(threadId, status);
-    replaceThreadStatuses(merged);
+    replaceThreadStatuses(mergeSidebarStatuses(ownershipRef.current, presenceRef.current));
   }, []);
 
   const refresh = useCallback(() => {
@@ -211,7 +207,11 @@ function PresenceCoordinator() {
       paint();
       return;
     }
-    void rpc.call("identity_thread_ownership", { threadIds: ids }).then(({ threads }) => {
+    // The RPC accepts at most 500 IDs. Keep batches smaller so a large sidebar
+    // cannot silently lose every starter badge.
+    const batches = ownershipBatches(ids);
+    void Promise.all(batches.map((threadIds) => rpc.call("identity_thread_ownership", { threadIds }))).then((results) => {
+      const threads = results.flatMap((result) => result.threads);
       ownershipRef.current = new Map(threads.map((entry) => {
         const status = ownershipRowStatus(entry);
         // The CHOSEN colour wins over the dealt one here, exactly as it does on the

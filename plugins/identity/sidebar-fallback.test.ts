@@ -2,6 +2,8 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   mountThreadStatusFallback,
+  mergeSidebarStatuses,
+  ownershipBatches,
   replaceThreadStatuses,
   type ThreadStatus,
 } from "./sidebar-fallback.js";
@@ -42,6 +44,21 @@ async function settleObserver() {
 }
 
 describe("replacement sidebar presence fallback", () => {
+  it("reads a large sidebar within the ownership RPC limit", () => {
+    const ids = Array.from({ length: 652 }, (_, i) => `thread-${i}`);
+    const batches = ownershipBatches(ids);
+    expect(batches.map((batch) => batch.length)).toEqual([400, 252]);
+    expect(batches.flat()).toEqual(ids);
+  });
+  it("keeps the starter visible beside live viewers and after they leave", () => {
+    const starter = { ...status, label: "Started by Matt", badge: "M", avatarUrl: "https://example.com/matt.png" };
+    const viewer = { ...status, label: "David viewing", badge: "1", stack: [{ avatarUrl: null, badge: "D", color: "blue", ink: "white", ring: "green" }] };
+    const owners = new Map([["thread-1", starter]]);
+    const together = mergeSidebarStatuses(owners, new Map([["thread-1", viewer]]));
+    expect(together.get("thread-1")?.label).toBe("Started by Matt · David viewing");
+    expect(together.get("thread-1")?.stack?.map((person) => person.badge)).toEqual(["M", "D"]);
+    expect(mergeSidebarStatuses(owners, new Map()).get("thread-1")).toEqual(starter);
+  });
   it("adds, updates, and removes a dot while retaining the native setter", async () => {
     const nativeSetter = vi.fn();
     const { row, titleGroup, title } = renderReplacementRow();
@@ -86,7 +103,7 @@ describe("replacement sidebar presence fallback", () => {
     expect(row.querySelector("[data-bb-presence-badge]")).toBeNull();
   });
 
-  it("follows replacement-list rerenders and yields to a native status", async () => {
+  it("follows replacement-list rerenders and stays beside a native status", async () => {
     dispose = mountThreadStatusFallback({ document });
     replaceThreadStatuses(new Map([["thread-1", status]]));
 
@@ -103,7 +120,7 @@ describe("replacement sidebar presence fallback", () => {
     nativeStatus.setAttribute("aria-label", status.label);
     second.row.append(nativeStatus);
     await settleObserver();
-    expect(second.row.querySelector("[data-bb-presence-badge]")).toBeNull();
+    expect(second.row.querySelector("[data-bb-presence-badge]")).not.toBeNull();
 
     dispose();
     dispose = undefined;
@@ -299,8 +316,7 @@ describe("the badge must not sit on the title", () => {
     expect(row.style.boxShadow).toBe("");
   });
 
-  it("leaves a row the native glyph already handles alone", async () => {
-    // Native rendering means BB positioned its own glyph properly.
+  it("keeps the people badge when BB also renders a native status icon", async () => {
     const { anchor, row } = renderReplacementRow();
     const native = document.createElement("span");
     native.setAttribute("aria-label", status.label);
@@ -309,7 +325,7 @@ describe("the badge must not sit on the title", () => {
     replaceThreadStatuses(new Map([["thread-1", status]]));
     await settleObserver();
 
-    expect(row.querySelector("[data-bb-presence-badge]")).toBeNull();
+    expect(row.querySelector("[data-bb-presence-badge]")).not.toBeNull();
     expect(anchor.style.paddingRight).toBe("");
   });
 });
