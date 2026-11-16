@@ -146,6 +146,7 @@ function PresenceCoordinator() {
         stack: entry.people.map((person) => {
           const color = resolvePersonColor(person.person, rosterRef.current, colorsRef.current).color;
           return {
+            personId: person.person,
             avatarUrl: avatarUrl(person.github, 14),
             badge: initials(person.displayName),
             color, ink: readableInk(color),
@@ -229,6 +230,7 @@ function PresenceCoordinator() {
           badgeColor: resolved.color,
           badgeInk: readableInk(resolved.color),
           avatarUrl: entry.starter === null ? null : avatarUrl(entry.starter.github, 14),
+          personId: entry.starter?.person ?? null,
         }] as const;
       }));
       paint();

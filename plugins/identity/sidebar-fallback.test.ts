@@ -59,6 +59,15 @@ describe("replacement sidebar presence fallback", () => {
     expect(together.get("thread-1")?.stack?.map((person) => person.badge)).toEqual(["M", "D"]);
     expect(mergeSidebarStatuses(owners, new Map()).get("thread-1")).toEqual(starter);
   });
+  it("shows one circle when the starter is also a live viewer", () => {
+    const starter = { ...status, label: "Started by Matt", badge: "M", personId: "matt" };
+    const viewer = { ...status, label: "Matt viewing", badge: "1", stack: [{
+      personId: "matt", avatarUrl: null, badge: "M", color: "blue", ink: "white", ring: "green",
+    }] };
+    const merged = mergeSidebarStatuses(new Map([["thread-1", starter]]), new Map([["thread-1", viewer]]));
+    expect(merged.get("thread-1")?.stack).toHaveLength(1);
+    expect(merged.get("thread-1")?.stack?.[0]?.ring).toBe("green");
+  });
   it("adds, updates, and removes a dot while retaining the native setter", async () => {
     const nativeSetter = vi.fn();
     const { row, titleGroup, title } = renderReplacementRow();

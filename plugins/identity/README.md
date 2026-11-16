@@ -234,7 +234,7 @@ delay or alter a dispatch. What refuses is the guardrail, below.
   **unclaimed** — never silently folded into "team".
 - **Thread rows** always show who started the thread ("Started by David · team machine").
   Named people currently viewing or typing appear beside the starter, with green or amber
-  rings. Anonymous viewers follow as a count. Ownership reads are batched below the RPC's
+  rings. When the starter is also viewing, one photo carries the live ring. Anonymous viewers follow as a count. Ownership reads are batched below the RPC's
   500-thread limit so large sidebars retain their starter badges.
 - **The thread header** reads "Started by David · runs as ensembleworks-agent on
   `<machine>` (team machine)". The machine appears only when it is not the starter's own.

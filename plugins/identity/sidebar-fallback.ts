@@ -27,6 +27,8 @@ export type ThreadStatus = NativeThreadStatus & {
    * by hand in `paintBadgeContent`; `badge` remains the text shown when the photo fails.
    */
   avatarUrl?: string | null;
+  /** Directory key, used to join a starter with that same person's live presence. */
+  personId?: string | null;
   /**
    * Named viewers, each drawn as its own ringed circle (photo, or `badge` initials when
    * the photo fails), overlapping like the header bubbles. When non-empty this REPLACES
@@ -37,6 +39,7 @@ export type ThreadStatus = NativeThreadStatus & {
 };
 
 export type StackedPerson = {
+  personId?: string | null;
   avatarUrl: string | null;
   /** Initials, shown when there is no photo. */
   badge: string;
@@ -61,14 +64,18 @@ export function mergeSidebarStatuses(
   for (const [threadId, live] of presence) {
     const starter = merged.get(threadId);
     if (!starter) { merged.set(threadId, live); continue; }
+    const sameViewer = starter.personId
+      ? live.stack?.find((person) => person.personId === starter.personId)
+      : undefined;
     merged.set(threadId, {
       ...live,
       label: `${starter.label} · ${live.label}`,
       stack: [{
+        personId: starter.personId,
         avatarUrl: starter.avatarUrl ?? null, badge: starter.badge,
         color: starter.badgeColor, ink: starter.badgeInk ?? "white",
-        ring: "var(--sidebar-background, var(--background))",
-      }, ...(live.stack ?? [])],
+        ring: sameViewer?.ring ?? "var(--sidebar-background, var(--background))",
+      }, ...(live.stack ?? []).filter((person) => person !== sameViewer)],
       overflow: live.overflow ?? (live.stack?.length ? 0 : Number(live.badge)),
     });
   }
