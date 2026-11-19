@@ -1,7 +1,9 @@
 import { createHash } from "node:crypto";
 import { z } from "zod";
 import { starterSummarySchema, type StarterSummary } from "./attribution.js";
+import { ago } from "./ago.js";
 import { KV_TIMEOUT_MS, TIMED_OUT, withTimeout, type KvLike } from "./kv.js";
+import { describeReportedTimeZone, type ReportedTimeZone } from "./time-zones.js";
 
 /**
  * Who sent each prompt on a thread, so an agent can tell two people apart.
@@ -181,16 +183,6 @@ function append(log: SenderLog, entry: SenderEntry, max: number): SenderLog {
   return { ...log, entries: entries.slice(Math.max(0, entries.length - max)) };
 }
 
-function ago(from: number, now: number): string {
-  const seconds = Math.max(0, Math.round((now - from) / 1_000));
-  if (seconds < 60) return `${seconds}s ago`;
-  const minutes = Math.round(seconds / 60);
-  if (minutes < 60) return `${minutes}m ago`;
-  const hours = Math.round(minutes / 60);
-  if (hours < 48) return `${hours}h ago`;
-  return `${Math.round(hours / 24)}d ago`;
-}
-
 /** What the directory knows about a person at read time, for crediting them. */
 export type Credit = { fullName: string | null; email: string | null };
 export type CreditLookup = (person: StarterSummary) => Credit | null;
@@ -206,41 +198,68 @@ export function coAuthorTrailer(person: StarterSummary, email: string | null, cr
   return `Co-authored-by: ${name} <${address}>`;
 }
 
+/** The latest time zone a person's BB app reported, or null when it has reported none. */
+export type TimeZoneLookup = (person: StarterSummary) => ReportedTimeZone | null;
+
 /**
- * The `identity_recent_senders` tool's answer: newest first, one line per prompt, then a
+ * The `identity_recent_senders` tool's answer: newest first, one line per prompt, then
+ * each distinct person's reported time zone (when `timeZoneOf` is supplied), then a
  * ready-to-paste commit trailer per distinct person so pairing credit is one copy away.
  * `lookup` resolves a person against the live directory, so a directory fix corrects the
  * trailers of entries recorded before it.
  */
-export function formatRecentSenders(entries: readonly SenderEntry[], now: number, lookup: CreditLookup = () => null): string {
+export function formatRecentSenders(entries: readonly SenderEntry[], now: number, lookup: CreditLookup = () => null,
+  timeZoneOf?: TimeZoneLookup): string {
   if (entries.length === 0) return "No identified senders are recorded for this thread yet.";
-  const trailers = new Map<string, string>();
-  for (const entry of entries) {
-    if (!trailers.has(entry.person.person)) {
-      trailers.set(entry.person.person, coAuthorTrailer(entry.person, entry.email ?? null, lookup(entry.person)));
-    }
-  }
+  const distinct = new Map<string, SenderEntry>();
+  for (const entry of entries) if (!distinct.has(entry.person.person)) distinct.set(entry.person.person, entry);
+  const zones = timeZoneOf === undefined ? [] : [
+    "",
+    "Time zones their BB apps report (use these to work out what \"today\" or \"tomorrow\" means for each person):",
+    ...[...distinct.values()].map(({ person }) => {
+      const reported = timeZoneOf(person);
+      const where = reported === null
+        ? `${describeReportedTimeZone(null, now)}. Use another source, or ask them where they are.`
+        : describeReportedTimeZone(reported, now);
+      return `- ${person.displayName} (@${person.github}): ${where}`;
+    }),
+  ];
   return [
     "Recent prompts on this thread, newest first:",
     ...entries.map((entry, index) =>
       `${index + 1}. ${entry.person.displayName} (@${entry.person.github}, ${ago(entry.at, now)}): ${JSON.stringify(entry.preview)}`),
+    ...zones,
     "",
     "Commit trailers for these people:",
-    ...trailers.values(),
+    ...[...distinct.values()].map((entry) => coAuthorTrailer(entry.person, entry.email ?? null, lookup(entry.person))),
   ].join("\n");
 }
 
-/** The dynamic instructions line for a thread, or null when nobody is known (say nothing). */
-export function senderInstructions(people: readonly StarterSummary[]): string | null {
+/**
+ * The dynamic instructions line for a thread, or null when nobody is known (say nothing).
+ * With `timeZoneOf`, each name carries the zone that person's BB app reported. bb keeps a
+ * provider session's instructions until the session is next constructed, so the line
+ * says the zones date from then and sends the agent to the tool for the current ones.
+ */
+export function senderInstructions(people: readonly StarterSummary[],
+  zones?: { timeZoneOf: TimeZoneLookup; now: number }): string | null {
   if (people.length === 0) return null;
-  const names = people.map((person) => `${person.displayName} (@${person.github})`).join(", ");
+  const names = people.map((person) => {
+    if (zones === undefined) return `${person.displayName} (@${person.github})`;
+    const reported = zones.timeZoneOf(person);
+    const where = reported === null ? "no time zone reported" : `${reported.zone}, reported ${ago(reported.at, zones.now)}`;
+    return `${person.displayName} (@${person.github}, ${where})`;
+  }).join(", ");
+  const followUp = zones === undefined ? "" : " Time zones are what each person's BB app had reported when this session "
+    + "started. Before you turn \"today\", \"tomorrow\" or a weekday into a date, call identity_recent_senders for "
+    + "their current time zone and local time. Where no time zone is reported, use another source or ask them where they are.";
   if (people.length === 1) {
     return `The person prompting you on this thread so far: ${names}. `
-      + "Call identity_recent_senders if you need to check who sent a prompt.";
+      + "Call identity_recent_senders if you need to check who sent a prompt." + followUp;
   }
   return `People who have sent prompts on this thread: ${names}. `
     + "More than one person may be prompting you here, so address them by name and keep each person's "
-    + "questions distinct. Call identity_recent_senders to see who sent each recent prompt.";
+    + "questions distinct. Call identity_recent_senders to see who sent each recent prompt." + followUp;
 }
 
 export function spawnAttributionInstructions(): string {

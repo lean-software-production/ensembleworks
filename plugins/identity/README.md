@@ -1,8 +1,8 @@
 # Identity
 
 Identity answers "who is who" on a shared BB server. It is the renamed Presence
-plugin, and now covers named presence, attribution, thread ownership, a start
-guardrail and an audit log (see
+plugin, and now covers named presence, attribution, each person's time zone, thread
+ownership, a start guardrail and an audit log (see
 `docs/superpowers/specs/2026-09-15-bb-machine-ownership-design.md`).
 
 **Trust statement.** Identity reads the upstream Access email header but does not
@@ -210,14 +210,17 @@ Pi) with no per-harness hook.
   ordinary drain already went through the hook.
 - **`identity_recent_senders`** (agent tool, optional `limit`) lists the thread's recent
   prompts newest first as `Aldric (@aldric, 2m ago): "and the UI?"`, then one ready-to-paste
-  `Co-authored-by: Aldric Giacomoni <aldric@example.com>` trailer per distinct person. The
+  `Co-authored-by: Aldric Giacomoni <aldric@example.com>` trailer per distinct person.
+  Between the two it lists each person's time zone and current local time, as their BB app
+  reported it (see [Each person's time zone](#each-persons-time-zone-for-the-agent)). The
   trailer uses the directory entry's optional **`fullName`** and first email, resolved at
   read time so a directory fix corrects old entries; without a `fullName` it falls back to
   the display name, and without any email to GitHub's `<handle>@users.noreply.github.com`. The content digest is
   stored so a caller can match a prompt by its text rather than trusting order.
 - **Dynamic instructions**: when the thread has known senders, Identity contributes one
-  line naming them ("People who have sent prompts on this thread: Matt (@mattwynne), Aldric (@aldric). …") and
-  pointing at the tool. The SDK resolves this when a provider session is constructed, not
+  line naming them with their reported time zones ("People who have sent prompts on this
+  thread: Matt (@mattwynne, America/Vancouver, reported 2m ago), Aldric (@aldric, no time
+  zone reported). …") and pointing at the tool. The SDK resolves this when a provider session is constructed, not
   mid-session, and the provider must be synchronous — so it reads the ledger's in-memory
   copy, which is warmed by the dispatch hook and by any read. A thread first seen after a
   restart contributes nothing until its first read or dispatch.
@@ -227,6 +230,40 @@ The dispatch hook cannot amend a message (it is a decision, not an author), so t
 is nudged rather than stamped: it must call the tool to learn the sender of a specific
 prompt. In practice the names in the instructions are what stop "I'm not sure Aldric
 would approve" when Aldric is the one asking.
+
+## Each person's time zone (for the agent)
+
+The BB server's clock is UTC and BB records no time zone with a prompt, so an agent that
+reads "tomorrow 8am" late on a Pacific evening can count from the wrong day. Identity
+lets agents see the zone each person's own BB app runs in (`time-zones.ts`):
+
+- **Reported** with the presence heartbeat. Every visible BB client adds its browser's
+  IANA zone (`Intl.DateTimeFormat().resolvedOptions().timeZone`) to the heartbeat it
+  already sends every ten seconds, so a laptop that changes zone reports the new one on
+  its next beat. Only a person the request itself identifies (the Access header or a
+  self-selected identity) is recorded; a configured fallback identity is not, because it
+  names whoever the operator chose rather than whoever is at the keyboard. A zone `Intl`
+  does not know is ignored, and the heartbeat still counts as presence.
+- **Stored** per person as `{ zone, at }`: the latest report in memory, and a copy in
+  `bb.storage.kv` (`identity/time-zone/v1`) for restarts. The copy is written when the
+  zone changes (at most once a minute per person) or every 15 minutes otherwise, so the
+  heartbeat rate does not become a write rate. At most 256 people are kept.
+- **Read** by agents in three places:
+  - `identity_recent_senders` lists each sender's zone, local time now and how long ago it
+    was reported, for example `- Matt (@mattwynne): America/Vancouver, local time
+    Wednesday 18 November 2026, 21:53 (UTC-7), reported 2m ago`.
+  - The dynamic instructions line puts the zone beside each name. That line is fixed when
+    the provider session starts, so it tells the agent to call the tool for the current
+    zone before it turns "today" or "tomorrow" into a date.
+  - `bb identity time-zones` prints every person in the directory with their zone and
+    local time.
+- **Missing** zones are stated plainly: "no time zone reported by their BB app". That
+  happens until the person has opened BB since this shipped, for anyone identified only by
+  the fallback, and for CLI or automation senders. The agent should then use another
+  source, such as `bb calendar hours`, or ask.
+
+The zone is a label from the person's browser, with the same trust as the rest of
+Identity: it is not verified.
 
 ## Ownership UI
 
@@ -543,7 +580,8 @@ bb plugin reload identity
 
 Visible tabs send a location heartbeat every ten seconds. A lease expires after
 25 seconds or is cleared when the tab is hidden, so activity is never retained
-as history.
+as history. The heartbeat also carries the browser's time zone; see
+[Each person's time zone](#each-persons-time-zone-for-the-agent) for what is kept.
 
 Threads viewed by another browser display a badge in the BB sidebar and a
 compact people icon in the thread header. Hovering the header icon gives the

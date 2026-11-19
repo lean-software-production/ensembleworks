@@ -208,6 +208,22 @@ describe("formatRecentSenders", () => {
   it("says plainly when nothing is recorded", () => {
     expect(formatRecentSenders([], 0)).toBe("No identified senders are recorded for this thread yet.");
   });
+
+  it("gives each person's reported time zone and local time, and says when one is missing", () => {
+    const now = Date.UTC(2026, 10, 19, 5, 53);
+    const text = formatRecentSenders([
+      { digest: "d2", person: aldric, email: null, at: now - 60_000, preview: "and the UI?" },
+      { digest: "d1", person: matt, email: null, at: now - 120_000, preview: "post it tomorrow 8am" },
+    ], now, () => null, (person) => person.person === "mattwynne" ? { zone: "America/Los_Angeles", at: now - 120_000 } : null);
+    expect(text).toContain([
+      "",
+      "Time zones their BB apps report (use these to work out what \"today\" or \"tomorrow\" means for each person):",
+      "- Aldric (@aldric): no time zone reported by their BB app. Use another source, or ask them where they are.",
+      "- Matt (@mattwynne): America/Los_Angeles, local time Wednesday 18 November 2026, 21:53 (UTC-8), reported 2m ago",
+      "",
+      "Commit trailers for these people:",
+    ].join("\n"));
+  });
 });
 
 describe("senderInstructions", () => {
@@ -228,6 +244,24 @@ describe("senderInstructions", () => {
 
   it("contributes nothing when nobody is known", () => {
     expect(senderInstructions([])).toBeNull();
+  });
+
+  it("adds each person's reported time zone, or says none was reported", () => {
+    const now = 600_000;
+    const timeZoneOf = (person: StarterSummary) => person.person === "mattwynne" ? { zone: "America/Vancouver", at: now - 120_000 } : null;
+    const followUp = "Time zones are what each person's BB app had reported when this session started. "
+      + "Before you turn \"today\", \"tomorrow\" or a weekday into a date, call identity_recent_senders for their "
+      + "current time zone and local time. Where no time zone is reported, use another source or ask them where they are.";
+    expect(senderInstructions([matt], { timeZoneOf, now })).toBe(
+      "The person prompting you on this thread so far: Matt (@mattwynne, America/Vancouver, reported 2m ago). "
+      + "Call identity_recent_senders if you need to check who sent a prompt. " + followUp,
+    );
+    expect(senderInstructions([matt, aldric], { timeZoneOf, now })).toBe(
+      "People who have sent prompts on this thread: Matt (@mattwynne, America/Vancouver, reported 2m ago), "
+      + "Aldric (@aldric, no time zone reported). "
+      + "More than one person may be prompting you here, so address them by name and keep each person's "
+      + "questions distinct. Call identity_recent_senders to see who sent each recent prompt. " + followUp,
+    );
   });
 });
 

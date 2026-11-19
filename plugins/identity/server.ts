@@ -40,6 +40,7 @@ import { identityMutationAllowed, mintSelection, readNamedCookie, SELECTION_COOK
 import { MAX_QUEUED_REQUESTERS, QueuedRequesterLedger, digestQueuedContent } from "./queued-requester.js";
 import { SenderLedger, formatRecentSenders, senderInstructions, spawnAttributionInstructions, textOfBlocks } from "./senders.js";
 import { PersonColorStore, SeenPeople } from "./person-store.js";
+import { ReportedTimeZones, formatDirectoryTimeZones } from "./time-zones.js";
 import { inheritedStarterRepair } from "./repair.js";
 import { buildRoster, SEEN_UNKNOWN_CAVEAT } from "./roster.js";
 import {
@@ -497,7 +498,13 @@ export const rpcContract = defineRpcContract({
     output: z.object({ text: z.string() }).strict(),
   },
   presence_heartbeat: {
-    input: z.object({ tabId: opaqueId, viewerId: opaqueId, location }).strict(),
+    /**
+     * `timeZone` is the browser's IANA zone (`Intl.DateTimeFormat().resolvedOptions()`),
+     * optional so a tab still running an older frontend keeps its presence. It is
+     * validated by the store, never here: a zone Intl does not know must not cost the
+     * tab its presence.
+     */
+    input: z.object({ tabId: opaqueId, viewerId: opaqueId, location, timeZone: z.string().max(200).optional() }).strict(),
     output: z.object({ ok: z.literal(true) }).strict(),
   },
   presence_leave: {
@@ -985,17 +992,33 @@ export default async function plugin(bb: BbPluginApi) {
     return c.json({ ok: true, whoami: whoamiFor(null, token) });
   }, { auth: "local" });
 
+  /**
+   * The time zone each person's BB app reports with its presence heartbeat, so an agent
+   * can work out what "today" or "tomorrow" means for the person prompting it. Warmed
+   * from kv now, because the instructions provider reads memory only.
+   */
+  const zones = new ReportedTimeZones(bb.storage.kv);
+  void zones.load();
+
   // ── Attribution (step 3): observe and record who started each thread. ─────────────
   const ledger = new AttributionLedger(bb.storage.kv);
   bb.cli.register({
     name: "identity",
-    summary: "Inspect and repair Identity thread attribution",
-    commands: [{ name: "repair-starter", summary: "Inherit an unidentified thread's starter from a verified source thread",
-      usage: "bb identity repair-starter <target-thread-id> <source-thread-id>" }],
+    summary: "Show each person's reported time zone, and repair Identity thread attribution",
+    commands: [
+      { name: "time-zones", summary: "Show the time zone each person's BB app last reported, and their local time now",
+        usage: "bb identity time-zones" },
+      { name: "repair-starter", summary: "Inherit an unidentified thread's starter from a verified source thread",
+        usage: "bb identity repair-starter <target-thread-id> <source-thread-id>" },
+    ],
     run: async (argv) => {
+      if (argv.length === 1 && argv[0] === "time-zones") {
+        return { exitCode: 0, stdout: formatDirectoryTimeZones(people, (who) => zones.get(who.person), Date.now()) };
+      }
       if (argv.length !== 3 || argv[0] !== "repair-starter"
         || !threadId.safeParse(argv[1]).success || !threadId.safeParse(argv[2]).success) {
-        return { exitCode: 2, stderr: "Usage: bb identity repair-starter <target-thread-id> <source-thread-id>" };
+        return { exitCode: 2, stderr: "Usage: bb identity time-zones\n"
+          + "       bb identity repair-starter <target-thread-id> <source-thread-id>" };
       }
       const targetId = argv[1]!;
       const sourceId = argv[2]!;
@@ -1324,10 +1347,11 @@ export default async function plugin(bb: BbPluginApi) {
       (who) => {
         const entry = people.find((candidate) => candidate.person === who.person);
         return entry ? { fullName: entry.fullName ?? null, email: entry.emails[0] ?? null } : null;
-      }),
+      }, (who) => zones.get(who.person)),
   });
   bb.agents.contributeInstructions(({ threadId: id }) =>
-    [senderInstructions(senders.peopleOf(id)), spawnAttributionInstructions()]
+    [senderInstructions(senders.peopleOf(id), { timeZoneOf: (who) => zones.get(who.person), now: Date.now() }),
+      spawnAttributionInstructions()]
       .filter((line): line is string => line !== null).join("\n"));
 
   /**
@@ -1594,10 +1618,17 @@ export default async function plugin(bb: BbPluginApi) {
       return { text: redactDiagnostics({ ...facts, generatedAt: Date.now(), ledgers: await ledgerFill(),
         sharedMachineUser, lint: lintConfig(facts) }) };
     },
-    presence_heartbeat: ({ tabId, viewerId, location }) => {
-      const person = summarizePresence(currentIdentity());
+    presence_heartbeat: ({ tabId, viewerId, location, timeZone }) => {
+      const identity = currentIdentity();
+      const person = summarizePresence(identity);
       const affected = store.heartbeat(tabId, viewerId, location, Date.now(), person);
       if (affected.size > 0) publish(affected);
+      // Only a person this browser itself identifies: a configured fallback names whoever
+      // the operator chose, not necessarily whoever is at this keyboard.
+      if (timeZone !== undefined && identity.person !== null
+        && (identity.provenance === "upstream-header" || identity.provenance === "self-selected")) {
+        void zones.report(identity.person.person, timeZone, Date.now());
+      }
       return { ok: true } as const;
     },
     presence_leave: ({ tabId }) => {

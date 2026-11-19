@@ -95,6 +95,19 @@ function volatileId(key: string): string {
   return next;
 }
 
+/**
+ * The IANA zone this client runs in, read fresh on every heartbeat so a laptop that
+ * changes zone reports the new one on its next beat. Omitted when the browser cannot say.
+ */
+function browserTimeZone(): string | undefined {
+  try {
+    const zone = Intl.DateTimeFormat().resolvedOptions().timeZone;
+    return typeof zone === "string" && zone.length > 0 ? zone : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
 function PresenceCoordinator() {
   const rpc = useRpc<typeof rpcContract>();
   const context = useBbContext();
@@ -114,10 +127,12 @@ function PresenceCoordinator() {
 
   const heartbeat = useCallback(() => {
     if (document.visibilityState === "hidden") return;
+    const timeZone = browserTimeZone();
     void rpc.call("presence_heartbeat", {
       tabId: ownTabId,
       viewerId: ownViewerId,
       location,
+      ...(timeZone === undefined ? {} : { timeZone }),
     }).catch(() => undefined);
   }, [locationKey, ownTabId, ownViewerId, rpc]);
 
