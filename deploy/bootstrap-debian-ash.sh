@@ -145,7 +145,7 @@ fi
 #    section 10); signaling WS (7880) is bound to loopback and proxied via Caddy
 #    (section 9).
 # -----------------------------------------------------------------------------
-LIVEKIT_VERSION="1.13.1" # pin a concrete release; bump deliberately
+LIVEKIT_VERSION="1.13.11" # pin a concrete release; bump deliberately
 if ! command -v livekit-server >/dev/null 2>&1; then
 	log "Installing livekit-server ${LIVEKIT_VERSION}"
 	curl -fsSL "https://github.com/livekit/livekit/releases/download/v${LIVEKIT_VERSION}/livekit_${LIVEKIT_VERSION}_linux_amd64.tar.gz" |

@@ -71,7 +71,7 @@ export async function runDoctor(opts) {
 		level: 'optional',
 		ok: ctx.has.livekit,
 		detail: ctx.has.livekit ? 'on PATH' : 'missing — voice/video stays disabled',
-		remedy: 'install livekit-server 1.13.1 (deploy/runtime-requirements pin)',
+		remedy: 'install livekit-server 1.13.11 (deploy/runtime-requirements pin)',
 	})
 	checks.push({
 		name: 'whisper-server',
