@@ -21,6 +21,32 @@ it('imports, attaches and resolves current conversation at tool execution time',
  expect(changed.citations.base+changed.blocks[0].citation).toContain(`/communications/${second.id}/1`);
  expect(JSON.stringify(changed)).not.toContain('sourceKey');
 });
+// Regression, 26 Nov 2026: the thread was re-attached from a finished meeting to a new one, the agent
+// read the old ID it remembered, and told the room the meeting had ended. An explicit read of a
+// conversation that is not attached still works, but now says which conversation is.
+it('flags reads, searches and acknowledgements of a conversation the thread is no longer attached to',async()=>{
+ const {harness}=await setup();
+ const morning=await harness.behavior.callRpc('transcripts.import',{...transcript,title:'Morning'}) as {id:string};
+ const afternoon=await harness.behavior.callRpc('transcripts.import',{...transcript,title:'Afternoon'}) as {id:string};
+ await harness.behavior.callRpc('attachments.set',{threadId:'A',conversationId:morning.id});
+ const before=JSON.parse(await harness.behavior.callAgentTool('communications_read',{conversationId:morning.id},{threadId:'A'}) as string);
+ expect(before.attachmentWarning).toBeUndefined();
+ await harness.behavior.callRpc('attachments.set',{threadId:'A',conversationId:afternoon.id});
+ const stale=JSON.parse(await harness.behavior.callAgentTool('communications_read',{conversationId:morning.id},{threadId:'A'}) as string);
+ expect(stale.conversation.id).toBe(morning.id);
+ expect(Object.keys(stale).slice(0,2)).toEqual(['attachmentWarning','attachedConversationId']);
+ expect(stale.attachedConversationId).toBe(afternoon.id);
+ expect(stale.attachmentWarning).toBe(`Conversation ${morning.id} is not attached to this thread. This thread is attached to conversation ${afternoon.id} ("Afternoon", idle). Call communications_current before treating it as this thread’s meeting.`);
+ const search=JSON.parse(await harness.behavior.callAgentTool('communications_search',{conversationId:morning.id,query:'authentication'},{threadId:'A'}) as string);
+ expect(search.attachedConversationId).toBe(afternoon.id);
+ const ack=await harness.behavior.callAgentTool('communications_acknowledge',{conversationId:morning.id,cursor:1},{threadId:'A'});
+ expect(ack).toMatchObject({isError:true});
+ expect(JSON.stringify(ack)).toContain(`This thread is attached to conversation ${afternoon.id} (\\"Afternoon\\", idle).`);
+ const sinceAck=await harness.behavior.callAgentTool('communications_read',{conversationId:morning.id,sinceAcknowledged:true},{threadId:'A'});
+ expect(JSON.stringify(sinceAck)).toContain(afternoon.id);
+ const attached=JSON.parse(await harness.behavior.callAgentTool('communications_read',{conversationId:afternoon.id},{threadId:'A'}) as string);
+ expect(attached.attachmentWarning).toBeUndefined(); expect(attached.attachedConversationId).toBeUndefined();
+});
 it('does not advance cursors on reads and returns an actionable error without an attachment',async()=>{
  const {harness}=await setup();
  const result=await harness.behavior.callAgentTool('communications_read',{}, {threadId:'A'});

@@ -44,6 +44,14 @@ describe('persistent conversation library', () => {
     hub.attach('A',other.id); expect(hub.getAttachment('A')!.cursor).toBe(0);
     hub.detach('A'); expect(hub.getConversation(m.id).segmentCount).toBe(3);
   });
+  // Regression, 26 Nov 2026: a thread moved from a finished meeting to a new one; the agent kept
+  // acknowledging the old ID and the error gave it no way to find the right conversation.
+  it('names the attached conversation when acknowledging one that is not attached', () => {
+    const {hub}=setup(); const morning=hub.ensureConversation('zoom','m1','Morning'); const afternoon=hub.ensureConversation('zoom','m2','Afternoon');
+    hub.appendSegments(morning.id,[segment('a')]); hub.setCapture(morning.id,'ended'); hub.setCapture(afternoon.id,'capturing'); hub.attach('A',afternoon.id);
+    expect(() => hub.acknowledge('A',morning.id,1)).toThrow(`Conversation ${morning.id} is not attached to this thread. This thread is attached to conversation ${afternoon.id} ("Afternoon", capturing).`);
+    expect(() => hub.acknowledge('B',morning.id,1)).toThrow(`Conversation ${morning.id} is not attached to this thread. Nothing is attached to this thread.`);
+  });
   it('returns bounded pages with a next cursor and filters speech intervals', () => {
     const {hub}=setup(); const m=hub.ensureConversation('import','one','Planning');
     hub.appendSegments(m.id,Array.from({length:33},(_,i)=>segment(String(i),'passage '+i,i*1000)));

@@ -215,6 +215,14 @@ export default async function plugin(bb:BbPluginApi) {
   const importTranscript=(raw:unknown)=>{const i=importInput.parse(raw);return hub.importConversation(i.title,parseTranscript(i.text,i.format));};
   const citationBase=(page:TranscriptPage)=>`${(bb.server.experimental_appUrl ?? bb.server.loopbackBaseUrl).replace(/\/$/,'')}/plugins/${bb.pluginId}/communications/${page.conversation.id}/`;
   const readPayload=(page:TranscriptPage)=>buildReadPayload(page,citationBase(page));
+  // An explicit conversationId may be one the thread has since moved away from (for example an
+  // earlier meeting's). The read still works, but leads with what is attached now.
+  const withAttachmentWarning=<T extends object>(threadId:string,conversationId:string,payload:T)=>{
+    const mismatch=hub.attachmentMismatch(threadId,conversationId);
+    if(!mismatch) return payload;
+    const attachedConversationId=hub.getAttachment(threadId)?.conversationId ?? null;
+    return {attachmentWarning:`${mismatch} Call communications_current before treating it as this thread’s meeting.`,attachedConversationId,...payload};
+  };
   const searchPayload=(page:TranscriptPage)=>buildSearchPayload(page,citationBase(page));
   bb.rpc.register(rpcContract,{
     'conversations.list':input=>hub.listConversations(input),
@@ -269,9 +277,9 @@ export default async function plugin(bb:BbPluginApi) {
       const c=resolve(ctx.threadId,conversationId);
       if(sinceAcknowledged) {
         if(read.after!==undefined) throw new Error('Choose after or sinceAcknowledged, not both');
-        const a=hub.getAttachment(ctx.threadId);if(!a||a.conversationId!==c) throw new Error('This conversation has no reading cursor in the current thread');read.after=a.cursor;
+        const mismatch=hub.attachmentMismatch(ctx.threadId,c);if(mismatch) throw new Error(`${mismatch} Only the attached conversation has a reading cursor here.`);read.after=hub.getAttachment(ctx.threadId)!.cursor;
       }
-      return readPayload(hub.readTranscript(c,read));
+      return withAttachmentWarning(ctx.threadId,c,readPayload(hub.readTranscript(c,read)));
     })});
   bb.agents.registerTool({name:'communications_search',description:'Search the attached conversation or Slack channel. Transcript hits have passage citations; Slack hits have message permalinks. Explicit conversationId or channelId selects another target. Does not advance a reading cursor.',parameters:readInput.omit({conversationId:true}).extend({conversationId:id.optional(),channelId:id.optional(),before:id.optional(),query:z.string().trim().min(1).max(200)}),execute:({conversationId,channelId,before,query,...input},ctx)=>toolResult(async()=>{
     if(conversationId && channelId) throw new Error('Choose conversationId or channelId');
@@ -280,7 +288,8 @@ export default async function plugin(bb:BbPluginApi) {
       return channelSearch(ctx.threadId,query,channelId,before,input.limit);
     }
     if(before!==undefined) throw new Error('Transcript search uses after, not before');
-    return searchPayload(hub.searchTranscript(resolve(ctx.threadId,conversationId),{...input,query}));
+    const c=resolve(ctx.threadId,conversationId);
+    return withAttachmentWarning(ctx.threadId,c,searchPayload(hub.searchTranscript(c,{...input,query})));
   })});
   bb.agents.registerTool({name:'communications_acknowledge',description:'Advance this thread’s reading cursor after using passages. Requires its attached conversation ID and the last sequence used. Do not acknowledge a whole range merely because a search matched a later passage.',parameters:z.object({conversationId:id,cursor:z.number().int().nonnegative()}).strict(),execute:({conversationId,cursor},ctx)=>toolResult(()=>hub.acknowledge(ctx.threadId,conversationId,cursor))});
   bb.agents.registerTool({name:'communications_watch_status',description:'Get this thread’s explicitly enabled conversation watch, including its generation and independent processed cursor. Null means watching is stopped.',parameters:z.object({}).strict(),execute:(_,ctx)=>toolResult(()=>watchStatus(ctx.threadId))});
