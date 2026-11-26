@@ -368,9 +368,28 @@ export class Hub {
     if(!row.channelId) {delete row.channelId;delete row.channelTeamId;}
     return row;
   }
+  /**
+   * Null when the conversation is this thread's attached conversation; otherwise says so and
+   * names what is attached, so an agent holding an earlier meeting's ID can find the current one.
+   */
+  attachmentMismatch(threadId:string,conversationId:string):string|null {
+    const a=this.getAttachment(threadId);
+    if (a?.conversationId===conversationId) return null;
+    return `Conversation ${conversationId} is not attached to this thread. ${this.describeAttachment(a)}`;
+  }
+  private describeAttachment(a:ThreadAttachment|null):string {
+    if (a?.conversationId) {
+      const c=this.getConversation(a.conversationId);
+      return `This thread is attached to conversation ${c.id} (${JSON.stringify(c.title)}, ${c.captureState}).`;
+    }
+    if (a?.roomId) return `This thread follows room ${JSON.stringify(this.getRoom(a.roomId).name)}, which has no conversation yet.`;
+    if (a?.channelId) return 'This thread is attached to a Slack channel, not a conversation.';
+    return 'Nothing is attached to this thread.';
+  }
   acknowledge(threadId:string,conversationId:string,cursor:number) {
-    z.number().int().nonnegative().parse(cursor); const a=this.getAttachment(threadId);
-    if (!a || a.conversationId!==conversationId) throw new Error('Conversation is not attached to this thread');
+    z.number().int().nonnegative().parse(cursor);
+    const mismatch=this.attachmentMismatch(threadId,conversationId); if (mismatch) throw new Error(mismatch);
+    const a=this.getAttachment(threadId)!;
     const max=(this.db.prepare('SELECT coalesce(max(sequence),0) AS n FROM segments WHERE conversationId=?').get(conversationId) as {n:number}).n;
     if (cursor>max) throw new Error('Cursor exceeds available transcript');
     this.db.prepare('UPDATE thread_targets_v2 SET cursor=max(cursor,?) WHERE threadId=?').run(cursor,threadId); this.changed(); return this.getAttachment(threadId)!;
